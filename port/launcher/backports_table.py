@@ -102,13 +102,20 @@ MENU = [
            'objetos e partículas ao acaso. Desempenho começa a pular antes: mais fluido, menos detalhe.'),
           choices=(('0', "The game's own", 'Do jogo'), ('1', 'Never drop objects', 'Nunca descartar objetos'),
                    ('2', 'Performance (drop from level 11)', 'Desempenho (descarta a partir do nível 11)'))),
+    _menu('View', 'quality_floor', 'int', '0', ('Minimum dynamic quality level', 'Nível mínimo da qualidade dinâmica'),
+          ('The game steps its quality level (0 best, 20 lowest: shorter LOD, fewer shadow cascades, fewer objects) '
+           'up in heavy scenes and back down in light ones. Raising the minimum keeps the lighter levels: more FPS '
+           'on weak hardware, less detail.',
+           'O jogo sobe o nível de qualidade (0 melhor, 20 mais baixo: LOD mais curto, menos cascatas de sombra, '
+           'menos objetos) em cenas pesadas e desce nas leves. Subir o mínimo mantém os níveis mais leves: '
+           'mais FPS em máquina fraca, menos detalhe.'), lo=0, hi=16),
     _make('menu:draw_budget', 'menu', 'draw_budget', '', 'int', '100',
           ('Draw list budget (next start)', 'Orçamento das listas de draw (próximo início)'),
           ("Share of the game's 24 MB / 10 MB frame command lists. Lower makes the game cut LOD, shadows and detail "
            'sooner in heavy scenes. Read at start.',
            'Parte das listas de comandos de 24 MB / 10 MB do quadro. Menor faz o jogo reduzir LOD, sombras e detalhe '
            'mais cedo em cenas pesadas. Lido na partida.'),
-          lo=25, hi=100, unit='%', live=False, tab='View'),
+          lo=10, hi=100, unit='%', live=False, tab='View'),
     _menu('View', 'mip_lod_bias', 'float', '0', ('Texture LOD bias (MipLodBias)', 'Bias de LOD das texturas (MipLodBias)'),
           ('Negative: sharper textures at a distance (more shimmer, a little more GPU). Positive: blurrier.',
            'Negativo: texturas mais nítidas ao longe (mais cintilação, um pouco mais de GPU). Positivo: mais borradas.'),

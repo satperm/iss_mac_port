@@ -647,6 +647,7 @@ static void install_stat_multipliers(const char *app0, Segment *segments, uint64
 }
 extern uintptr_t tlg_view_region_params(void);
 extern uintptr_t tlg_view_fade_inverse(void);
+extern uintptr_t tlg_view_floor_address(void);
 extern void tlg_view_attach(unsigned char *guest_image);
 extern void tlg_view_start(void);
 
@@ -656,9 +657,10 @@ static void install_view_tuning(Segment *segments, uint64_t count, uint64_t size
     if (!mapped(segments, count, TLG_VIEW_LOD_TABLE, TLG_VIEW_LOD_ROWS * TLG_VIEW_LOD_STRIDE) ||
         !mapped(segments, count, TLG_VIEW_BANDS, 4 * TLG_VIEW_BAND_COUNT) ||
         !mapped(segments, count, TLG_VIEW_NEAR_CLIP, 8) ||
-        !mapped(segments, count, TLG_VIEW_LEVEL, 4) ||
+        size < TLG_VIEW_LEVEL + 4 || /* the level word is in the bss: inside the image, past the file-backed segments */
         !mapped(segments, count, tlg_view_budget_at[0], tlg_view_budget_at[TLG_VIEW_BUDGET_SITES - 1] + 4 - tlg_view_budget_at[0]) ||
         !mapped(segments, count, tlg_view_region_sites[1], sizeof(tlg_view_region_code)) ||
+        !mapped(segments, count, TLG_VIEW_LOWER_SITE, TLG_VIEW_LOWER_LENGTH) ||
         !tlg_view_signature_match(image, size)) {
         return; /* another game or build: silent, like the other hooks of other games */
     }
@@ -678,10 +680,20 @@ static void install_view_tuning(Segment *segments, uint64_t count, uint64_t size
             else tlg_view_build_fade_stub(stub, tlg_view_fade_inverse(), resume);
         }
     }
+    /* Quality floor (view_hook.h): the stub that stops the game from lowering its dynamic quality level
+     * under the floor. Optional: without it the floor still raises the level, only not for long. */
+    unsigned char *lower_stub = stubs + 4 * 128;
+    const int64_t lower_delta = (int64_t)(uintptr_t)lower_stub - (int64_t)(uintptr_t)(image + TLG_VIEW_LOWER_SITE + 5);
+    const int lower = tlg_view_lower_signature(image, size) && lower_delta >= INT32_MIN && lower_delta <= INT32_MAX;
+    if (lower)
+        tlg_view_build_lower_stub(lower_stub, tlg_view_floor_address(),
+                                  (uintptr_t)(image + TLG_VIEW_LOWER_SITE + TLG_VIEW_LOWER_LENGTH));
     protect(stubs, page_size, 5);
     for (unsigned kind = 0; kind < 2; ++kind)
         for (unsigned i = 0; i < 2; ++i)
             install_jump(sites[kind][i], TLG_VIEW_SITE_LENGTH, stubs + (kind * 2 + i) * 128);
+    if (lower) install_jump(TLG_VIEW_LOWER_SITE, TLG_VIEW_LOWER_LENGTH, lower_stub);
+    else puts("Quality floor: unavailable (code differs)");
     tlg_view_attach(image);
     printf("Draw distance: ready (LOD scale, LOD bands, region LOD_ADJUST and FADE_DISTANCE, near/far clip)\n");
 }

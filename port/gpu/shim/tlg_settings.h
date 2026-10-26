@@ -153,6 +153,8 @@ struct Values {
     std::atomic<int> dyn_cull{0};
     /// Percent of the game's 24 MB / 10 MB draw list budgets (25..100). Read once at start: it patches code.
     std::atomic<int> draw_budget{100};
+    /// Lowest dynamic quality level the game may use (0..16, 0 = the game's own ladder). Live.
+    std::atomic<int> quality_floor{0};
     /// Extra texture LOD bias of the game's draws (vk_rasterizer.cpp), any game.
     std::atomic<float> mip_lod_bias{0.0f};
 

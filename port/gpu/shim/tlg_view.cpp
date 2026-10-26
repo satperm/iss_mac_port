@@ -8,6 +8,7 @@
 
 #include "../../src/view_hook.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -21,6 +22,8 @@ unsigned char* image = nullptr;
 // Read by the hook stubs: {LOD_ADJUST weight, 1.0f} and 1 / FADE_DISTANCE scale.
 alignas(16) float region_params[2] = {1.0f, 1.0f};
 alignas(16) float fade_inverse = 1.0f;
+// Read by the lower-level stub (view_hook.h): the lowest dynamic quality level the game may use.
+alignas(16) volatile int32_t quality_floor = 0;
 
 void Put(uint32_t at, float value) {
     float current;
@@ -56,12 +59,27 @@ void Apply() {
     Put(TLG_VIEW_FAR_CLIP, TlgView::ClampFarClip(s.far_clip));
     region_params[0] = TlgView::ClampRegionLod(s.region_lod);
     fade_inverse = 1.0f / TlgView::ClampRegionFade(s.region_fade);
+    // The level the game lowers one step a frame is held at the floor by the stub; a level below
+    // the floor (the floor was just raised) is lifted here, once.
+    const int32_t floor_level = std::clamp<int32_t>(s.quality_floor, 0, 16) /* 17+ never leaves the loading screen (measured) */;
+    quality_floor = floor_level;
+    if (floor_level > 0) {
+        int32_t level;
+        std::memcpy(&level, image + TLG_VIEW_LEVEL, 4);
+        if (level < floor_level) {
+            std::memcpy(image + TLG_VIEW_LEVEL, &floor_level, 4);
+        }
+    }
 }
 
 } // namespace
 
 extern "C" uintptr_t tlg_view_region_params(void) {
     return reinterpret_cast<uintptr_t>(region_params);
+}
+
+extern "C" uintptr_t tlg_view_floor_address(void) {
+    return reinterpret_cast<uintptr_t>(&quality_floor);
 }
 
 extern "C" uintptr_t tlg_view_fade_inverse(void) {
@@ -92,10 +110,11 @@ extern "C" void tlg_view_start(void) {
     }
     std::thread([] {
         // Every 100 ms the menu's values are written; the level log is for A/B runs only.
-        const bool log_levels = std::getenv("TLG_VERBOSE_LOG") != nullptr || TlgSettings::Get().dyn_cull != 0 ||
+        const bool log_levels = std::getenv("TLG_VIEW_LOG") != nullptr || TlgSettings::Get().dyn_cull != 0 ||
                                 TlgSettings::Get().draw_budget < 100;
         int last_level = -1;
         unsigned seen[TLG_VIEW_LOD_ROWS] = {};
+        uint32_t max_a = 0, max_b = 0;
         auto report = std::chrono::steady_clock::now();
         for (;;) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -109,10 +128,23 @@ extern "C" void tlg_view_start(void) {
                 ++seen[level];
                 last_level = level;
             }
+            // How full the two frame command lists are (the game's budgets: 24 MB and 10 MB); the lists are
+            // rewound each frame, so the sample is a random point of the frame: the window's maximum counts.
+            auto word = [](uint32_t offset) {
+                uint32_t value;
+                std::memcpy(&value, image + TLG_VIEW_STATE + offset, 4);
+                return value;
+            };
+            const uint32_t start_a = word(0xb8 + 8 * (word(0xe0) & 1)), start_b = word(0xe8 + 8 * (word(0x110) & 1));
+            const uint32_t used_a = word(0xc8) - start_a, used_b = word(0xf8) - start_b;
+            if (used_a < (1u << 28)) max_a = std::max(max_a, used_a);
+            if (used_b < (1u << 28)) max_b = std::max(max_b, used_b);
             // The game's dynamic quality levels seen in each 5 s window (100 ms samples).
             if (std::chrono::steady_clock::now() - report >= std::chrono::seconds(5)) {
                 report = std::chrono::steady_clock::now();
-                std::printf("Dynamic quality: level %d, samples per level", last_level);
+                std::printf("Dynamic quality: level %d, draw lists max %u/%u KB, samples per level", last_level,
+                            max_a >> 10, max_b >> 10);
+                max_a = max_b = 0;
                 for (unsigned r = 0; r < TLG_VIEW_LOD_ROWS; ++r) {
                     if (seen[r]) std::printf(" %u:%u", r, seen[r]);
                     seen[r] = 0;

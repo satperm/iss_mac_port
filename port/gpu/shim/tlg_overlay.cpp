@@ -472,7 +472,15 @@ void ImageTab() {
                                         "Em cenas pesadas o jogo sobe um nível de qualidade sozinho e, nos níveis 15 a 20, pula uma parte dos "
                                         "objetos e partículas ao acaso. Desempenho começa a pular antes: mais fluido, menos detalhe.")
                                    : TL(Unsupported, "Indisponível: versão do jogo ou assinatura do código diferente."));
-        SliderRow(TL("Draw list budget (next start)", "Orçamento das listas de draw (próximo início)"), s.draw_budget, 25, 100, "%d%%",
+        SliderRow(TL("Minimum dynamic quality level", "Nível mínimo da qualidade dinâmica"), s.quality_floor, 0, 16, "%d",
+                  s.view_supported ? TL("The game steps its quality level (0 best, 20 lowest: shorter LOD, fewer shadow cascades, fewer "
+                                        "objects) up in heavy scenes and back down in light ones. Raising the minimum keeps the "
+                                        "lighter levels: more FPS on weak hardware, less detail.",
+                                        "O jogo sobe o nível de qualidade (0 melhor, 20 mais baixo: LOD mais curto, menos cascatas de sombra, "
+                                        "menos objetos) em cenas pesadas e desce nas leves. Subir o mínimo mantém os níveis mais leves: "
+                                        "mais FPS em máquina fraca, menos detalhe.")
+                                   : TL(Unsupported, "Indisponível: versão do jogo ou assinatura do código diferente."));
+        SliderRow(TL("Draw list budget (next start)", "Orçamento das listas de draw (próximo início)"), s.draw_budget, 10, 100, "%d%%",
                   TL("Share of the game's 24 MB / 10 MB frame command lists. Lower makes the game cut LOD, shadows and detail sooner "
                      "in heavy scenes. Read at start: set it in the launcher or in tlg.ini and restart.",
                      "Parte das listas de comandos de 24 MB / 10 MB do quadro. Menor faz o jogo reduzir LOD, sombras e detalhe mais cedo "
@@ -492,6 +500,7 @@ void ImageTab() {
             s.mip_lod_bias = 0.0f;
             s.dyn_cull = 0;
             s.draw_budget = 100;
+            s.quality_floor = 0;
             const float bands[6] = {400.0f, 750.0f, 1500.0f, 3500.0f, 6000.0f, 15000.0f};
             for (int b = 0; b < 6; ++b) s.lod_bands[b] = bands[b];
             dirty = true;
