@@ -42,7 +42,7 @@ WINDOWS = os.name == 'nt'
 
 # Frame stats: "28.5 FPS, worst frame 50.8 ms (vblank 60 Hz); ... GPU thread 0.00 us/draw, 451 draws/frame"
 STATS = re.compile(r'Frame stats: ([0-9.]+) FPS, worst frame ([0-9.]+) ms.*?([0-9]+) draws/frame')
-LEVELS = re.compile(r'Dynamic quality: level (-?\d+), draw lists max (\d+)/(\d+) KB, samples per level(.*)')
+LEVELS = re.compile(r'Dynamic quality: level (-?\d+), draw lists max (\d+)/(\d+) KB, (?:automatic floor \d+, )?samples per level(.*)')
 
 
 def running():

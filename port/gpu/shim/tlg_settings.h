@@ -155,6 +155,8 @@ struct Values {
     std::atomic<int> draw_budget{100};
     /// Lowest dynamic quality level the game may use (0..16, 0 = the game's own ladder). Live.
     std::atomic<int> quality_floor{0};
+    /// Frame rate the automatic quality aims for (tlg_quality.h); 0 = off. Live.
+    std::atomic<int> quality_target_fps{0};
     /// Extra texture LOD bias of the game's draws (vk_rasterizer.cpp), any game.
     std::atomic<float> mip_lod_bias{0.0f};
 
