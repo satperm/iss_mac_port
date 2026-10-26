@@ -189,6 +189,8 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.blue_orb_multiplier = TlgOrbs::ClampMultiplier(f);
     } else if (key == "gold_orb_multiplier") {
         v.gold_orb_multiplier = TlgOrbs::ClampMultiplier(f);
+    } else if (key == "draw_budget") {
+        v.draw_budget = std::clamp(i, 25, 100);
     } else if (key == "dyn_cull") {
         v.dyn_cull = std::clamp(i, 0, 2);
     } else if (key == "lod_scale") {
@@ -261,7 +263,8 @@ void Load() {
         {"TLG_MOUSE_INVERT_Y", "mouse_invert_y"}, {"TLG_MOUSE_SMOOTHING", "mouse_smoothing"},
         {"TLG_MOUSE_ACCEL", "mouse_accel"},       {"TLG_MOUSE_DEADZONE", "mouse_deadzone"},
         {"TLG_RUMBLE", "rumble"},
-        {"TLG_DYN_CULL", "dyn_cull"},             {"TLG_LOD_SCALE", "lod_scale"},           {"TLG_LOD_BANDS", "lod_bands"},
+        {"TLG_DYN_CULL", "dyn_cull"},             {"TLG_DRAW_BUDGET", "draw_budget"},
+        {"TLG_LOD_SCALE", "lod_scale"},           {"TLG_LOD_BANDS", "lod_bands"},
         {"TLG_REGION_LOD", "region_lod"},         {"TLG_REGION_FADE", "region_fade"},
         {"TLG_NEAR_CLIP", "near_clip"},           {"TLG_FAR_CLIP", "far_clip"},
         {"TLG_MIP_LOD_BIAS", "mip_lod_bias"},
@@ -397,11 +400,11 @@ void Save() {
                  int(v.graffiti_guide_seen.load()));
     std::fprintf(file,
                  "lod_scale=%.3f\nregion_lod=%.3f\nregion_fade=%.3f\nnear_clip=%.3f\nfar_clip=%.0f\n"
-                 "mip_lod_bias=%.3f\nlod_bands=%.0f,%.0f,%.0f,%.0f,%.0f,%.0f\ndyn_cull=%d\n",
+                 "mip_lod_bias=%.3f\nlod_bands=%.0f,%.0f,%.0f,%.0f,%.0f,%.0f\ndyn_cull=%d\ndraw_budget=%d\n",
                  v.lod_scale.load(), v.region_lod.load(), v.region_fade.load(), v.near_clip.load(),
                  v.far_clip.load(), v.mip_lod_bias.load(), v.lod_bands[0].load(), v.lod_bands[1].load(),
                  v.lod_bands[2].load(), v.lod_bands[3].load(), v.lod_bands[4].load(), v.lod_bands[5].load(),
-                 v.dyn_cull.load());
+                 v.dyn_cull.load(), v.draw_budget.load());
     // Fixes: applied on the next start by the launcher (TLG_BPnn / TLG_<NAME>); only the ones
     // the player or the launcher chose are written.
     for (int n = 0; n < kBackportPrefs; ++n) {

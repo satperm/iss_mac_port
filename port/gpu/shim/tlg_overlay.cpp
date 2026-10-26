@@ -464,6 +464,19 @@ void ImageTab() {
                     "Plano distante padrão das câmeras (o jogo usa 10000000, sem limite). Menor corta a visão; "
                     "vale na próxima câmera."),
                  ImGuiSliderFlags_Logarithmic);
+        static const char* const cull_labels[] = {TL("The game's own", "Do jogo"), TL("Never drop objects", "Nunca descartar objetos"),
+                                                  TL("Performance (drop from level 11)", "Desempenho (descarta a partir do nível 11)")};
+        ChoiceRow(TL("Dynamic quality: dropped objects", "Qualidade dinâmica: objetos descartados"), s.dyn_cull, cull_labels, nullptr, 3,
+                  s.view_supported ? TL("In heavy scenes the game raises a quality level on its own and, at levels 15 to 20, skips a share of "
+                                        "objects and particles at random. Performance starts skipping earlier: smoother, less detail.",
+                                        "Em cenas pesadas o jogo sobe um nível de qualidade sozinho e, nos níveis 15 a 20, pula uma parte dos "
+                                        "objetos e partículas ao acaso. Desempenho começa a pular antes: mais fluido, menos detalhe.")
+                                   : TL(Unsupported, "Indisponível: versão do jogo ou assinatura do código diferente."));
+        SliderRow(TL("Draw list budget (next start)", "Orçamento das listas de draw (próximo início)"), s.draw_budget, 25, 100, "%d%%",
+                  TL("Share of the game's 24 MB / 10 MB frame command lists. Lower makes the game cut LOD, shadows and detail sooner "
+                     "in heavy scenes. Read at start: set it in the launcher or in tlg.ini and restart.",
+                     "Parte das listas de comandos de 24 MB / 10 MB do quadro. Menor faz o jogo reduzir LOD, sombras e detalhe mais cedo "
+                     "em cenas pesadas. Lido na partida: ajuste no launcher ou no tlg.ini e reinicie."));
         ImGui::EndDisabled();
         FloatRow(TL("Texture LOD bias (MipLodBias)", "Bias de LOD das texturas (MipLodBias)"), s.mip_lod_bias, -3.0f, 3.0f,
                  "%+.2f",
@@ -477,6 +490,8 @@ void ImageTab() {
             s.near_clip = 10.0f;
             s.far_clip = 1.0e7f;
             s.mip_lod_bias = 0.0f;
+            s.dyn_cull = 0;
+            s.draw_budget = 100;
             const float bands[6] = {400.0f, 750.0f, 1500.0f, 3500.0f, 6000.0f, 15000.0f};
             for (int b = 0; b < 6; ++b) s.lod_bands[b] = bands[b];
             dirty = true;

@@ -70,6 +70,10 @@ extern "C" uintptr_t tlg_view_fade_inverse(void) {
 extern "C" void tlg_view_attach(unsigned char* guest_image) {
     image = guest_image;
     Apply(); // before the game's first frame
+    if (const int budget = TlgSettings::Get().draw_budget; budget < 100) {
+        std::printf("Draw list budget: %d%% of the game's (%s)\n", budget,
+                    tlg_view_apply_draw_budget(image, unsigned(budget)) ? "applied" : "unavailable, bytes differ");
+    }
     const auto& s = TlgSettings::Get();
     std::printf("Draw distance: LOD scale %.2f, bands %.0f/%.0f/%.0f/%.0f/%.0f/%.0f, region LOD_ADJUST weight %.2f, "
                 "FADE_DISTANCE x%.2f, near %.1f, far %.0f, texture LOD bias %+.2f\n",

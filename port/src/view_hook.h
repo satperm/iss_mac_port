@@ -120,4 +120,32 @@ static inline unsigned tlg_view_build_fade_stub(unsigned char *out, uintptr_t in
     memcpy(out + n, tail, sizeof(tail)); n += sizeof(tail);
     return n + tlg_view_jump_back(out + n, resume);
 }
+/* Draw list budget (FUN_001f14e0, called once a frame by FUN_001f1e30): the game raises its dynamic
+ * quality level when the frame's two command lists pass 24 MB / 10 MB (0x1800000 / 0xa00000) and
+ * lowers it again below 95% of them (0x1466666 / 0x880000 are 95% of the budgets, capped).
+ * All eight immediates are scaled together; scaling only the compares makes the level yo-yo and
+ * every overflow rebuilds the frame. Lowering is always safe (the lists keep their real size). */
+#define TLG_VIEW_BUDGET_SITES 8u
+static const uint32_t tlg_view_budget_at[TLG_VIEW_BUDGET_SITES] = {
+    0x1f1736u, 0x1f1746u, 0x1f1b19u, 0x1f1b32u, 0x1f1b46u, 0x1f1b50u, 0x1f1b7au, 0x1f1b85u};
+static const uint32_t tlg_view_budget_stock[TLG_VIEW_BUDGET_SITES] = {
+    0x1800000u, 0xa00000u, 0x1466666u, 0x1466666u, 0x880000u, 0x880000u, 0x1800000u, 0xa00000u};
+#define TLG_VIEW_BUDGET_MIN_PERCENT 25u
+
+/* Scales the budgets to percent/100 of the game's; 1 when applied (or already 100), 0 when the
+ * bytes are not this eboot's. */
+static inline int tlg_view_apply_draw_budget(unsigned char *image, unsigned percent) {
+    if (percent >= 100u) return 1;
+    if (percent < TLG_VIEW_BUDGET_MIN_PERCENT) percent = TLG_VIEW_BUDGET_MIN_PERCENT;
+    for (unsigned i = 0; i < TLG_VIEW_BUDGET_SITES; ++i) {
+        uint32_t v;
+        memcpy(&v, image + tlg_view_budget_at[i], 4);
+        if (v != tlg_view_budget_stock[i]) return 0;
+    }
+    for (unsigned i = 0; i < TLG_VIEW_BUDGET_SITES; ++i) {
+        const uint32_t v = (uint32_t)(((uint64_t)tlg_view_budget_stock[i] * percent) / 100u);
+        memcpy(image + tlg_view_budget_at[i], &v, 4);
+    }
+    return 1;
+}
 #endif

@@ -151,6 +151,8 @@ struct Values {
     /// The game's dynamic-quality object/particle culling (tlg_view.cpp, view_hook.h column +0x10):
     /// 0 the game's own, 1 never drop objects, 2 start dropping them at level 11 (performance).
     std::atomic<int> dyn_cull{0};
+    /// Percent of the game's 24 MB / 10 MB draw list budgets (25..100). Read once at start: it patches code.
+    std::atomic<int> draw_budget{100};
     /// Extra texture LOD bias of the game's draws (vk_rasterizer.cpp), any game.
     std::atomic<float> mip_lod_bias{0.0f};
 

@@ -95,6 +95,20 @@ MENU = [
           ('Default far plane of the cameras (the game uses 10000000, unlimited). Lower cuts the view.',
            'Plano distante padrão das câmeras (o jogo usa 10000000, sem limite). Menor corta a visão.'),
           lo=1000.0, hi=10000000.0),
+    _menu('View', 'dyn_cull', 'choice', '0', ('Dynamic quality: dropped objects', 'Qualidade dinâmica: objetos descartados'),
+          ('In heavy scenes the game raises a quality level on its own and, at levels 15 to 20, skips a share of '
+           'objects and particles at random. Performance starts skipping earlier: smoother, less detail.',
+           'Em cenas pesadas o jogo sobe um nível de qualidade sozinho e, nos níveis 15 a 20, pula uma parte dos '
+           'objetos e partículas ao acaso. Desempenho começa a pular antes: mais fluido, menos detalhe.'),
+          choices=(('0', "The game's own", 'Do jogo'), ('1', 'Never drop objects', 'Nunca descartar objetos'),
+                   ('2', 'Performance (drop from level 11)', 'Desempenho (descarta a partir do nível 11)'))),
+    _make('menu:draw_budget', 'menu', 'draw_budget', '', 'int', '100',
+          ('Draw list budget (next start)', 'Orçamento das listas de draw (próximo início)'),
+          ("Share of the game's 24 MB / 10 MB frame command lists. Lower makes the game cut LOD, shadows and detail "
+           'sooner in heavy scenes. Read at start.',
+           'Parte das listas de comandos de 24 MB / 10 MB do quadro. Menor faz o jogo reduzir LOD, sombras e detalhe '
+           'mais cedo em cenas pesadas. Lido na partida.'),
+          lo=25, hi=100, unit='%', live=False, tab='View'),
     _menu('View', 'mip_lod_bias', 'float', '0', ('Texture LOD bias (MipLodBias)', 'Bias de LOD das texturas (MipLodBias)'),
           ('Negative: sharper textures at a distance (more shimmer, a little more GPU). Positive: blurrier.',
            'Negativo: texturas mais nítidas ao longe (mais cintilação, um pouco mais de GPU). Positivo: mais borradas.'),
