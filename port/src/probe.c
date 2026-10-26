@@ -648,6 +648,7 @@ static void install_stat_multipliers(const char *app0, Segment *segments, uint64
 extern uintptr_t tlg_view_region_params(void);
 extern uintptr_t tlg_view_fade_inverse(void);
 extern void tlg_view_attach(unsigned char *guest_image);
+extern void tlg_view_start(void);
 
 /* Draw distance, LOD and clip planes (src/view_hook.h): the menu's values reach the game's data
  * through tlg_view_attach; the regions' LOD_ADJUST and FADE_DISTANCE go through four stubs. */
@@ -656,6 +657,7 @@ static void install_view_tuning(Segment *segments, uint64_t count, uint64_t size
         !mapped(segments, count, TLG_VIEW_BANDS, 4 * TLG_VIEW_BAND_COUNT) ||
         !mapped(segments, count, TLG_VIEW_NEAR_CLIP, 8) ||
         !mapped(segments, count, TLG_VIEW_LEVEL, 4) ||
+        !mapped(segments, count, tlg_view_budget_at[0], tlg_view_budget_at[TLG_VIEW_BUDGET_SITES - 1] + 4 - tlg_view_budget_at[0]) ||
         !mapped(segments, count, tlg_view_region_sites[1], sizeof(tlg_view_region_code)) ||
         !tlg_view_signature_match(image, size)) {
         return; /* another game or build: silent, like the other hooks of other games */
@@ -1608,6 +1610,7 @@ int main(int argc, char **argv) {
     if (!executable_entry) fail("entry is not executable");
     printf("Mapped %" PRIu64 " bytes, %" PRIu64 " segments; applied %" PRIu64 " relocations\n", size, ns, nr);
     boot_step("image mapped and relocated");
+    if (gpu_enabled) tlg_view_start(); /* its thread reads the image: only now that it is mapped again */
     if (native_libc) {
         for (uint64_t m=0;m<module_count;++m) {
             int init_executable=0;

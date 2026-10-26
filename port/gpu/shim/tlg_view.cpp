@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <thread>
 
@@ -81,13 +82,27 @@ extern "C" void tlg_view_attach(unsigned char* guest_image) {
                 s.lod_bands[3].load(), s.lod_bands[4].load(), s.lod_bands[5].load(), s.region_lod.load(),
                 s.region_fade.load(), s.near_clip.load(), s.far_clip.load(), s.mip_lod_bias.load());
     TlgSettings::Get().view_supported = true;
+}
+
+// Called by the probe once the image has its final page protections: the thread reads the image,
+// so it must not start while the probe still has the whole image unmapped (protect(image, 0)).
+extern "C" void tlg_view_start(void) {
+    if (!image) {
+        return;
+    }
     std::thread([] {
+        // Every 100 ms the menu's values are written; the level log is for A/B runs only.
+        const bool log_levels = std::getenv("TLG_VERBOSE_LOG") != nullptr || TlgSettings::Get().dyn_cull != 0 ||
+                                TlgSettings::Get().draw_budget < 100;
         int last_level = -1;
         unsigned seen[TLG_VIEW_LOD_ROWS] = {};
         auto report = std::chrono::steady_clock::now();
         for (;;) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             Apply();
+            if (!log_levels) {
+                continue;
+            }
             int level;
             std::memcpy(&level, image + TLG_VIEW_LEVEL, 4);
             if (level >= 0 && level < int(TLG_VIEW_LOD_ROWS)) {
@@ -102,7 +117,7 @@ extern "C" void tlg_view_attach(unsigned char* guest_image) {
                     if (seen[r]) std::printf(" %u:%u", r, seen[r]);
                     seen[r] = 0;
                 }
-                std::printf("\n");
+                std::putchar('\n');
             }
         }
     }).detach();
