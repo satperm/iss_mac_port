@@ -148,6 +148,9 @@ struct Values {
     std::atomic<float> near_clip{10.0f}, far_clip{1.0e7f};
     std::atomic<float> lod_bands[6]{400.0f, 750.0f, 1500.0f, 3500.0f, 6000.0f, 15000.0f};
     std::atomic<bool> view_supported{false};
+    /// The game's dynamic-quality object/particle culling (tlg_view.cpp, view_hook.h column +0x10):
+    /// 0 the game's own, 1 never drop objects, 2 start dropping them at level 11 (performance).
+    std::atomic<int> dyn_cull{0};
     /// Extra texture LOD bias of the game's draws (vk_rasterizer.cpp), any game.
     std::atomic<float> mip_lod_bias{0.0f};
 

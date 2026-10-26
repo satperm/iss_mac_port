@@ -655,6 +655,7 @@ static void install_view_tuning(Segment *segments, uint64_t count, uint64_t size
     if (!mapped(segments, count, TLG_VIEW_LOD_TABLE, TLG_VIEW_LOD_ROWS * TLG_VIEW_LOD_STRIDE) ||
         !mapped(segments, count, TLG_VIEW_BANDS, 4 * TLG_VIEW_BAND_COUNT) ||
         !mapped(segments, count, TLG_VIEW_NEAR_CLIP, 8) ||
+        !mapped(segments, count, TLG_VIEW_LEVEL, 4) ||
         !mapped(segments, count, tlg_view_region_sites[1], sizeof(tlg_view_region_code)) ||
         !tlg_view_signature_match(image, size)) {
         return; /* another game or build: silent, like the other hooks of other games */

@@ -17,6 +17,9 @@
 #define TLG_VIEW_LOD_TABLE 0xda08c0u /* 21 rows of 0x14 bytes: float lod, int shadow cascades
                                         delta, float max distance, float, int */
 #define TLG_VIEW_LOD_ROWS 21u
+#define TLG_VIEW_CULL_OFFSET 0x10u    /* int in each row: objects/particles dropped at random, value / 1025
+                                         (FUN_003fbb30, FUN_0043d590); 0 until level 14, then 8..0x3e0 */
+#define TLG_VIEW_LEVEL 0xf39978u      /* the game's current dynamic quality level (0..20), read by 11 sites */
 #define TLG_VIEW_LOD_STRIDE 0x14u
 #define TLG_VIEW_BANDS 0xdfaa34u      /* 6 floats: LOD band distances (a 7th, FLT_MAX, follows) */
 #define TLG_VIEW_BAND_COUNT 6u
@@ -29,6 +32,11 @@ static const float tlg_view_lod_original[TLG_VIEW_LOD_ROWS] = {
     0.2f, 0.2f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f};
 static const float tlg_view_band_original[TLG_VIEW_BAND_COUNT] = {400.0f, 750.0f, 1500.0f,
                                                                    3500.0f, 6000.0f, 15000.0f};
+/* Column +0x10 as shipped, and the "performance" curve (drops start at level 11). */
+static const int32_t tlg_view_cull_original[TLG_VIEW_LOD_ROWS] = {
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x8, 0x20, 0x80, 0x200, 0x300, 0x3e0};
+static const int32_t tlg_view_cull_performance[TLG_VIEW_LOD_ROWS] = {
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x20, 0x80, 0x100, 0x200, 0x2c0, 0x300, 0x340, 0x380, 0x3a0, 0x3e0};
 #define TLG_VIEW_NEAR_ORIGINAL 10.0f
 #define TLG_VIEW_FAR_ORIGINAL 1.0e7f
 
@@ -55,6 +63,11 @@ static inline int tlg_view_signature_match(const unsigned char *image, uint64_t 
     }
     for (unsigned r = 0; r < TLG_VIEW_LOD_ROWS; ++r)
         if (!tlg_view_float_is(image, TLG_VIEW_LOD_TABLE + r * TLG_VIEW_LOD_STRIDE, tlg_view_lod_original[r])) return 0;
+    for (unsigned r = 0; r < TLG_VIEW_LOD_ROWS; ++r) {
+        int32_t v;
+        memcpy(&v, image + TLG_VIEW_LOD_TABLE + r * TLG_VIEW_LOD_STRIDE + TLG_VIEW_CULL_OFFSET, 4);
+        if (v != tlg_view_cull_original[r]) return 0;
+    }
     for (unsigned b = 0; b < TLG_VIEW_BAND_COUNT; ++b)
         if (!tlg_view_float_is(image, TLG_VIEW_BANDS + 4 * b, tlg_view_band_original[b])) return 0;
     return tlg_view_float_is(image, TLG_VIEW_NEAR_CLIP, TLG_VIEW_NEAR_ORIGINAL) &&
