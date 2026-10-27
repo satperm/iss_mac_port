@@ -6,6 +6,7 @@
 #include "tlg_quality.h"
 #include "tlg_settings.h"
 #include "tlg_toggles.h"
+#include "../tlggpu.h"
 #include "tlg_view.h"
 
 #include "../../src/view_hook.h"
@@ -36,6 +37,14 @@ void Put(uint32_t at, float value) {
     if (current != value) {
         std::memcpy(image + at, &value, 4);
     }
+}
+
+// Frames shown so far, from the runtime interface both renderers implement (the v2 renderer does not
+// update the v1 renderer's TlgStats counters).
+uint64_t PresentedFrames() {
+    TlgGpuFrameCounters counters{};
+    tlggpu_frame_counters(&counters);
+    return counters.presented;
 }
 
 void PutInt(uint32_t at, int32_t value) {
@@ -121,7 +130,7 @@ extern "C" void tlg_view_start(void) {
         int last_level = -1;
         TlgQuality::Governor governor;
         auto governor_at = std::chrono::steady_clock::now();
-        uint64_t last_frames = TlgStats::gpu_frames.load(), last_draws = TlgStats::draws.load();
+        uint64_t last_frames = PresentedFrames(), last_draws = tlggpu_total_draws();
         unsigned seen[TLG_VIEW_LOD_ROWS] = {};
         uint32_t max_a = 0, max_b = 0;
         auto report = std::chrono::steady_clock::now();
@@ -131,7 +140,7 @@ extern "C" void tlg_view_start(void) {
             if (const auto now = std::chrono::steady_clock::now(); now - governor_at >= std::chrono::seconds(1)) {
                 const double seconds = std::chrono::duration<double>(now - governor_at).count();
                 governor_at = now;
-                const uint64_t frames = TlgStats::gpu_frames.load(), draws = TlgStats::draws.load();
+                const uint64_t frames = PresentedFrames(), draws = tlggpu_total_draws();
                 const uint64_t frame_delta = frames - last_frames, draw_delta = draws - last_draws;
                 last_frames = frames;
                 last_draws = draws;
