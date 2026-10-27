@@ -481,7 +481,7 @@ void ImageTab() {
                                         "Sobe o nível mínimo de qualidade enquanto a taxa de quadros fica abaixo do alvo e devolve quando "
                                         "há folga (menus e carregamentos são ignorados). O mínimo abaixo continua valendo.")
                                    : TL(Unsupported, "Indisponível: versão do jogo ou assinatura do código diferente."));
-        SliderRow(TL("Minimum dynamic quality level", "Nível mínimo da qualidade dinâmica"), s.quality_floor, 0, 16, "%d",
+        SliderRow(TL("Minimum dynamic quality level", "Nível mínimo da qualidade dinâmica"), s.quality_floor, 0, 14, "%d",
                   s.view_supported ? TL("The game steps its quality level (0 best, 20 lowest: shorter LOD, fewer shadow cascades, fewer "
                                         "objects) up in heavy scenes and back down in light ones. Raising the minimum keeps the "
                                         "lighter levels: more FPS on weak hardware, less detail.",

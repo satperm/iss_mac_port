@@ -8,9 +8,10 @@
 
 namespace TlgQuality {
 
-/// Levels above this never leave the loading screen on the 11% save route (measured), so the
-/// governor and the manual floor stop here.
-inline constexpr int MaxLevel = 16;
+/// The game drops instances at random every frame from level 15 on (0.8% at 15, 3.1% at 16: lights,
+/// particles and objects blink), and levels 17 and up never leave the loading screen on the 11% save
+/// route (measured). Level 14 had the same frame rate as 16 there, so the governor and the manual floor stop here.
+inline constexpr int MaxLevel = 14;
 
 /// Fed once a second with the frame rate and the draws per frame of that second.
 class Governor {

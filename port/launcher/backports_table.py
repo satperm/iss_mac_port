@@ -116,7 +116,7 @@ MENU = [
            'on weak hardware, less detail.',
            'O jogo sobe o nível de qualidade (0 melhor, 20 mais baixo: LOD mais curto, menos cascatas de sombra, '
            'menos objetos) em cenas pesadas e desce nas leves. Subir o mínimo mantém os níveis mais leves: '
-           'mais FPS em máquina fraca, menos detalhe.'), lo=0, hi=16),
+           'mais FPS em máquina fraca, menos detalhe.'), lo=0, hi=14),
     _make('menu:draw_budget', 'menu', 'draw_budget', '', 'int', '100',
           ('Draw list budget (next start)', 'Orçamento das listas de draw (próximo início)'),
           ("Share of the game's 24 MB / 10 MB frame command lists. Lower makes the game cut LOD, shadows and detail "

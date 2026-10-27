@@ -153,7 +153,7 @@ struct Values {
     std::atomic<int> dyn_cull{0};
     /// Percent of the game's 24 MB / 10 MB draw list budgets (25..100). Read once at start: it patches code.
     std::atomic<int> draw_budget{100};
-    /// Lowest dynamic quality level the game may use (0..16, 0 = the game's own ladder). Live.
+    /// Lowest dynamic quality level the game may use (0..14, 0 = the game's own ladder). Live.
     std::atomic<int> quality_floor{0};
     /// Frame rate the automatic quality aims for (tlg_quality.h); 0 = off. Live.
     std::atomic<int> quality_target_fps{0};
