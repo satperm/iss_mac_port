@@ -250,6 +250,25 @@ static void TestFrameLifecycle() {
         CHECK(g.reset == 0);
     }
     for (int i = 4; i < 12; ++i) CHECK(phase_seen[i] == phase_seen[i - 4]);
+    // 3x upscaling asks for 8 * 9 = 72 phases (the limit was 32); more than the limit is cut to it
+    s.phases = 72;
+    uint32_t big_phase[150];
+    for (int i = 0; i < 150; ++i) {
+        iss_temporal_begin_frame(window);
+        IssTemporalFrame g;
+        CHECK(iss_temporal_copy_frame(s.seq, &g) == 1);
+        big_phase[i] = g.phase;
+        CHECK(g.phase < 72);
+    }
+    for (int i = 72; i < 150; ++i) CHECK(big_phase[i] == big_phase[i - 72]);
+    s.phases = 100000;
+    for (int i = 0; i < 300; ++i) {
+        iss_temporal_begin_frame(window);
+        IssTemporalFrame g;
+        CHECK(iss_temporal_copy_frame(s.seq, &g) == 1);
+        CHECK(g.phase < ISS_TEMPORAL_MAX_PHASES);
+    }
+    s.phases = 4;
     size[0] = 1280;
     size[1] = 720;
     std::memcpy(&fake_image[ISS_TEMPORAL_RENDER_SIZE], size, 8);

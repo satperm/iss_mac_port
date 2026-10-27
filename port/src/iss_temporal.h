@@ -72,7 +72,7 @@ extern "C" {
 #define ISS_TEMPORAL_FLAG_REVERSED_DEPTH (1u << 1) /* HYPOTHESIS: the game's depth is reversed-Z */
 
 #define ISS_TEMPORAL_RING 8u /* frames kept; iss_temporal_get_frame fails for older ones */
-#define ISS_TEMPORAL_MAX_PHASES 32u
+#define ISS_TEMPORAL_MAX_PHASES 256u
 
 /* A texture the game binds: the T# (8 dwords) it passes to the AA, decoded. */
 typedef struct IssTemporalImage {
