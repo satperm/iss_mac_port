@@ -10,18 +10,18 @@
  *   1. The game's per-frame AA setup (eboot 0x472810) picks FXAA or SMAA T2x and, for T2x, shifts
  *      the camera's projection window by +-1/4 pixel. With the hooks active (see "Gating") the
  *      window is shifted by a Halton jitter instead, always, and the game's AA mode is forced to
- *      "FXAA" for the rest of the frame (that is only so the game does not run T2x: the FXAA pass
- *      itself is skipped, see 3). One IssTemporalFrame is opened for the frame (a new `seq`) and
+ *      "FXAA" for the rest of the frame (so the game does not run T2x; its FXAA pass still runs, see 3). One IssTemporalFrame is opened for the frame (a new `seq`) and
  *      the camera is snapshotted into it after the window was applied.
  *   2. The game builds the frame. The renderer reads the jitter and the camera with
  *      iss_temporal_get_frame(seq).
- *   3. In the post chain (eboot 0x1929c0), where the game would run FXAA or T2x, the hook does not
- *      call it. It records the AA's input and output images into the frame and writes a MARKER (with
- *      the frame in it) into the game's command buffer (below). The game then goes on with grain and the UI, drawing
- *      into the AA's output target as it always does.
- *   4. The renderer, when its command processor meets the marker, runs the upscaler: it reads the
- *      input image (the tonemapped scene) and writes the output image. iss_temporal_get_frame(seq)
- *      gives the same frame plus the rest of the camera, for diagnostics.
+ *   3. In the post chain (eboot 0x1929c0) the game runs its AA pass (FXAA, because the mode is
+ *      forced). The pass also composes the colour, so it is NOT skipped. A hook before it records the
+ *      AA's input and output images; a hook right after it writes a MARKER (with the frame in it)
+ *      into the game's command buffer (below), i.e. after the AA's commands. The game then goes on
+ *      with grain and the UI, drawing into the AA's output target as it always does.
+ *   4. The renderer, when its command processor meets the marker, runs the upscaler on the colour the
+ *      game's AA left: it reads and writes the AA's output image (marker colour == output).
+ *      iss_temporal_get_frame(seq) gives the same frame plus the rest of the camera, for diagnostics.
  *
  * Gating (nothing here changes the game unless all three hold):
  *   - `iss_temporal=1` in tlg.ini (or TLG_ISS_TEMPORAL=1) at start, game CUSA00223 01.07 with the
@@ -29,7 +29,8 @@
  *     (iss_temporal_installed() == 1). With the key off the image is byte-identical to before.
  *   - the renderer calls iss_temporal_set_renderer_ready(1) once its temporal pass can consume
  *     markers. Until then (and after it calls it with 0) every hook runs the game's own code, so
- *     a renderer without the pass shows the game exactly as without the key.
+ *     a renderer without the pass shows the game exactly as without the key. (With it, the only
+ *     differences are the jitter, the FXAA mode and the marker: the game's AA pass still runs.)
  *   - the game's own "no AA" state (photo mode and the like, byte at eboot 0xf1bcd0+0xdf0f05) is
  *     left alone: no jitter, no marker.
  */
@@ -57,12 +58,12 @@ extern "C" {
  * 8-23  view-projection of this frame WITHOUT jitter, 16 floats in the order a GLSL mat4 has in memory
  *       (the game's row-vector matrices have the same bytes). From camera+0x470 (HYPOTHESIS).
  *   24  near   25 far   26 vertical fov (camera+0x584, +0x588, +0x590)
- * 27-28  guest address of the AA's input image (the tonemapped scene), low dword first
+ * 27-28  guest address of the colour to upscale: the game's AA OUTPUT image (the AA has run), low dword first
  * 29-30  guest address of the scene depth: 0 = not known by the hook, the renderer finds it
- * 31-32  guest address of the AA's output image
+ * 31-32  guest address of the AA's output image (the same as 27-28)
  */
 #define ISS_TEMPORAL_MARKER_MAGIC 0x49545400u /* 'I' 'T' 'T' 0 */
-#define ISS_TEMPORAL_MARKER_KIND_RESOLVE 1u   /* the game's AA pass would have run here */
+#define ISS_TEMPORAL_MARKER_KIND_RESOLVE 1u   /* the game's AA pass has run just before */
 #define ISS_TEMPORAL_MARKER_VERSION 1u
 #define ISS_TEMPORAL_MARKER_PAYLOAD_DWORDS 33u
 #define ISS_TEMPORAL_MARKER_DWORDS 34u         /* header + payload */
@@ -114,9 +115,10 @@ typedef struct IssTemporalFrame {
     uint32_t reset;        /* 1: no history (first frame after the hooks became active, or the
                             * render size changed). Camera cuts are for the renderer to find. */
     IssTemporalCamera camera;
-    uint32_t aa_replaced;  /* 1 once the AA hook ran for this frame and wrote the marker */
-    IssTemporalImage aa_input;  /* the scene the AA reads (tonemapped, LDR) */
-    IssTemporalImage aa_output; /* the target the AA writes and the UI is drawn on */
+    uint32_t aa_replaced;  /* 1 once the marker was written after the game's AA in this frame (the name
+                            * is from the first design, which skipped the AA) */
+    IssTemporalImage aa_input;  /* information only: what the game's AA reads */
+    IssTemporalImage aa_output; /* the target the AA writes, the UI is drawn on, and the marker names */
     uint64_t command_context;   /* the game's draw command buffer object that got the marker */
 } IssTemporalFrame;
 

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /* Temporal upscaling, game side: the eboot hooks of CUSA00223 01.07 (contract: iss_temporal.h).
  *
- * Two code hooks and the host functions they call. Nothing is written into the image unless the
+ * Three code hooks and the host functions they call. Nothing is written into the image unless the
  * setting is on and every byte the hooks depend on is the expected one (view_hook.h pattern):
  *
  *   JITTER  0x472944 (inside FUN_00472810, once a frame): the instruction pair
@@ -13,14 +13,22 @@
  *   AA      0x192c4c (inside FUN_001929c0, the post chain): the 13 bytes that start the AA's
  *           skip test
  *             lea rax,[0xf1bcd0] ; mov al,[rax+0xdf0f05]
- *           become a jump to a stub. Not active: the two instructions run as before. Active and
- *           the game would run its AA: iss_temporal_aa_replaced(ctx, input, output) records the
- *           images and writes the marker; if it succeeds the stub jumps to 0x192cff (past the
- *           FXAA / T2x call), if not the game's own AA runs.
+ *           become a jump to a stub. When active and the game is going to run its AA, the stub
+ *           tells iss_temporal_aa_begin(ctx, input, output) which images it will read and write,
+ *           and then, always, runs the two instructions and goes on: THE GAME'S AA RUNS. (The AA
+ *           pass does more than anti-aliasing - it composes the colour - so it cannot be skipped.)
+ *   DONE    0x192cff, the first instruction after the AA call (every path of the post chain meets
+ *           there):
+ *             lea rbx,[0x7d4bea8]
+ *           becomes a jump to a stub. Not active: the lea runs as before. Active: the stub calls
+ *           iss_temporal_aa_done(ctx), which, if the AA hook above saw the AA run in this frame,
+ *           writes the marker after the AA's commands, and then runs the lea (with an absolute
+ *           address) and goes on to 0x192d06.
  *
  * The stubs keep every register the game's code uses afterwards: the host functions follow the
  * System V ABI (the game's) and the call sites are 16-byte aligned like the game's own calls;
- * r11 and rax are the only scratch registers, and both are dead at both sites. */
+ * r11 and rax (and rdi/rsi/rdx, set again right after each site) are the only registers touched.
+ * r12..r15 are callee-saved, so r13 (the draw command buffer) is the same at DONE as at AA. */
 #ifndef ISS_TEMPORAL_HOOK_H
 #define ISS_TEMPORAL_HOOK_H
 
@@ -42,7 +50,10 @@ enum {
     ISS_TEMPORAL_AA_SITE = 0x192c4c,        /* lea rax,[0xf1bcd0] ; mov al,[rax+0xdf0f05] */
     ISS_TEMPORAL_AA_LENGTH = 13,
     ISS_TEMPORAL_AA_NEXT = 0x192c59,        /* or al,[r14+0x1eb8d] ; jnz 0x192cff */
-    ISS_TEMPORAL_AA_SKIP = 0x192cff,        /* after the FXAA / T2x call */
+    ISS_TEMPORAL_DONE_SITE = 0x192cff,      /* lea rbx,[0x7d4bea8]: the first instruction after the AA call */
+    ISS_TEMPORAL_DONE_LENGTH = 7,
+    ISS_TEMPORAL_DONE_NEXT = 0x192d06,      /* the instruction after it */
+    ISS_TEMPORAL_DONE_RBX = 0x7d4bea8,      /* what the lea loads (absolute in the stub) */
     ISS_TEMPORAL_SET_WINDOW = 0x581a50,     /* FUN_00581a50(camera, float window[4]) */
     ISS_TEMPORAL_AA_MODE = 0xda07f9,        /* byte: 0 FXAA, else SMAA T2x */
     ISS_TEMPORAL_CAMERA_POINTER = 0x7f2d2b8, /* qword: the camera object */
@@ -80,7 +91,9 @@ static const unsigned char iss_temporal_sig_aa_site[ISS_TEMPORAL_AA_LENGTH] = {
     0x48, 0x8d, 0x05, 0x7d, 0x90, 0xd8, 0x00, 0x8a, 0x80, 0x05, 0x0f, 0xdf, 0x00};
 static const unsigned char iss_temporal_sig_aa_next[] = {
     0x41, 0x0a, 0x86, 0x8d, 0xeb, 0x01, 0x00, 0x0f, 0x85, 0x99, 0x00, 0x00, 0x00};
-static const unsigned char iss_temporal_sig_aa_skip[] = {0x48, 0x8d, 0x1d, 0xa2, 0x91, 0xbb, 0x07};
+static const unsigned char iss_temporal_sig_done_site[ISS_TEMPORAL_DONE_LENGTH] = {
+    0x48, 0x8d, 0x1d, 0xa2, 0x91, 0xbb, 0x07}; /* lea rbx,[rip+0x7bb91a2] */
+static const unsigned char iss_temporal_sig_done_next[] = {0x4c, 0x8d, 0x3d, 0xd3, 0xe4, 0xd7, 0x07}; /* lea r15,[0x7f111e0] */
 static const unsigned char iss_temporal_sig_base_window[16] = { /* (-1, -1, 1, 1) */
     0x00, 0x00, 0x80, 0xbf, 0x00, 0x00, 0x80, 0xbf, 0x00, 0x00, 0x80, 0x3f, 0x00, 0x00, 0x80, 0x3f};
 
@@ -95,7 +108,8 @@ static const IssTemporalSignature iss_temporal_signatures[] = {
     ISS_TEMPORAL_SIG(0x1929c0, iss_temporal_sig_aa_entry),
     ISS_TEMPORAL_SIG(ISS_TEMPORAL_AA_SITE, iss_temporal_sig_aa_site),
     ISS_TEMPORAL_SIG(ISS_TEMPORAL_AA_NEXT, iss_temporal_sig_aa_next),
-    ISS_TEMPORAL_SIG(ISS_TEMPORAL_AA_SKIP, iss_temporal_sig_aa_skip),
+    ISS_TEMPORAL_SIG(ISS_TEMPORAL_DONE_SITE, iss_temporal_sig_done_site),
+    ISS_TEMPORAL_SIG(ISS_TEMPORAL_DONE_NEXT, iss_temporal_sig_done_next),
     ISS_TEMPORAL_SIG(ISS_TEMPORAL_BASE_WINDOW, iss_temporal_sig_base_window),
 };
 #undef ISS_TEMPORAL_SIG
@@ -126,6 +140,8 @@ typedef struct IssTemporalState {
     uint32_t last_width, last_height;
     uint32_t was_active;
     unsigned char *image;       /* the guest image base */
+    unsigned char *pending_context; /* the draw command buffer the AA hook saw, until the DONE hook */
+    uint32_t pending_seq;
     IssTemporalSlot ring[ISS_TEMPORAL_RING];
 } IssTemporalState;
 
@@ -264,8 +280,9 @@ static inline void iss_temporal_build_marker(const IssTemporalFrame *frame, uint
     memcpy(&p[24], &frame->camera.near_z, 4);
     memcpy(&p[25], &frame->camera.far_z, 4);
     memcpy(&p[26], &frame->camera.fov, 4);
-    p[27] = (uint32_t)frame->aa_input.base;
-    p[28] = (uint32_t)(frame->aa_input.base >> 32);
+    /* The colour the upscaler reads is what the game's AA left in its output (already composed). */
+    p[27] = (uint32_t)frame->aa_output.base;
+    p[28] = (uint32_t)(frame->aa_output.base >> 32);
     p[29] = 0;
     p[30] = 0;
     p[31] = (uint32_t)frame->aa_output.base;
@@ -300,22 +317,41 @@ static inline int iss_temporal_write_marker(unsigned char *context, const IssTem
     return 1;
 }
 
-/* The AA hook: the game's AA would run on `input` and write `output` (objects whose T# is at +0xb4). */
-static ISS_TEMPORAL_ABI int iss_temporal_aa_replaced(unsigned char *context, const unsigned char *input,
-                                                     const unsigned char *output) {
+/* The AA hook, before the game's AA: it will read `input` and write `output` (objects whose T# is at
+ * +0xb4). Only notes them; the game's AA runs. */
+static ISS_TEMPORAL_ABI void iss_temporal_aa_begin(unsigned char *context, const unsigned char *input,
+                                                   const unsigned char *output) {
+    IssTemporalState *s = &iss_temporal_state;
     IssTemporalSlot *slot = iss_temporal_current_slot();
-    if (!slot || !context || !input || !output) return 0;
-    IssTemporalFrame frame = slot->frame; /* only this thread writes the slot between the two hooks */
-    iss_temporal_decode_image(input + ISS_TEMPORAL_AA_IMAGE_OFFSET, &frame.aa_input);
-    iss_temporal_decode_image(output + ISS_TEMPORAL_AA_IMAGE_OFFSET, &frame.aa_output);
-    if (!frame.aa_input.valid || !frame.aa_output.valid) return 0; /* not the objects we think: the game's AA runs */
-    frame.command_context = (uint64_t)(uintptr_t)context;
-    frame.aa_replaced = 1;
-    if (!iss_temporal_write_marker(context, &frame)) return 0;
+    s->pending_context = NULL;
+    if (!slot || !context || !input || !output) return;
+    IssTemporalImage in, out;
+    iss_temporal_decode_image(input + ISS_TEMPORAL_AA_IMAGE_OFFSET, &in);
+    iss_temporal_decode_image(output + ISS_TEMPORAL_AA_IMAGE_OFFSET, &out);
     iss_temporal_slot_begin(slot);
-    slot->frame = frame;
+    slot->frame.aa_input = in;
+    slot->frame.aa_output = out;
+    slot->frame.aa_replaced = 0;
+    slot->frame.command_context = (uint64_t)(uintptr_t)context;
     iss_temporal_slot_end(slot);
-    return 1;
+    if (!out.valid) return;   /* not the object we think: no marker */
+    s->pending_context = context;
+    s->pending_seq = slot->frame.seq;
+}
+
+/* The DONE hook, after the game's AA: writes the marker after the AA's commands. */
+static ISS_TEMPORAL_ABI void iss_temporal_aa_done(unsigned char *context) {
+    IssTemporalState *s = &iss_temporal_state;
+    IssTemporalSlot *slot = iss_temporal_current_slot();
+    unsigned char *pending = s->pending_context;
+    s->pending_context = NULL;
+    if (!slot || !context || pending != context || s->pending_seq != slot->frame.seq) return;
+    IssTemporalFrame frame = slot->frame;   /* only this thread writes the slot between the hooks */
+    frame.aa_replaced = 1;
+    if (!iss_temporal_write_marker(context, &frame)) return;
+    iss_temporal_slot_begin(slot);
+    slot->frame.aa_replaced = 1;
+    iss_temporal_slot_end(slot);
 }
 
 /* A consistent copy of frame `seq`; 0 when it is gone or not opened yet. */
@@ -335,13 +371,14 @@ static inline int iss_temporal_copy_frame(uint32_t seq, IssTemporalFrame *out) {
 /* ---------------------------------------------------------------------------- the stub assembler */
 typedef struct IssTemporalTargets {
     uintptr_t active;          /* &iss_temporal_state.active */
-    uintptr_t begin_frame, end_frame, aa_replaced; /* the host functions */
+    uintptr_t begin_frame, end_frame, aa_begin, aa_done; /* the host functions */
     uintptr_t camera_pointer;  /* image + ISS_TEMPORAL_CAMERA_POINTER */
     uintptr_t set_window;      /* image + ISS_TEMPORAL_SET_WINDOW */
     uintptr_t aa_mode;         /* image + ISS_TEMPORAL_AA_MODE */
     uintptr_t frame_object;    /* image + ISS_TEMPORAL_FRAME_OBJECT */
     uintptr_t jitter_fall, jitter_target; /* image + ISS_TEMPORAL_JITTER_FALL / _TARGET */
-    uintptr_t aa_next, aa_skip;           /* image + ISS_TEMPORAL_AA_NEXT / _SKIP */
+    uintptr_t aa_next;                    /* image + ISS_TEMPORAL_AA_NEXT */
+    uintptr_t done_next, done_rbx;        /* image + ISS_TEMPORAL_DONE_NEXT / _DONE_RBX */
 } IssTemporalTargets;
 
 typedef struct IssTemporalAsm {
@@ -414,7 +451,7 @@ static inline unsigned iss_temporal_build_jitter_stub(unsigned char *out, const 
 }
 
 /* The AA stub. On entry r13 = the draw command buffer, r12 = the AA's input object, r15 = its output
- * object, r14 = the post object, as at the site. */
+ * object, r14 = the post object, as at the site. Always ends in the game's two instructions. */
 static inline unsigned iss_temporal_build_aa_stub(unsigned char *out, const IssTemporalTargets *t) {
     IssTemporalAsm a = {out, 0};
     ISS_ASM(&a, 0x49, 0xbb);                      /* movabs $active,%r11 */
@@ -429,18 +466,31 @@ static inline unsigned iss_temporal_build_aa_stub(unsigned char *out, const IssT
     ISS_ASM(&a, 0x4c, 0x89, 0xef);                /* mov %r13,%rdi */
     ISS_ASM(&a, 0x4c, 0x89, 0xe6);                /* mov %r12,%rsi */
     ISS_ASM(&a, 0x4c, 0x89, 0xfa);                /* mov %r15,%rdx */
-    iss_asm_rax(&a, t->aa_replaced);
-    ISS_ASM(&a, 0xff, 0xd0);                      /* call *%rax: aa_replaced(context, input, output) */
-    ISS_ASM(&a, 0x84, 0xc0);                      /* test %al,%al */
-    const unsigned to_orig_4 = iss_asm_branch(&a, 0x74); /* je orig: it could not take over */
-    iss_asm_jump(&a, t->aa_skip);
+    iss_asm_rax(&a, t->aa_begin);
+    ISS_ASM(&a, 0xff, 0xd0);                      /* call *%rax: aa_begin(context, input, output) */
     iss_asm_here(&a, to_orig_1);
     iss_asm_here(&a, to_orig_2);
-    iss_asm_here(&a, to_orig_3);
-    iss_asm_here(&a, to_orig_4);                  /* orig: the two instructions the jump replaced */
+    iss_asm_here(&a, to_orig_3);                  /* orig: the two instructions the jump replaced */
     iss_asm_rax(&a, t->frame_object);
     ISS_ASM(&a, 0x8a, 0x80, 0x05, 0x0f, 0xdf, 0x00); /* mov 0xdf0f05(%rax),%al */
     iss_asm_jump(&a, t->aa_next);
+    return a.size;
+}
+
+/* The DONE stub. On entry r13 = the draw command buffer, as at the site. */
+static inline unsigned iss_temporal_build_done_stub(unsigned char *out, const IssTemporalTargets *t) {
+    IssTemporalAsm a = {out, 0};
+    ISS_ASM(&a, 0x49, 0xbb);                      /* movabs $active,%r11 */
+    iss_asm_u64(&a, t->active);
+    ISS_ASM(&a, 0x41, 0x80, 0x3b, 0x00);          /* cmpb $0,(%r11) */
+    const unsigned to_orig = iss_asm_branch(&a, 0x74); /* je orig */
+    ISS_ASM(&a, 0x4c, 0x89, 0xef);                /* mov %r13,%rdi */
+    iss_asm_rax(&a, t->aa_done);
+    ISS_ASM(&a, 0xff, 0xd0);                      /* call *%rax: aa_done(context) */
+    iss_asm_here(&a, to_orig);                    /* orig: the lea the jump replaced, with an absolute address */
+    ISS_ASM(&a, 0x48, 0xbb);                      /* movabs $0x7d4bea8,%rbx */
+    iss_asm_u64(&a, t->done_rbx);
+    iss_asm_jump(&a, t->done_next);
     return a.size;
 }
 
@@ -456,19 +506,22 @@ static inline void iss_temporal_write_jump(unsigned char *site, unsigned length,
     memset(site + 5, 0x90, length - 5);
 }
 
-/* Builds both stubs into `stubs` (2 * ISS_TEMPORAL_STUB_MAX bytes, written before they are made
- * executable) and writes the two jumps into `image`. 0, with the image untouched, when the code
+/* Builds the three stubs into `stubs` (3 * ISS_TEMPORAL_STUB_MAX bytes, written before they are made
+ * executable) and writes the three jumps into `image`. 0, with the image untouched, when the code
  * is not this eboot's or a stub is out of reach of a rel32 jump. */
 static inline int iss_temporal_install_hooks(unsigned char *image, uint64_t size, unsigned char *stubs) {
     if (!iss_temporal_signature_match(image, size)) return 0;
-    unsigned char *jitter_stub = stubs, *aa_stub = stubs + ISS_TEMPORAL_STUB_MAX;
+    unsigned char *jitter_stub = stubs, *aa_stub = stubs + ISS_TEMPORAL_STUB_MAX,
+                  *done_stub = stubs + 2 * ISS_TEMPORAL_STUB_MAX;
     if (!iss_temporal_jump_in_range(image + ISS_TEMPORAL_JITTER_SITE, jitter_stub) ||
-        !iss_temporal_jump_in_range(image + ISS_TEMPORAL_AA_SITE, aa_stub)) return 0;
+        !iss_temporal_jump_in_range(image + ISS_TEMPORAL_AA_SITE, aa_stub) ||
+        !iss_temporal_jump_in_range(image + ISS_TEMPORAL_DONE_SITE, done_stub)) return 0;
     IssTemporalTargets t;
     t.active = (uintptr_t)&iss_temporal_state.active;
     t.begin_frame = (uintptr_t)&iss_temporal_begin_frame;
     t.end_frame = (uintptr_t)&iss_temporal_end_frame;
-    t.aa_replaced = (uintptr_t)&iss_temporal_aa_replaced;
+    t.aa_begin = (uintptr_t)&iss_temporal_aa_begin;
+    t.aa_done = (uintptr_t)&iss_temporal_aa_done;
     t.camera_pointer = (uintptr_t)(image + ISS_TEMPORAL_CAMERA_POINTER);
     t.set_window = (uintptr_t)(image + ISS_TEMPORAL_SET_WINDOW);
     t.aa_mode = (uintptr_t)(image + ISS_TEMPORAL_AA_MODE);
@@ -476,12 +529,15 @@ static inline int iss_temporal_install_hooks(unsigned char *image, uint64_t size
     t.jitter_fall = (uintptr_t)(image + ISS_TEMPORAL_JITTER_FALL);
     t.jitter_target = (uintptr_t)(image + ISS_TEMPORAL_JITTER_TARGET);
     t.aa_next = (uintptr_t)(image + ISS_TEMPORAL_AA_NEXT);
-    t.aa_skip = (uintptr_t)(image + ISS_TEMPORAL_AA_SKIP);
+    t.done_next = (uintptr_t)(image + ISS_TEMPORAL_DONE_NEXT);
+    t.done_rbx = (uintptr_t)(image + ISS_TEMPORAL_DONE_RBX);
     if (iss_temporal_build_jitter_stub(jitter_stub, &t) > ISS_TEMPORAL_STUB_MAX ||
-        iss_temporal_build_aa_stub(aa_stub, &t) > ISS_TEMPORAL_STUB_MAX) return 0;
+        iss_temporal_build_aa_stub(aa_stub, &t) > ISS_TEMPORAL_STUB_MAX ||
+        iss_temporal_build_done_stub(done_stub, &t) > ISS_TEMPORAL_STUB_MAX) return 0;
     iss_temporal_state.image = image;
     iss_temporal_write_jump(image + ISS_TEMPORAL_JITTER_SITE, ISS_TEMPORAL_JITTER_LENGTH, jitter_stub);
     iss_temporal_write_jump(image + ISS_TEMPORAL_AA_SITE, ISS_TEMPORAL_AA_LENGTH, aa_stub);
+    iss_temporal_write_jump(image + ISS_TEMPORAL_DONE_SITE, ISS_TEMPORAL_DONE_LENGTH, done_stub);
     iss_temporal_state.installed = 1;
     iss_temporal_update_active();
     return 1;

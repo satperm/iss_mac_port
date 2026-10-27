@@ -709,7 +709,8 @@ static void install_iss_temporal(const char *app0, Segment *segments, uint64_t c
         return;
     }
     if (!mapped(segments, count, ISS_TEMPORAL_JITTER_SITE, ISS_TEMPORAL_JITTER_LENGTH) ||
-        !mapped(segments, count, ISS_TEMPORAL_AA_SITE, ISS_TEMPORAL_AA_LENGTH)) {
+        !mapped(segments, count, ISS_TEMPORAL_AA_SITE, ISS_TEMPORAL_AA_LENGTH) ||
+        !mapped(segments, count, ISS_TEMPORAL_DONE_SITE, ISS_TEMPORAL_DONE_LENGTH)) {
         puts("Temporal upscaling: unavailable (hook outside the executable segments)");
         return;
     }
