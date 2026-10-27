@@ -20,6 +20,7 @@
 #include "actor_hook.h"
 #include "damage_hook.h"
 #include "view_hook.h"
+#include "iss_temporal_hook.h"
 #include "iss_camera_hook.h"
 #include "iss_mouse_aim.h"
 #include "iss_camera_pitch_hook.h"
@@ -681,6 +682,56 @@ static void install_view_tuning(Segment *segments, uint64_t count, uint64_t size
     tlg_view_attach(image);
     printf("Draw distance: ready (LOD scale, LOD bands, region LOD_ADJUST and FADE_DISTANCE, near/far clip)\n");
 }
+
+/* Temporal upscaling, game side (src/iss_temporal.h, iss_temporal_hook.h). Off unless
+ * iss_temporal=1 in tlg.ini (or TLG_ISS_TEMPORAL=1); then the image keeps its bytes. */
+static int iss_temporal_requested(void) {
+    const char *env = getenv("TLG_ISS_TEMPORAL");
+    if (env && *env) return env[0] == '1' && !env[1];
+    const char *config_path = getenv("TLG_CONFIG");
+    FILE *f = fopen(config_path && *config_path ? config_path : "tlg.ini", "r");
+    if (!f) return 0;
+    char line[1024];
+    int on = 0;
+    while (fgets(line, sizeof(line), f))
+        if (!strncmp(line, "iss_temporal=", 13)) on = line[13] == '1' && (line[14] == 0 || line[14] == '\r' || line[14] == '\n');
+    fclose(f);
+    return on;
+}
+static void install_iss_temporal(const char *app0, Segment *segments, uint64_t count, uint64_t size) {
+    if (!iss_temporal_requested()) return;
+    char path[4096], serial[32] = "", version[32] = "";
+    snprintf(path, sizeof(path), "%s/sce_sys/param.sfo", app0 ? app0 : ".");
+    sfo_value(path, "TITLE_ID", serial, sizeof(serial), NULL);
+    sfo_value(path, "APP_VER", version, sizeof(version), NULL);
+    if (strcmp(serial, "CUSA00223") || strcmp(version, "01.07")) {
+        printf("Temporal upscaling: unavailable (title '%s', version '%s'; needs CUSA00223 01.07)\n", serial, version);
+        return;
+    }
+    if (!mapped(segments, count, ISS_TEMPORAL_JITTER_SITE, ISS_TEMPORAL_JITTER_LENGTH) ||
+        !mapped(segments, count, ISS_TEMPORAL_AA_SITE, ISS_TEMPORAL_AA_LENGTH)) {
+        puts("Temporal upscaling: unavailable (hook outside the executable segments)");
+        return;
+    }
+    unsigned char *stubs = allocate(page_size);
+    if (!iss_temporal_install_hooks(image, size, stubs)) {
+        puts("Temporal upscaling: unavailable (code differs, or the stubs are out of reach of the image)");
+        return;
+    }
+    protect(stubs, page_size, 5);
+    puts("Temporal upscaling: game hooks ready (they run the game's own code until the renderer reports ready)");
+}
+/* The renderer's side of src/iss_temporal.h. */
+int iss_temporal_installed(void) { return iss_temporal_state.installed; }
+void iss_temporal_set_renderer_ready(int ready) {
+    iss_temporal_state.ready = ready ? 1 : 0;
+    iss_temporal_update_active();
+}
+void iss_temporal_set_phases(uint32_t phases) {
+    iss_temporal_state.phases = phases < 1 ? 1 : phases > ISS_TEMPORAL_MAX_PHASES ? ISS_TEMPORAL_MAX_PHASES : phases;
+}
+uint32_t iss_temporal_latest_seq(void) { return iss_temporal_state.seq; }
+int iss_temporal_get_frame(uint32_t seq, IssTemporalFrame *out) { return iss_temporal_copy_frame(seq, out); }
 
 #include "iss_karma.h"
 #include "iss_perf_patches.h"
@@ -1460,6 +1511,7 @@ int main(int argc, char **argv) {
     if (gpu_enabled) install_actor_watch(app0, segments, ns, size);
     if (gpu_enabled) install_stat_multipliers(app0, segments, ns, size);
     if (gpu_enabled) install_view_tuning(segments, ns, size);
+    if (gpu_enabled) install_iss_temporal(app0, segments, ns, size);
     if (isa_table) {
         isa_table->protect_red_zone = red_zone_on;
         IsaReport r = isa_rewrite_apply(isa_table, image, stubs, isa_sets);
