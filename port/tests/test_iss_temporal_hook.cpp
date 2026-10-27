@@ -9,6 +9,7 @@
 #include "../src/iss_temporal_hook.h"
 #include "../gpu_v2/gpu/iss_temporal_math.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -119,7 +120,8 @@ static void TestMarker() {
     CHECK(Near(parsed.jitter[0], -0.25f) && Near(parsed.jitter[1], -1.0f / 6.0f));   // the content moves the other way in x
     for (int i = 0; i < 16; ++i) CHECK(Near(parsed.view_proj[i], 0.5f + float(i)));
     CHECK(Near(parsed.near_z, 10.0f) && Near(parsed.far_z, 1.0e7f) && Near(parsed.fov_y, 0.9f));
-    CHECK(parsed.color_addr == 0x0123456700ull && parsed.output_addr == 0x3f89abcd00ull && parsed.depth_addr == 0);
+    // the colour to upscale is what the game's AA left (its output); the input is information only
+    CHECK(parsed.color_addr == 0x3f89abcd00ull && parsed.output_addr == 0x3f89abcd00ull && parsed.depth_addr == 0);
 
     // not enough room: the game's own grow function is asked, and a refusal writes nothing
     std::vector<uint32_t> chunk(1024, 0);
@@ -143,7 +145,7 @@ static void TestMarker() {
     CHECK(room[70] == 0xdeadbeef);
 }
 
-// A fake image with the few places begin_frame / end_frame / aa_replaced read.
+// A fake image with the few places begin_frame / end_frame / aa_begin read.
 static std::vector<unsigned char> fake_image;
 
 static void TestFrameLifecycle() {
@@ -185,32 +187,57 @@ static void TestFrameLifecycle() {
     CHECK(Near(f.camera.fov, float(0x590 / 4)) && Near(f.camera.aspect, float(0x59c / 4)));
     CHECK(Near(f.camera.window[0], float(0x5ac / 4)) && Near(f.camera.window[3], float(0x5ac / 4 + 3)));
 
-    // the AA hook: the marker and the two images
+    // the AA hooks: begin notes the images and writes nothing; done, after the AA, writes the marker
     std::vector<unsigned char> context(0x100, 0);
-    std::vector<uint32_t> room(64, 0);
-    unsigned char* end = reinterpret_cast<unsigned char*>(room.data() + 64);
+    std::vector<uint32_t> room(80, 0);
+    unsigned char* end = reinterpret_cast<unsigned char*>(room.data() + 80);
     unsigned char* cursor = reinterpret_cast<unsigned char*>(room.data());
     std::memcpy(&context[16], &end, sizeof(end));
     std::memcpy(&context[24], &cursor, sizeof(cursor));
-    std::vector<unsigned char> in_object(0x100, 0), out_object(0x100, 0);
+    std::vector<unsigned char> in_object(0x100, 0), out_object(0x100, 0), blank(0x100, 0);
     uint32_t t_in[8] = {0x100000, 0, (1919u) | (1079u << 14), 0, 0, 0, 0, 0};
     uint32_t t_out[8] = {0x200000, 0, (2559u) | (1439u << 14), 0, 0, 0, 0, 0};
     std::memcpy(&in_object[0xb4], t_in, sizeof(t_in));
     std::memcpy(&out_object[0xb4], t_out, sizeof(t_out));
-    CHECK(iss_temporal_aa_replaced(context.data(), in_object.data(), out_object.data()) == 1);
-    CHECK(room[0] == 0xc0201000u && room[1] == (ISS_TEMPORAL_MARKER_MAGIC | ISS_TEMPORAL_MARKER_KIND_RESOLVE) &&
-          room[2] == ISS_TEMPORAL_MARKER_VERSION && room[3] == 1);
-    CHECK(room[28] == 0x100000u << 8 && room[32] == 0x200000u << 8);   // input / output image addresses
+
+    iss_temporal_aa_done(context.data());                          // no AA seen: nothing is written
+    CHECK(room[0] == 0);
+    iss_temporal_aa_begin(context.data(), in_object.data(), out_object.data());
+    CHECK(room[0] == 0);                                          // before the AA: still nothing in the stream
     CHECK(iss_temporal_copy_frame(1, &f) == 1);
-    CHECK(f.aa_replaced == 1 && f.aa_input.valid && f.aa_output.valid);
+    CHECK(f.aa_replaced == 0 && f.aa_input.valid && f.aa_output.valid);
     CHECK(f.aa_input.width == 1920 && f.aa_output.width == 2560 && f.aa_output.height == 1440);
     CHECK(f.aa_input.base == (0x100000ull << 8) && f.aa_output.descriptor ==
           reinterpret_cast<uint64_t>(out_object.data() + 0xb4));
-    CHECK(f.camera.address != 0);   // the camera survived the AA hook's update
+    unsigned char* other_context = context.data() + 1;
+    iss_temporal_aa_done(other_context);                          // another command buffer: not ours
+    CHECK(room[0] == 0);
+    iss_temporal_aa_begin(context.data(), in_object.data(), out_object.data());
+    iss_temporal_aa_done(context.data());                         // after the AA
+    CHECK(room[0] == 0xc0201000u && room[1] == (ISS_TEMPORAL_MARKER_MAGIC | ISS_TEMPORAL_MARKER_KIND_RESOLVE) &&
+          room[2] == ISS_TEMPORAL_MARKER_VERSION && room[3] == 1);
+    CHECK(room[28] == (0x200000u << 8) && room[32] == (0x200000u << 8));   // colour == output
+    CHECK(iss_temporal_copy_frame(1, &f) == 1 && f.aa_replaced == 1);
+    CHECK(f.camera.address != 0);                                 // the camera survived the AA hooks
+    const uint32_t first_marker_end = room[35];
+    iss_temporal_aa_done(context.data());                         // once per AA: a second call writes nothing
+    CHECK(room[34] == 0 && first_marker_end == 0);
 
-    std::vector<unsigned char> blank(0x100, 0);
-    CHECK(iss_temporal_aa_replaced(context.data(), blank.data(), out_object.data()) == 0);
-    CHECK(iss_temporal_aa_replaced(nullptr, in_object.data(), out_object.data()) == 0);
+    // an output that is not an image: no marker, the game's AA is all that runs
+    std::fill(room.begin(), room.end(), 0u);
+    cursor = reinterpret_cast<unsigned char*>(room.data());
+    std::memcpy(&context[24], &cursor, sizeof(cursor));
+    iss_temporal_aa_begin(context.data(), in_object.data(), blank.data());
+    iss_temporal_aa_done(context.data());
+    CHECK(room[0] == 0);
+    iss_temporal_aa_begin(nullptr, in_object.data(), out_object.data());
+    iss_temporal_aa_done(nullptr);
+    CHECK(room[0] == 0);
+    // a begin from an older frame is stale once the next frame is open
+    iss_temporal_aa_begin(context.data(), in_object.data(), out_object.data());
+    iss_temporal_begin_frame(window);
+    iss_temporal_aa_done(context.data());
+    CHECK(room[0] == 0);
 
     // phases cycle; the frame after a render size change asks for a reset; the ring forgets old frames
     s.phases = 4;
@@ -247,7 +274,9 @@ struct Regs {
     uint64_t id;                                  // 56: which landing pad the stub reached
     uint64_t saved_rsp, done;                     // 64, 72
     uint64_t rax;                                 // 80: rax at the landing pad
+    uint64_t rbx;                                 // 88: rbx at the landing pad
 };
+static Regs g_regs;                               // the landing pads know its address
 
 extern "C" __attribute__((sysv_abi)) void iss_test_run_stub(const void* stub, Regs* regs);
 __asm__(
@@ -278,15 +307,26 @@ static unsigned char* AllocateExecutable(size_t size) {
 #endif
 }
 
-// Landing pad: remember rax, set the id, go back to the trampoline.
+// Landing pad (uses only r11, which every stub leaves free): remember rax and rbx, set the id, go back to the
+// trampoline. rbx is the game's register at the DONE site (the lea loads it), so the pad cannot rely on it.
 static void MakePad(unsigned char* out, uint32_t id) {
-    const unsigned char code[] = {
-        0x48, 0x89, 0x43, 0x50,                                  // mov %rax,0x50(%rbx)
+    unsigned char code[64];
+    unsigned n = 0;
+    code[n++] = 0x49;
+    code[n++] = 0xbb;                                        // movabs $&g_regs,%r11
+    const uint64_t regs = reinterpret_cast<uint64_t>(&g_regs);
+    std::memcpy(code + n, &regs, 8);
+    n += 8;
+    const unsigned char tail[] = {
+        0x49, 0x89, 0x43, 0x50,                              // mov %rax,0x50(%r11)
+        0x49, 0x89, 0x5b, 0x58,                              // mov %rbx,0x58(%r11)
         0xb8, uint8_t(id), uint8_t(id >> 8), uint8_t(id >> 16), uint8_t(id >> 24), // mov $id,%eax
-        0x48, 0x8b, 0x63, 0x40,                                  // mov 0x40(%rbx),%rsp
-        0x48, 0x89, 0x43, 0x38,                                  // mov %rax,0x38(%rbx)
-        0xff, 0x63, 0x48};                                       // jmp *0x48(%rbx)
-    std::memcpy(out, code, sizeof(code));
+        0x49, 0x8b, 0x63, 0x40,                              // mov 0x40(%r11),%rsp
+        0x49, 0x89, 0x43, 0x38,                              // mov %rax,0x38(%r11)
+        0x41, 0xff, 0x63, 0x48};                             // jmp *0x48(%r11)
+    std::memcpy(code + n, tail, sizeof(tail));
+    n += sizeof(tail);
+    std::memcpy(out, code, n);
 }
 
 static std::vector<char> call_log;
@@ -298,7 +338,7 @@ static float seen_window[4];
 static const void* seen_ctx = nullptr;
 static const void* seen_in = nullptr;
 static const void* seen_out = nullptr;
-static int aa_result = 1;
+static const void* seen_done_ctx = nullptr;
 
 static ISS_TEMPORAL_ABI void MockBegin(float* window) {
     call_log.push_back('B');
@@ -314,13 +354,24 @@ static ISS_TEMPORAL_ABI void MockEnd(const void* camera) {
     call_log.push_back('E');
     seen_camera_end = camera;
 }
-static ISS_TEMPORAL_ABI int MockAa(const void* ctx, const void* in, const void* out) {
+static ISS_TEMPORAL_ABI void MockAaBegin(const void* ctx, const void* in, const void* out) {
     call_log.push_back('A');
     seen_ctx = ctx;
     seen_in = in;
     seen_out = out;
-    return aa_result;
 }
+static ISS_TEMPORAL_ABI void MockAaDone(const void* ctx) {
+    call_log.push_back('D');
+    seen_done_ctx = ctx;
+}
+
+static void ResetMocks() {
+    call_log.clear();
+    seen_begin_window = seen_camera_set = seen_camera_end = seen_ctx = seen_in = seen_out = seen_done_ctx = nullptr;
+    std::memset(seen_window, 0, sizeof(seen_window));
+}
+
+static std::string Log() { return std::string(call_log.begin(), call_log.end()); }
 
 static void TestExecutedStubs() {
     unsigned char* page = AllocateExecutable(4096);
@@ -329,9 +380,9 @@ static void TestExecutedStubs() {
         ++skipped;
         return;
     }
-    enum { Target = 1, Fall = 2, AaNext = 3, AaSkip = 4 };
-    unsigned char* pads = page + 1024;
-    for (uint32_t i = 1; i <= 4; ++i) MakePad(pads + i * 32, i);
+    enum { Target = 1, Fall = 2, AaNext = 3, DoneNext = 4 };
+    unsigned char* pads = page + 2048;
+    for (uint32_t i = 1; i <= 4; ++i) MakePad(pads + i * 64, i);
 
     uint8_t active = 0;
     uint8_t aa_mode = 0;
@@ -339,39 +390,39 @@ static void TestExecutedStubs() {
     const void* camera_pointer = camera_object;
     std::vector<unsigned char> frame_object(0xe00000, 0);      // frame_object + 0xdf0f05 is read
     std::vector<unsigned char> post_object(0x20000, 0);        // r14: + 0x1eb8d is read
+    const uint64_t rbx_value = 0x5eed0000cafeull;
     IssTemporalTargets t{};
     t.active = reinterpret_cast<uintptr_t>(&active);
     t.begin_frame = reinterpret_cast<uintptr_t>(&MockBegin);
     t.end_frame = reinterpret_cast<uintptr_t>(&MockEnd);
-    t.aa_replaced = reinterpret_cast<uintptr_t>(&MockAa);
+    t.aa_begin = reinterpret_cast<uintptr_t>(&MockAaBegin);
+    t.aa_done = reinterpret_cast<uintptr_t>(&MockAaDone);
     t.camera_pointer = reinterpret_cast<uintptr_t>(&camera_pointer);
     t.set_window = reinterpret_cast<uintptr_t>(&MockSetWindow);
     t.aa_mode = reinterpret_cast<uintptr_t>(&aa_mode);
     t.frame_object = reinterpret_cast<uintptr_t>(frame_object.data());
-    t.jitter_target = reinterpret_cast<uintptr_t>(pads + Target * 32);
-    t.jitter_fall = reinterpret_cast<uintptr_t>(pads + Fall * 32);
-    t.aa_next = reinterpret_cast<uintptr_t>(pads + AaNext * 32);
-    t.aa_skip = reinterpret_cast<uintptr_t>(pads + AaSkip * 32);
+    t.jitter_target = reinterpret_cast<uintptr_t>(pads + Target * 64);
+    t.jitter_fall = reinterpret_cast<uintptr_t>(pads + Fall * 64);
+    t.aa_next = reinterpret_cast<uintptr_t>(pads + AaNext * 64);
+    t.done_next = reinterpret_cast<uintptr_t>(pads + DoneNext * 64);
+    t.done_rbx = rbx_value;
 
     unsigned char* jitter_stub = page;
     unsigned char* aa_stub = page + 512;
+    unsigned char* done_stub = page + 1024;
     const unsigned jitter_size = iss_temporal_build_jitter_stub(jitter_stub, &t);
     const unsigned aa_size = iss_temporal_build_aa_stub(aa_stub, &t);
+    const unsigned done_size = iss_temporal_build_done_stub(done_stub, &t);
     CHECK(jitter_size > 0 && jitter_size <= ISS_TEMPORAL_STUB_MAX);
     CHECK(aa_size > 0 && aa_size <= ISS_TEMPORAL_STUB_MAX);
-    std::printf("stubs: jitter %u bytes, aa %u bytes\n", jitter_size, aa_size);
+    CHECK(done_size > 0 && done_size <= ISS_TEMPORAL_STUB_MAX);
+    std::printf("stubs: jitter %u bytes, aa %u bytes, done %u bytes\n", jitter_size, aa_size, done_size);
 
     alignas(16) unsigned char game_frame[0x200] = {};
-    auto reset = [&]() {
-        call_log.clear();
-        seen_begin_window = seen_camera_set = seen_camera_end = seen_ctx = seen_in = seen_out = nullptr;
-        std::memset(seen_window, 0, sizeof(seen_window));
-        aa_result = 1;
-    };
-    Regs regs{};
+    Regs& regs = g_regs;
 
     // --- jitter site: the game's pair when not active
-    reset();
+    ResetMocks();
     active = 0;
     aa_mode = 0;
     regs = {};
@@ -384,23 +435,23 @@ static void TestExecutedStubs() {
     CHECK(regs.id == Fall && call_log.empty() && aa_mode == 1);   // T2x mode: falls through, untouched
 
     // --- jitter site: active
-    reset();
+    ResetMocks();
     active = 1;
     aa_mode = 1;
     iss_test_run_stub(jitter_stub, &regs);
     CHECK(regs.id == Target);
-    CHECK(std::string(call_log.begin(), call_log.end()) == "BWE");
+    CHECK(Log() == "BWE");
     CHECK(seen_begin_window == game_frame + 0x100 - 0x40);        // the game's own window slot
     CHECK(seen_camera_set == camera_object && seen_camera_end == camera_object);
     CHECK(Near(seen_window[0], 0.125f) && Near(seen_window[1], 0.25f) && Near(seen_window[2], 0.375f) &&
           Near(seen_window[3], 0.5f));
     CHECK(aa_mode == 0);                                          // no T2x for the rest of the frame
     aa_mode = 0;                                                  // active, game in FXAA mode: same
-    reset();
+    ResetMocks();
     iss_test_run_stub(jitter_stub, &regs);
-    CHECK(regs.id == Target && std::string(call_log.begin(), call_log.end()) == "BWE");
+    CHECK(regs.id == Target && Log() == "BWE");
 
-    // --- AA site
+    // --- AA site: the game's AA ALWAYS runs (the stub always ends in its two instructions and aa_next)
     regs = {};
     regs.r12 = 0x1111;
     regs.r13 = 0x2222;
@@ -408,7 +459,7 @@ static void TestExecutedStubs() {
     regs.r15 = 0x3333;
     unsigned char* no_aa = &frame_object[ISS_TEMPORAL_NO_AA_FLAG];
     unsigned char* second = &post_object[0x1eb8d];
-    reset();
+    ResetMocks();
     active = 0;
     *no_aa = 7;
     iss_test_run_stub(aa_stub, &regs);
@@ -417,19 +468,14 @@ static void TestExecutedStubs() {
     iss_test_run_stub(aa_stub, &regs);
     CHECK(regs.id == AaNext && (regs.rax & 0xff) == 0 && call_log.empty());
 
-    reset();
+    ResetMocks();
     active = 1;
-    iss_test_run_stub(aa_stub, &regs);                            // takes over
-    CHECK(regs.id == AaSkip && std::string(call_log.begin(), call_log.end()) == "A");
+    iss_test_run_stub(aa_stub, &regs);                            // notes the images, then the game's AA
+    CHECK(regs.id == AaNext && (regs.rax & 0xff) == 0 && Log() == "A");
     CHECK(seen_ctx == reinterpret_cast<void*>(0x2222) && seen_in == reinterpret_cast<void*>(0x1111) &&
           seen_out == reinterpret_cast<void*>(0x3333));
 
-    reset();
-    aa_result = 0;                                                // the host could not write the marker
-    iss_test_run_stub(aa_stub, &regs);
-    CHECK(regs.id == AaNext && (regs.rax & 0xff) == 0 && std::string(call_log.begin(), call_log.end()) == "A");
-
-    reset();
+    ResetMocks();
     *no_aa = 5;                                                   // the game runs no AA: left alone
     iss_test_run_stub(aa_stub, &regs);
     CHECK(regs.id == AaNext && (regs.rax & 0xff) == 5 && call_log.empty());
@@ -438,6 +484,103 @@ static void TestExecutedStubs() {
     iss_test_run_stub(aa_stub, &regs);
     CHECK(regs.id == AaNext && call_log.empty());
     *second = 0;
+
+    // --- DONE site: after the AA. The lea the jump replaced is redone with an absolute address.
+    regs = {};
+    regs.r13 = 0x2222;
+    regs.rbx = 0;
+    ResetMocks();
+    active = 0;
+    iss_test_run_stub(done_stub, &regs);
+    CHECK(regs.id == DoneNext && regs.rbx == rbx_value && call_log.empty());
+    ResetMocks();
+    active = 1;
+    iss_test_run_stub(done_stub, &regs);
+    CHECK(regs.id == DoneNext && regs.rbx == rbx_value && Log() == "D" && seen_done_ctx == reinterpret_cast<void*>(0x2222));
+
+    // --- the order of a frame: the AA hook, then (the game's AA) then the DONE hook
+    ResetMocks();
+    regs = {};
+    regs.r12 = 0x1111;
+    regs.r13 = 0x2222;
+    regs.r14 = reinterpret_cast<uint64_t>(post_object.data());
+    regs.r15 = 0x3333;
+    iss_test_run_stub(aa_stub, &regs);
+    call_log.push_back('G');                                      // the game's FXAA pass runs here
+    iss_test_run_stub(done_stub, &regs);
+    CHECK(Log() == "AGD");
+}
+
+// The real host functions behind the real stubs: the marker lands in the command stream after the AA.
+static void TestMarkerAfterTheAa() {
+    unsigned char* page = AllocateExecutable(4096);
+    if (!page) {
+        ++skipped;
+        return;
+    }
+    enum { AaNext = 3, DoneNext = 4 };
+    unsigned char* pads = page + 2048;
+    MakePad(pads + AaNext * 64, AaNext);
+    MakePad(pads + DoneNext * 64, DoneNext);
+
+    fake_image.assign(0x2000000, 0);
+    IssTemporalState& s = iss_temporal_state;
+    s = IssTemporalState{};
+    s.image = fake_image.data();
+    s.installed = 1;
+    s.ready = 1;
+    iss_temporal_update_active();
+    uint32_t size[2] = {1920, 1080};
+    std::memcpy(&fake_image[ISS_TEMPORAL_RENDER_SIZE], size, 8);
+    float window[4];
+    iss_temporal_begin_frame(window);
+
+    std::vector<unsigned char> context(0x100, 0);
+    std::vector<uint32_t> room(80, 0);
+    unsigned char* end = reinterpret_cast<unsigned char*>(room.data() + 80);
+    unsigned char* cursor = reinterpret_cast<unsigned char*>(room.data());
+    std::memcpy(&context[16], &end, sizeof(end));
+    std::memcpy(&context[24], &cursor, sizeof(cursor));
+    std::vector<unsigned char> in_object(0x100, 0), out_object(0x100, 0);
+    uint32_t t_in[8] = {0x100000, 0, (1919u) | (1079u << 14), 0, 0, 0, 0, 0};
+    uint32_t t_out[8] = {0x200000, 0, (1919u) | (1079u << 14), 0, 0, 0, 0, 0};
+    std::memcpy(&in_object[0xb4], t_in, sizeof(t_in));
+    std::memcpy(&out_object[0xb4], t_out, sizeof(t_out));
+
+    IssTemporalTargets t{};
+    t.active = reinterpret_cast<uintptr_t>(&s.active);
+    t.aa_begin = reinterpret_cast<uintptr_t>(&iss_temporal_aa_begin);
+    t.aa_done = reinterpret_cast<uintptr_t>(&iss_temporal_aa_done);
+    t.frame_object = reinterpret_cast<uintptr_t>(fake_image.data() + ISS_TEMPORAL_FRAME_OBJECT);
+    t.aa_next = reinterpret_cast<uintptr_t>(pads + AaNext * 64);
+    t.done_next = reinterpret_cast<uintptr_t>(pads + DoneNext * 64);
+    t.done_rbx = 1;
+    unsigned char* aa_stub = page;
+    unsigned char* done_stub = page + 512;
+    iss_temporal_build_aa_stub(aa_stub, &t);
+    iss_temporal_build_done_stub(done_stub, &t);
+
+    std::vector<unsigned char> post_object(0x20000, 0);
+    Regs& regs = g_regs;
+    regs = {};
+    regs.r12 = reinterpret_cast<uint64_t>(in_object.data());
+    regs.r13 = reinterpret_cast<uint64_t>(context.data());
+    regs.r14 = reinterpret_cast<uint64_t>(post_object.data());
+    regs.r15 = reinterpret_cast<uint64_t>(out_object.data());
+    iss_test_run_stub(aa_stub, &regs);
+    CHECK(regs.id == AaNext);
+    CHECK(room[0] == 0);                                      // the AA has not run yet: no marker
+    room[0] = 0x11111111u;                                    // the game's AA commands go here
+    cursor = reinterpret_cast<unsigned char*>(room.data() + 1);
+    std::memcpy(&context[24], &cursor, sizeof(cursor));
+    iss_test_run_stub(done_stub, &regs);
+    CHECK(regs.id == DoneNext);
+    CHECK(room[0] == 0x11111111u && room[1] == 0xc0201000u);  // the marker comes after them
+    CHECK(room[2] == (ISS_TEMPORAL_MARKER_MAGIC | ISS_TEMPORAL_MARKER_KIND_RESOLVE));
+    CHECK(room[29] == (0x200000u << 8) && room[33] == (0x200000u << 8));
+    IssTemporalFrame f;
+    CHECK(iss_temporal_copy_frame(1, &f) == 1 && f.aa_replaced == 1);
+    s = IssTemporalState{};
 }
 #endif
 
@@ -480,8 +623,10 @@ static void TestRealEboot() {
     // the lea at the AA site: disp 0x00d8907d from the next instruction
     CHECK(ISS_TEMPORAL_AA_SITE + 7 + 0xd8907d == ISS_TEMPORAL_FRAME_OBJECT);
     CHECK(ISS_TEMPORAL_AA_SITE + ISS_TEMPORAL_AA_LENGTH == ISS_TEMPORAL_AA_NEXT);
-    // the or/jnz after it: jnz +0x99 from 0x192c60 + 6 lands on the skip target
-    CHECK(0x192c60 + 6 + 0x99 == ISS_TEMPORAL_AA_SKIP);
+    // the or/jnz after it: jnz +0x99 from 0x192c60 + 6 lands on the instruction after the AA call, the DONE site
+    CHECK(0x192c60 + 6 + 0x99 == ISS_TEMPORAL_DONE_SITE);
+    CHECK(ISS_TEMPORAL_DONE_SITE + ISS_TEMPORAL_DONE_LENGTH == ISS_TEMPORAL_DONE_NEXT);
+    CHECK(ISS_TEMPORAL_DONE_SITE + 7 + 0x7bb91a2 == ISS_TEMPORAL_DONE_RBX);   // the lea the stub redoes
 
     // installing: only the two sites change, each into jmp rel32 + nops reaching a stub of this size
     std::vector<unsigned char> stubs(4096);
@@ -489,7 +634,8 @@ static void TestRealEboot() {
     std::vector<unsigned char> patched = image;
     // the stubs must be within a rel32 jump of the image: a vector of this size is, on the heap, only by luck
     if (!iss_temporal_jump_in_range(patched.data() + ISS_TEMPORAL_JITTER_SITE, stubs.data()) ||
-        !iss_temporal_jump_in_range(patched.data() + ISS_TEMPORAL_AA_SITE, stubs.data() + ISS_TEMPORAL_STUB_MAX)) {
+        !iss_temporal_jump_in_range(patched.data() + ISS_TEMPORAL_AA_SITE, stubs.data() + ISS_TEMPORAL_STUB_MAX) ||
+        !iss_temporal_jump_in_range(patched.data() + ISS_TEMPORAL_DONE_SITE, stubs.data() + 2 * ISS_TEMPORAL_STUB_MAX)) {
         std::puts("skipped: the heap put the stubs out of rel32 reach of the image");
         ++skipped;
         return;
@@ -497,11 +643,15 @@ static void TestRealEboot() {
     CHECK(iss_temporal_install_hooks(patched.data(), patched.size(), stubs.data()) == 1);
     size_t changed = 0;
     for (size_t i = 0; i < image.size(); ++i) changed += image[i] != patched[i];
-    CHECK(changed <= ISS_TEMPORAL_JITTER_LENGTH + ISS_TEMPORAL_AA_LENGTH);
-    CHECK(patched[ISS_TEMPORAL_JITTER_SITE] == 0xe9 && patched[ISS_TEMPORAL_AA_SITE] == 0xe9);
+    int32_t rel;
+    CHECK(changed <= ISS_TEMPORAL_JITTER_LENGTH + ISS_TEMPORAL_AA_LENGTH + ISS_TEMPORAL_DONE_LENGTH);
+    CHECK(patched[ISS_TEMPORAL_JITTER_SITE] == 0xe9 && patched[ISS_TEMPORAL_AA_SITE] == 0xe9 &&
+          patched[ISS_TEMPORAL_DONE_SITE] == 0xe9);
+    for (unsigned i = 5; i < ISS_TEMPORAL_DONE_LENGTH; ++i) CHECK(patched[ISS_TEMPORAL_DONE_SITE + i] == 0x90);
+    std::memcpy(&rel, &patched[ISS_TEMPORAL_DONE_SITE + 1], 4);
+    CHECK(patched.data() + ISS_TEMPORAL_DONE_SITE + 5 + rel == stubs.data() + 2 * ISS_TEMPORAL_STUB_MAX);
     for (unsigned i = 5; i < ISS_TEMPORAL_JITTER_LENGTH; ++i) CHECK(patched[ISS_TEMPORAL_JITTER_SITE + i] == 0x90);
     for (unsigned i = 5; i < ISS_TEMPORAL_AA_LENGTH; ++i) CHECK(patched[ISS_TEMPORAL_AA_SITE + i] == 0x90);
-    int32_t rel;
     std::memcpy(&rel, &patched[ISS_TEMPORAL_JITTER_SITE + 1], 4);
     CHECK(patched.data() + ISS_TEMPORAL_JITTER_SITE + 5 + rel == stubs.data());
     std::memcpy(&rel, &patched[ISS_TEMPORAL_AA_SITE + 1], 4);
@@ -526,6 +676,7 @@ int main() {
     TestFrameLifecycle();
 #if defined(__x86_64__) || defined(_M_X64)
     TestExecutedStubs();
+    TestMarkerAfterTheAa();
 #else
     std::puts("skipped: the stubs are x86-64 code");
     ++skipped;
