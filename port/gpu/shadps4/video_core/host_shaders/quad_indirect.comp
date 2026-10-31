@@ -1,0 +1,33 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// tlg (macOS, TLG_MAC_QUAD_INDEX): rewrites a quad list's indirect draw records (vertex count,
+// instance count, first vertex, first instance; the game's stride) into indexed ones for the quad
+// index pattern (0,1,2, 0,2,3 a quad): 6 indices a quad, the first vertex as vertex offset, so the
+// vertex index the shader sees is the original one.
+#version 450
+
+layout(local_size_x = 64) in;
+
+layout(std430, binding = 0) readonly buffer Args { uint args[]; };
+layout(std430, binding = 1) writeonly buffer Out { uint outv[]; };
+
+layout(push_constant) uniform Push {
+    uint count;     // records
+    uint base_dw;   // first record, in dwords from the bound range
+    uint stride_dw; // record stride in dwords
+    uint max_quads; // quads in the index pattern
+} push;
+
+void main() {
+    const uint i = gl_GlobalInvocationID.x;
+    if (i >= push.count) {
+        return;
+    }
+    const uint at = push.base_dw + i * push.stride_dw;
+    const uint quads = min(args[at] / 4u, push.max_quads);
+    const uint o = i * 5u;
+    outv[o] = quads * 6u;        // index count
+    outv[o + 1] = args[at + 1];  // instance count
+    outv[o + 2] = 0u;            // first index
+    outv[o + 3] = args[at + 2];  // vertex offset = first vertex
+    outv[o + 4] = args[at + 3];  // first instance
+}

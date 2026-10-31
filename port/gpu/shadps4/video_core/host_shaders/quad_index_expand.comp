@@ -1,0 +1,69 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// tlg (macOS, TLG_MAC_QUAD_INDEX): indexed indirect quad lists. For each record (index count,
+// instance count, first index, vertex offset, first instance; the game's stride) the quads' four
+// indices become two triangles (a,b,c, a,c,d) in this record's slot of the output index buffer,
+// and the record is rewritten to draw them (first index = the slot, the rest unchanged).
+// Workgroups: x over the quads of a record, y over the records.
+#version 450
+
+layout(local_size_x = 64) in;
+
+layout(std430, binding = 0) readonly buffer Args { uint args[]; };
+layout(std430, binding = 1) readonly buffer Indices { uint idx[]; };
+layout(std430, binding = 2) writeonly buffer OutArgs { uint out_args[]; };
+layout(std430, binding = 3) writeonly buffer OutIndices { uint out_idx[]; };
+
+layout(push_constant) uniform Push {
+    uint count;         // records
+    uint base_dw;       // first record, in dwords from the bound range
+    uint stride_dw;     // record stride in dwords
+    uint idx_base;      // first index of the game's index buffer, in indices from the bound range
+    uint is16;          // 16-bit indices
+    uint max_quads;     // quads per record slot
+    uint total_indices; // indices in the game's index buffer
+} push;
+
+uint ReadIndex(uint i) {
+    if (i >= push.total_indices) {
+        return 0u;
+    }
+    const uint at = push.idx_base + i;
+    if (push.is16 != 0u) {
+        return (idx[at >> 1] >> ((at & 1u) * 16u)) & 0xffffu;
+    }
+    return idx[at];
+}
+
+void main() {
+    const uint r = gl_WorkGroupID.y;
+    const uint q = gl_GlobalInvocationID.x;
+    if (r >= push.count) {
+        return;
+    }
+    const uint at = push.base_dw + r * push.stride_dw;
+    const uint quads = min(args[at] / 4u, push.max_quads);
+    const uint first = args[at + 2];
+    const uint slot = r * push.max_quads * 6u;
+    if (q == 0u) {
+        const uint o = r * 5u;
+        out_args[o] = quads * 6u;       // index count
+        out_args[o + 1] = args[at + 1]; // instance count
+        out_args[o + 2] = slot;         // first index
+        out_args[o + 3] = args[at + 3]; // vertex offset
+        out_args[o + 4] = args[at + 4]; // first instance
+    }
+    if (q >= quads) {
+        return;
+    }
+    const uint a = ReadIndex(first + q * 4u);
+    const uint b = ReadIndex(first + q * 4u + 1u);
+    const uint c = ReadIndex(first + q * 4u + 2u);
+    const uint d = ReadIndex(first + q * 4u + 3u);
+    const uint o = slot + q * 6u;
+    out_idx[o] = a;
+    out_idx[o + 1] = b;
+    out_idx[o + 2] = c;
+    out_idx[o + 3] = a;
+    out_idx[o + 4] = c;
+    out_idx[o + 5] = d;
+}

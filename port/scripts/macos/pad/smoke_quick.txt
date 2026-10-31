@@ -1,0 +1,85 @@
+# Smoke powers from a save at the smoke-shot tutorial (out/smoke-save): from 40 s, every 4 s: aim and shoot (l1 r2), then dash (circle).
+40 l1
+41 l1 r2
+42 ly=0 circle
+43 ly=0
+44 l1
+45 l1 r2
+46 ly=0 circle
+47 ly=0
+48 l1
+49 l1 r2
+50 ly=0 circle
+51 ly=0
+52 l1
+53 l1 r2
+54 ly=0 circle
+55 ly=0
+56 l1
+57 l1 r2
+58 ly=0 circle
+59 ly=0
+60 l1
+61 l1 r2
+62 ly=0 circle
+63 ly=0
+64 l1
+65 l1 r2
+66 ly=0 circle
+67 ly=0
+68 l1
+69 l1 r2
+70 ly=0 circle
+71 ly=0
+72 l1
+73 l1 r2
+74 ly=0 circle
+75 ly=0
+76 l1
+77 l1 r2
+78 ly=0 circle
+79 ly=0
+80 l1
+81 l1 r2
+82 ly=0 circle
+83 ly=0
+84 l1
+85 l1 r2
+86 ly=0 circle
+87 ly=0
+88 l1
+89 l1 r2
+90 ly=0 circle
+91 ly=0
+92 l1
+93 l1 r2
+94 ly=0 circle
+95 ly=0
+96 l1
+97 l1 r2
+98 ly=0 circle
+99 ly=0
+100 l1
+101 l1 r2
+102 ly=0 circle
+103 ly=0
+104 l1
+105 l1 r2
+106 ly=0 circle
+107 ly=0
+108 l1
+109 l1 r2
+110 ly=0 circle
+111 ly=0
+112 l1
+113 l1 r2
+114 ly=0 circle
+115 ly=0
+116 l1
+117 l1 r2
+118 ly=0 circle
+119 ly=0
+120 l1
+121 l1 r2
+122 ly=0 circle
+123 ly=0

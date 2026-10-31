@@ -1,0 +1,666 @@
+// SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+#include "common/assert.h"
+#include "common/elf_info.h"
+#include "common/logging/log.h"
+#include "core/emulator_settings.h"
+#include "core/libraries/libs.h"
+#include "core/libraries/system/userservice.h"
+#include "core/libraries/videoout/driver.h"
+#include "core/libraries/videoout/video_out.h"
+#include "core/libraries/videoout/videoout_error.h"
+#include "core/platform.h"
+#include "video_core/renderer_vulkan/vk_presenter.h"
+#include "tlg_freeze.h"
+#include "tlg_split.h"
+
+extern std::unique_ptr<Vulkan::Presenter> presenter;
+
+namespace Libraries::VideoOut {
+
+static std::unique_ptr<VideoOutDriver> driver;
+
+// tlg (from bloodborne_mac_port): the game's side of the process split keeps the port bookkeeping
+// (slots, flip status, event lists) and mirrors every change to the host, which presents.
+static void PushScalar(u32 type, s64 a, s64 b = 0, double f = 0) {
+    const TlgGpuScalar record{{type, sizeof(TlgGpuScalar)}, a, b, f};
+    TlgSplit::Push(&record);
+}
+
+void TlgSplitApplyEvent(const TlgGpuRecord* record) {
+    driver->ApplyRemoteEvent(record);
+}
+
+void PS4_SYSV_ABI sceVideoOutSetBufferAttribute(BufferAttribute* attribute, PixelFormat pixelFormat,
+                                                u32 tilingMode, u32 aspectRatio, u32 width,
+                                                u32 height, u32 pitchInPixel) {
+    LOG_INFO(Lib_VideoOut,
+             "pixelFormat = {}, tilingMode = {}, aspectRatio = {}, width = {}, height = {}, "
+             "pitchInPixel = {}",
+             GetPixelFormatString(pixelFormat), tilingMode, aspectRatio, width, height,
+             pitchInPixel);
+
+    std::memset(attribute, 0, sizeof(BufferAttribute));
+    attribute->pixel_format = static_cast<PixelFormat>(pixelFormat);
+    attribute->tiling_mode = static_cast<TilingMode>(tilingMode);
+    attribute->aspect_ratio = aspectRatio;
+    attribute->width = width;
+    attribute->height = height;
+    attribute->pitch_in_pixel = pitchInPixel;
+    attribute->option = SCE_VIDEO_OUT_BUFFER_ATTRIBUTE_OPTION_NONE;
+}
+
+s32 PS4_SYSV_ABI sceVideoOutAddFlipEvent(Kernel::OrbisKernelEqueue eq, s32 handle, void* udata) {
+    LOG_INFO(Lib_VideoOut, "handle = {}", handle);
+
+    auto* port = driver->GetPort(handle);
+    if (port == nullptr) {
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_HANDLE;
+    }
+
+    auto equeue = Kernel::GetEqueue(eq);
+    if (equeue == nullptr) {
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_EVENT_QUEUE;
+    }
+
+    Kernel::EqueueEvent event{};
+    event.event.ident = static_cast<u64>(OrbisVideoOutInternalEventId::Flip);
+    event.event.filter = Kernel::OrbisKernelEvent::Filter::VideoOut;
+    event.event.flags = Kernel::OrbisKernelEvent::Flags::Add;
+    event.event.udata = udata;
+    event.event.fflags = 0;
+    event.event.data = 0;
+    event.data = port;
+    equeue->AddEvent(event);
+
+    port->flip_events.push_back(eq);
+    return ORBIS_OK;
+}
+
+s32 PS4_SYSV_ABI sceVideoOutDeleteFlipEvent(Kernel::OrbisKernelEqueue eq, s32 handle) {
+    auto* port = driver->GetPort(handle);
+    if (port == nullptr) {
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_HANDLE;
+    }
+
+    auto equeue = Kernel::GetEqueue(eq);
+    if (equeue == nullptr) {
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_EVENT_QUEUE;
+    }
+    equeue->RemoveEvent(handle, Kernel::OrbisKernelEvent::Filter::VideoOut);
+    port->flip_events.erase(find(port->flip_events.begin(), port->flip_events.end(), eq));
+    return ORBIS_OK;
+}
+
+s32 PS4_SYSV_ABI sceVideoOutAddVblankEvent(Kernel::OrbisKernelEqueue eq, s32 handle, void* udata) {
+    LOG_INFO(Lib_VideoOut, "handle = {}", handle);
+
+    auto* port = driver->GetPort(handle);
+    if (port == nullptr) {
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_HANDLE;
+    }
+
+    auto equeue = Kernel::GetEqueue(eq);
+    if (equeue == nullptr) {
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_EVENT_QUEUE;
+    }
+
+    Kernel::EqueueEvent event{};
+    event.event.ident = static_cast<u64>(OrbisVideoOutInternalEventId::Vblank);
+    event.event.filter = Kernel::OrbisKernelEvent::Filter::VideoOut;
+    event.event.flags = Kernel::OrbisKernelEvent::Flags::Add;
+    event.event.udata = udata;
+    event.event.fflags = 0;
+    event.event.data = 0;
+    event.data = port;
+    equeue->AddEvent(event);
+
+    port->vblank_events.push_back(eq);
+    return ORBIS_OK;
+}
+
+s32 PS4_SYSV_ABI sceVideoOutDeleteVblankEvent(Kernel::OrbisKernelEqueue eq, s32 handle) {
+    auto* port = driver->GetPort(handle);
+    if (port == nullptr) {
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_HANDLE;
+    }
+
+    auto equeue = Kernel::GetEqueue(eq);
+    if (equeue == nullptr) {
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_EVENT_QUEUE;
+    }
+    equeue->RemoveEvent(handle, Kernel::OrbisKernelEvent::Filter::VideoOut);
+    port->vblank_events.erase(find(port->vblank_events.begin(), port->vblank_events.end(), eq));
+    return ORBIS_OK;
+}
+
+s32 PS4_SYSV_ABI sceVideoOutRegisterBuffers(s32 handle, s32 startIndex, void* const* addresses,
+                                            s32 bufferNum, const BufferAttribute* attribute) {
+    if (!addresses || !attribute) {
+        LOG_ERROR(Lib_VideoOut, "Addresses are null");
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_ADDRESS;
+    }
+
+    auto* port = driver->GetPort(handle);
+    if (!port || !port->is_open) {
+        LOG_ERROR(Lib_VideoOut, "Invalid handle = {}", handle);
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_HANDLE;
+    }
+
+    const s32 result = driver->RegisterBuffers(port, startIndex, addresses, bufferNum, attribute);
+    if (TlgSplit::Remote() && result >= 0) {
+        TlgGpuVoRegister record{};
+        record.r = {TLGGPU_REC_VO_REGISTER_BUFFERS, sizeof(TlgGpuVoRegister)};
+        record.handle = handle;
+        record.start = startIndex;
+        record.count = std::min<s32>(bufferNum, TLGGPU_VO_BUFFERS_MAX);
+        static_assert(sizeof(BufferAttribute) <= TLGGPU_ATTRIBUTE_BYTES);
+        std::memcpy(record.attribute, attribute, sizeof(BufferAttribute));
+        for (s32 i = 0; i < record.count; ++i) {
+            record.addresses[i] = reinterpret_cast<u64>(addresses[i]);
+        }
+        const s64 host = TlgSplit::Request(&record, &record.slot);
+        if (host != result) {
+            LOG_ERROR(Lib_VideoOut, "Split: buffer group {} here, {} in the GPU host", result, host);
+        }
+    }
+    return result;
+}
+
+s32 PS4_SYSV_ABI sceVideoOutSetFlipRate(s32 handle, s32 rate) {
+    LOG_TRACE(Lib_VideoOut, "called");
+    driver->GetPort(handle)->flip_rate = rate;
+    if (TlgSplit::Remote()) {
+        PushScalar(TLGGPU_REC_VO_SET_FLIP_RATE, handle, rate);
+    }
+    return ORBIS_OK;
+}
+
+s32 PS4_SYSV_ABI sceVideoOutIsFlipPending(s32 handle) {
+    LOG_TRACE(Lib_VideoOut, "called");
+    auto* port = driver->GetPort(handle);
+    std::unique_lock lock{port->port_mutex};
+    s32 pending = port->flip_status.flip_pending_num;
+    return pending;
+}
+
+s32 PS4_SYSV_ABI sceVideoOutSubmitFlip(s32 handle, s32 bufferIndex, s32 flipMode, s64 flipArg) {
+    auto* port = driver->GetPort(handle);
+    if (!port) {
+        LOG_ERROR(Lib_VideoOut, "Invalid handle = {}", handle);
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_HANDLE;
+    }
+
+    if (flipMode != 1) {
+        LOG_WARNING(Lib_VideoOut, "flipmode = {}", flipMode);
+    }
+
+    if (bufferIndex < -1 || bufferIndex > 15) {
+        LOG_ERROR(Lib_VideoOut, "Invalid bufferIndex = {}", bufferIndex);
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_INDEX;
+    }
+
+    if (bufferIndex != -1 && port->buffer_slots[bufferIndex].group_index < 0) {
+        LOG_ERROR(Lib_VideoOut, "Slot in bufferIndex = {} is not registered", bufferIndex);
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_INDEX;
+    }
+
+    LOG_DEBUG(Lib_VideoOut, "bufferIndex = {}, flipMode = {}, flipArg = {}", bufferIndex, flipMode,
+              flipArg);
+
+    if (!driver->SubmitFlip(port, bufferIndex, flipArg)) {
+        LOG_ERROR(Lib_VideoOut, "Flip queue is full");
+        return ORBIS_VIDEO_OUT_ERROR_FLIP_QUEUE_FULL;
+    }
+    if (TlgSplit::Remote()) {
+        const TlgGpuVoFlip record{{TLGGPU_REC_VO_SUBMIT_FLIP, sizeof(TlgGpuVoFlip)},
+                                  handle, bufferIndex, flipMode, 0, flipArg};
+        TlgSplit::Push(&record);
+    }
+
+    return ORBIS_OK;
+}
+
+s32 PS4_SYSV_ABI sceVideoOutGetEventId(const Kernel::OrbisKernelEvent* ev) {
+    if (ev == nullptr) {
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_ADDRESS;
+    }
+    if (ev->filter != Kernel::OrbisKernelEvent::Filter::VideoOut) {
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_EVENT;
+    }
+
+    OrbisVideoOutInternalEventId internal_event_id =
+        static_cast<OrbisVideoOutInternalEventId>(ev->ident);
+    switch (internal_event_id) {
+    case OrbisVideoOutInternalEventId::Flip:
+        return static_cast<s32>(OrbisVideoOutEventId::Flip);
+    case OrbisVideoOutInternalEventId::Vblank:
+    case OrbisVideoOutInternalEventId::SysVblank:
+        return static_cast<s32>(OrbisVideoOutEventId::Vblank);
+    case OrbisVideoOutInternalEventId::PreVblankStart:
+        return static_cast<s32>(OrbisVideoOutEventId::PreVblankStart);
+    case OrbisVideoOutInternalEventId::SetMode:
+        return static_cast<s32>(OrbisVideoOutEventId::SetMode);
+    case OrbisVideoOutInternalEventId::Position:
+        return static_cast<s32>(OrbisVideoOutEventId::Position);
+    default: {
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_EVENT;
+    }
+    }
+}
+
+s32 PS4_SYSV_ABI sceVideoOutGetEventData(const Kernel::OrbisKernelEvent* ev, s64* data) {
+    if (ev == nullptr || data == nullptr) {
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_ADDRESS;
+    }
+    if (ev->filter != Kernel::OrbisKernelEvent::Filter::VideoOut) {
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_EVENT;
+    }
+
+    auto event_data = ev->data >> 0x10;
+    if (ev->ident != static_cast<s32>(OrbisVideoOutInternalEventId::Flip) || ev->data >= 0) {
+        *data = event_data;
+    } else {
+        *data = event_data | 0xffff000000000000;
+    }
+    return ORBIS_OK;
+}
+
+s32 PS4_SYSV_ABI sceVideoOutGetEventCount(const Kernel::OrbisKernelEvent* ev) {
+    if (ev == nullptr) {
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_ADDRESS;
+    }
+    if (ev->filter != Kernel::OrbisKernelEvent::Filter::VideoOut) {
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_EVENT;
+    }
+
+    auto event_data = static_cast<OrbisVideoOutEventData>(ev->data);
+    return event_data.count;
+}
+
+s32 PS4_SYSV_ABI sceVideoOutGetFlipStatus(s32 handle, FlipStatus* status) {
+    if (!status) {
+        LOG_ERROR(Lib_VideoOut, "Flip status is null");
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_ADDRESS;
+    }
+
+    auto* port = driver->GetPort(handle);
+    if (!port) {
+        LOG_ERROR(Lib_VideoOut, "Invalid port handle = {}", handle);
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_HANDLE;
+    }
+
+    {
+        std::unique_lock lock{port->port_mutex};
+        *status = port->flip_status;
+    }
+
+    LOG_TRACE(Lib_VideoOut,
+              "count = {}, processTime = {}, tsc = {}, submitTsc = {}, flipArg = {}, gcQueueNum = "
+              "{}, flipPendingNum = {}, currentBuffer = {}",
+              status->count, status->process_time, status->tsc, status->submit_tsc,
+              status->flip_arg, status->gc_queue_num, status->flip_pending_num,
+              status->current_buffer);
+
+    return ORBIS_OK;
+}
+
+s32 PS4_SYSV_ABI sceVideoOutGetVblankStatus(int handle, SceVideoOutVblankStatus* status) {
+    if (status == nullptr) {
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_ADDRESS;
+    }
+
+    auto* port = driver->GetPort(handle);
+    if (!port) {
+        LOG_ERROR(Lib_VideoOut, "Invalid port handle = {}", handle);
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_HANDLE;
+    }
+
+    std::unique_lock lock{port->vo_mutex};
+    *status = port->vblank_status;
+    return ORBIS_OK;
+}
+
+s32 PS4_SYSV_ABI sceVideoOutGetResolutionStatus(s32 handle, SceVideoOutResolutionStatus* status) {
+    LOG_INFO(Lib_VideoOut, "called");
+    auto* port = driver->GetPort(handle);
+    if (!port || !port->is_open) {
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_HANDLE;
+    }
+
+    *status = port->resolution;
+    return ORBIS_OK;
+}
+
+s32 PS4_SYSV_ABI sceVideoOutOpen(Libraries::UserService::OrbisUserServiceUserId userId, s32 busType,
+                                 s32 index, const void* param) {
+    LOG_INFO(Lib_VideoOut, "called");
+    ASSERT(busType == SCE_VIDEO_OUT_BUS_TYPE_MAIN);
+
+    if (index != 0) {
+        LOG_ERROR(Lib_VideoOut, "Index != 0");
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_VALUE;
+    }
+
+    auto* params = reinterpret_cast<const ServiceThreadParams*>(param);
+    int handle = driver->Open(params);
+    if (TlgSplit::Remote() && handle >= 0) {
+        TlgGpuVoOpen record{{TLGGPU_REC_VO_OPEN, sizeof(TlgGpuVoOpen)}, 0, static_cast<u32>(userId),
+                            busType, index};
+        const s64 host = TlgSplit::Request(&record, &record.slot);
+        if (host != handle) {
+            LOG_ERROR(Lib_VideoOut, "Split: port handle {} here, {} in the GPU host", handle, host);
+        }
+    }
+
+    if (handle < 0) {
+        LOG_ERROR(Lib_VideoOut, "All available handles are open");
+        return ORBIS_VIDEO_OUT_ERROR_RESOURCE_BUSY;
+    }
+
+    return handle;
+}
+
+s32 PS4_SYSV_ABI sceVideoOutClose(s32 handle) {
+    driver->Close(handle);
+    if (TlgSplit::Remote()) {
+        PushScalar(TLGGPU_REC_VO_CLOSE, handle);
+    }
+    return ORBIS_OK;
+}
+
+s32 PS4_SYSV_ABI sceVideoOutUnregisterBuffers(s32 handle, s32 attributeIndex) {
+    auto* port = driver->GetPort(handle);
+    if (!port || !port->is_open) {
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_HANDLE;
+    }
+
+    const s32 result = driver->UnregisterBuffers(port, attributeIndex);
+    if (TlgSplit::Remote() && result == ORBIS_OK) {
+        PushScalar(TLGGPU_REC_VO_UNREGISTER_BUFFERS, handle, attributeIndex);
+    }
+    return result;
+}
+
+s32 PS4_SYSV_ABI sceVideoOutGetBufferLabelAddress(s32 handle, uintptr_t* label_addr) {
+    if (label_addr == nullptr) {
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_ADDRESS;
+    }
+    auto* port = driver->GetPort(handle);
+    if (!port) {
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_HANDLE;
+    }
+    // tlg: in the split, only the host's GPU reads and writes the labels.
+    *label_addr = TlgSplit::Remote() ? TlgSplit::Shared()->label_address
+                                     : reinterpret_cast<uintptr_t>(port->buffer_labels.data());
+    return 16;
+}
+
+s32 sceVideoOutSubmitEopFlip(s32 handle, u32 buf_id, u32 mode, s64 flip_arg, void** unk) {
+    auto* port = driver->GetPort(handle);
+    if (!port) {
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_HANDLE;
+    }
+
+    Platform::IrqC::Instance()->RegisterOnce(
+        Platform::InterruptId::GfxFlip, [=](Platform::InterruptId irq) {
+            ASSERT_MSG(irq == Platform::InterruptId::GfxFlip, "An unexpected IRQ occured");
+            ASSERT_MSG(port->buffer_labels[buf_id] == 1, "Out of order flip IRQ");
+            const auto result = driver->SubmitFlip(port, buf_id, flip_arg, true);
+            ASSERT_MSG(result, "EOP flip submission failed");
+        });
+
+    return ORBIS_OK;
+}
+
+s32 PS4_SYSV_ABI sceVideoOutGetDeviceCapabilityInfo(
+    s32 handle, SceVideoOutDeviceCapabilityInfo* pDeviceCapabilityInfo) {
+    pDeviceCapabilityInfo->capability = 0;
+    if (TlgSplit::Remote() ? TlgSplit::Shared()->hdr_supported != 0 : presenter->IsHDRSupported()) {
+        auto& game_info = Common::ElfInfo::Instance();
+        if (game_info.GetPSFAttributes().support_hdr) {
+            pDeviceCapabilityInfo->capability |= ORBIS_VIDEO_OUT_DEVICE_CAPABILITY_BT2020_PQ;
+        }
+    }
+    return ORBIS_OK;
+}
+
+s32 PS4_SYSV_ABI sceVideoOutWaitVblank(s32 handle) {
+    auto* port = driver->GetPort(handle);
+    if (!port) {
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_HANDLE;
+    }
+
+    TlgFreeze::WaitScope wait{"vblank", nullptr, nullptr,
+                              reinterpret_cast<std::uintptr_t>(__builtin_frame_address(0))};
+    std::unique_lock lock{port->vo_mutex};
+    const auto prev_counter = port->vblank_status.count;
+    port->vblank_cv.wait(lock, [&]() { return prev_counter != port->vblank_status.count; });
+    return ORBIS_OK;
+}
+
+s32 PS4_SYSV_ABI sceVideoOutColorSettingsSetGamma(SceVideoOutColorSettings* settings, float gamma) {
+    if (gamma < 0.1f || gamma > 2.0f) {
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_VALUE;
+    }
+    settings->gamma = gamma;
+    return ORBIS_OK;
+}
+
+s32 PS4_SYSV_ABI sceVideoOutAdjustColor(s32 handle, const SceVideoOutColorSettings* settings) {
+    if (settings == nullptr) {
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_ADDRESS;
+    }
+
+    auto* port = driver->GetPort(handle);
+    if (!port) {
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_HANDLE;
+    }
+
+    if (TlgSplit::Remote()) {
+        PushScalar(TLGGPU_REC_VO_ADJUST_COLOR, handle, 0, settings->gamma);
+        return ORBIS_OK;
+    }
+    presenter->GetPPSettingsRef().gamma = settings->gamma;
+    return ORBIS_OK;
+}
+
+struct Mode {
+    u32 size;
+    u8 encoding;
+    u8 range;
+    u8 colorimetry;
+    u8 depth;
+    u64 refresh_rate;
+    u64 resolution;
+    u8 reserved[8];
+};
+
+void PS4_SYSV_ABI sceVideoOutModeSetAny_(Mode* mode, u32 size) {
+    std::memset(mode, 0xff, size);
+    mode->size = size;
+}
+
+s32 PS4_SYSV_ABI sceVideoOutConfigureOutputMode_(s32 handle, u32 reserved, const Mode* mode,
+                                                 const void* options, u32 size_mode,
+                                                 u32 size_options) {
+    auto* port = driver->GetPort(handle);
+    if (!port) {
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_HANDLE;
+    }
+
+    if (reserved != 0) {
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_VALUE;
+    }
+
+    switch (mode->colorimetry) {
+    case OrbisVideoOutColorimetry::Any:
+        port->is_hdr = false;
+        break;
+    case OrbisVideoOutColorimetry::Bt2020PQ:
+        if (Common::ElfInfo::Instance().GetPSFAttributes().support_hdr) {
+            port->is_hdr = true;
+        }
+        break;
+    default:
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_VALUE;
+    }
+
+    if (TlgSplit::Remote()) {
+        PushScalar(TLGGPU_REC_VO_CONFIGURE_MODE, handle, mode->colorimetry);
+    }
+    return ORBIS_OK;
+}
+
+s32 PS4_SYSV_ABI sceVideoOutSubmitChangeBufferAttribute(s32 handle, s32 attributeIndex,
+                                                        const BufferAttribute* attribute) {
+    auto* port = driver->GetPort(handle);
+    if (!port || !port->is_open) {
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_HANDLE;
+    }
+
+    const s32 result = driver->ChangeBufferAttribute(port, attributeIndex, attribute);
+    if (TlgSplit::Remote() && result == ORBIS_OK) {
+        TlgGpuVoAttribute record{};
+        record.r = {TLGGPU_REC_VO_CHANGE_ATTRIBUTE, sizeof(TlgGpuVoAttribute)};
+        record.handle = handle;
+        record.index = attributeIndex;
+        std::memcpy(record.attribute, attribute, sizeof(BufferAttribute));
+        TlgSplit::Push(&record);
+    }
+    return result;
+}
+
+s32 PS4_SYSV_ABI sceVideoOutSetWindowModeMargins(s32 handle, s32 top, s32 bottom) {
+    LOG_ERROR(Lib_VideoOut, "(STUBBED) called top = {}, bottom = {}", top, bottom);
+    return ORBIS_OK;
+}
+
+// tlg (from bloodborne_mac_port): the host's side of the process split: records from the game.
+bool TlgSplitHost(const TlgGpuRecord* r) {
+    TlgGpuShared* shared = TlgSplit::Shared();
+    switch (r->type) {
+    case TLGGPU_REC_VO_OPEN: {
+        const auto* o = reinterpret_cast<const TlgGpuVoOpen*>(r);
+        tlggpu_reply_send(shared, o->slot, sceVideoOutOpen(o->user_id, o->bus_type, o->index, nullptr));
+        return true;
+    }
+    case TLGGPU_REC_VO_CLOSE:
+        sceVideoOutClose(static_cast<s32>(reinterpret_cast<const TlgGpuScalar*>(r)->a));
+        return true;
+    case TLGGPU_REC_VO_REGISTER_BUFFERS: {
+        const auto* g = reinterpret_cast<const TlgGpuVoRegister*>(r);
+        BufferAttribute attribute;
+        std::memcpy(&attribute, g->attribute, sizeof attribute);
+        void* addresses[TLGGPU_VO_BUFFERS_MAX];
+        for (s32 i = 0; i < g->count && i < TLGGPU_VO_BUFFERS_MAX; ++i) {
+            addresses[i] = reinterpret_cast<void*>(g->addresses[i]);
+        }
+        tlggpu_reply_send(shared, g->slot,
+                          sceVideoOutRegisterBuffers(g->handle, g->start, addresses, g->count,
+                                                     &attribute));
+        return true;
+    }
+    case TLGGPU_REC_VO_UNREGISTER_BUFFERS: {
+        const auto* v = reinterpret_cast<const TlgGpuScalar*>(r);
+        sceVideoOutUnregisterBuffers(static_cast<s32>(v->a), static_cast<s32>(v->b));
+        return true;
+    }
+    case TLGGPU_REC_VO_CHANGE_ATTRIBUTE: {
+        const auto* c = reinterpret_cast<const TlgGpuVoAttribute*>(r);
+        BufferAttribute attribute;
+        std::memcpy(&attribute, c->attribute, sizeof attribute);
+        sceVideoOutSubmitChangeBufferAttribute(c->handle, c->index, &attribute);
+        return true;
+    }
+    case TLGGPU_REC_VO_SET_FLIP_RATE: {
+        const auto* v = reinterpret_cast<const TlgGpuScalar*>(r);
+        sceVideoOutSetFlipRate(static_cast<s32>(v->a), static_cast<s32>(v->b));
+        return true;
+    }
+    case TLGGPU_REC_VO_SUBMIT_FLIP: {
+        const auto* f = reinterpret_cast<const TlgGpuVoFlip*>(r);
+        if (const s32 result = sceVideoOutSubmitFlip(f->handle, f->index, f->mode, f->flip_arg);
+            result != ORBIS_OK) {
+            LOG_ERROR(Lib_VideoOut, "Split: flip of buffer {} failed on the host: {:#x}", f->index,
+                      static_cast<u32>(result));
+        }
+        return true;
+    }
+    case TLGGPU_REC_VO_ADJUST_COLOR: {
+        const auto* v = reinterpret_cast<const TlgGpuScalar*>(r);
+        SceVideoOutColorSettings settings{};
+        settings.gamma = static_cast<float>(v->f);
+        sceVideoOutAdjustColor(static_cast<s32>(v->a), &settings);
+        return true;
+    }
+    case TLGGPU_REC_VO_CONFIGURE_MODE: {
+        const auto* v = reinterpret_cast<const TlgGpuScalar*>(r);
+        Mode mode{};
+        mode.size = sizeof mode;
+        mode.colorimetry = static_cast<u8>(v->b);
+        sceVideoOutConfigureOutputMode_(static_cast<s32>(v->a), 0, &mode, nullptr, sizeof mode, 0);
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
+/// The address of the host's flip labels, published to the game.
+u64 TlgSplitLabelAddress() {
+    uintptr_t address = 0;
+    sceVideoOutGetBufferLabelAddress(1, &address);
+    return address;
+}
+
+void RegisterLib(Core::Loader::SymbolsResolver* sym) {
+    driver = std::make_unique<VideoOutDriver>(EmulatorSettings.GetInternalScreenWidth(),
+                                              EmulatorSettings.GetInternalScreenHeight());
+
+    LIB_FUNCTION("SbU3dwp80lQ", "libSceVideoOut", 1, "libSceVideoOut", sceVideoOutGetFlipStatus);
+    LIB_FUNCTION("U46NwOiJpys", "libSceVideoOut", 1, "libSceVideoOut", sceVideoOutSubmitFlip);
+    LIB_FUNCTION("w3BY+tAEiQY", "libSceVideoOut", 1, "libSceVideoOut", sceVideoOutRegisterBuffers);
+    LIB_FUNCTION("HXzjK9yI30k", "libSceVideoOut", 1, "libSceVideoOut", sceVideoOutAddFlipEvent);
+    LIB_FUNCTION("Xru92wHJRmg", "libSceVideoOut", 1, "libSceVideoOut", sceVideoOutAddVblankEvent);
+    LIB_FUNCTION("CBiu4mCE1DA", "libSceVideoOut", 1, "libSceVideoOut", sceVideoOutSetFlipRate);
+    LIB_FUNCTION("i6-sR91Wt-4", "libSceVideoOut", 1, "libSceVideoOut",
+                 sceVideoOutSetBufferAttribute);
+    LIB_FUNCTION("6kPnj51T62Y", "libSceVideoOut", 1, "libSceVideoOut",
+                 sceVideoOutGetResolutionStatus);
+    LIB_FUNCTION("8XGijEoThE0", "libSceVideoOut", 1, "libSceVideoOut",
+                 sceVideoOutGetResolutionStatus); // sceVideoOutSysGetResolutionStatus
+    LIB_FUNCTION("Ek+VR4lcJQI", "libSceVideoOut", 1, "libSceVideoOut",
+                 sceVideoOutAddVblankEvent); // sceVideoOutSysAddVblankEvent
+    LIB_FUNCTION("Up36PTk687E", "libSceVideoOut", 1, "libSceVideoOut", sceVideoOutOpen);
+    LIB_FUNCTION("zgXifHT9ErY", "libSceVideoOut", 1, "libSceVideoOut", sceVideoOutIsFlipPending);
+    LIB_FUNCTION("N5KDtkIjjJ4", "libSceVideoOut", 1, "libSceVideoOut",
+                 sceVideoOutUnregisterBuffers);
+    LIB_FUNCTION("OcQybQejHEY", "libSceVideoOut", 1, "libSceVideoOut",
+                 sceVideoOutGetBufferLabelAddress);
+    LIB_FUNCTION("uquVH4-Du78", "libSceVideoOut", 1, "libSceVideoOut", sceVideoOutClose);
+    LIB_FUNCTION("1FZBKy8HeNU", "libSceVideoOut", 1, "libSceVideoOut", sceVideoOutGetVblankStatus);
+    LIB_FUNCTION("d1AjT2uZJn0", "libSceVideoOut", 1, "libSceVideoOut", sceVideoOutGetVblankStatus);
+    LIB_FUNCTION("kGVLc3htQE8", "libSceVideoOut", 1, "libSceVideoOut",
+                 sceVideoOutGetDeviceCapabilityInfo);
+    LIB_FUNCTION("j6RaAUlaLv0", "libSceVideoOut", 1, "libSceVideoOut", sceVideoOutWaitVblank);
+    LIB_FUNCTION("U2JJtSqNKZI", "libSceVideoOut", 1, "libSceVideoOut", sceVideoOutGetEventId);
+    LIB_FUNCTION("rWUTcKdkUzQ", "libSceVideoOut", 1, "libSceVideoOut", sceVideoOutGetEventData);
+    LIB_FUNCTION("Mt4QHHkxkOc", "libSceVideoOut", 1, "libSceVideoOut", sceVideoOutGetEventCount);
+    LIB_FUNCTION("DYhhWbJSeRg", "libSceVideoOut", 1, "libSceVideoOut",
+                 sceVideoOutColorSettingsSetGamma);
+    LIB_FUNCTION("pv9CI5VC+R0", "libSceVideoOut", 1, "libSceVideoOut", sceVideoOutAdjustColor);
+    LIB_FUNCTION("-Ozn0F1AFRg", "libSceVideoOut", 1, "libSceVideoOut", sceVideoOutDeleteFlipEvent);
+    LIB_FUNCTION("oNOQn3knW6s", "libSceVideoOut", 1, "libSceVideoOut",
+                 sceVideoOutDeleteVblankEvent);
+    LIB_FUNCTION("pjkDsgxli6c", "libSceVideoOut", 1, "libSceVideoOut", sceVideoOutModeSetAny_);
+    LIB_FUNCTION("N1bEoJ4SRw4", "libSceVideoOut", 1, "libSceVideoOut",
+                 sceVideoOutConfigureOutputMode_);
+    LIB_FUNCTION("MTxxrOCeSig", "libSceVideoOut", 1, "libSceVideoOut",
+                 sceVideoOutSetWindowModeMargins);
+    LIB_FUNCTION("IOdgHlCGU-k", "libSceVideoOut", 1, "libSceVideoOut",
+                 sceVideoOutSubmitChangeBufferAttribute);
+}
+
+} // namespace Libraries::VideoOut

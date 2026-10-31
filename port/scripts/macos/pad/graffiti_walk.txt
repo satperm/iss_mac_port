@@ -1,0 +1,36 @@
+# Scripted pad for scripts/macos/diag_run.sh (PAD_SCRIPT): "<seconds since start> <tokens>", the
+# tokens of TLG_PAD_FILE (src/runtime_pad.c); a line with only a time releases everything.
+# The save resumes at the graffiti (gameplay about 30 s after start): controller sideways,
+# shake the can, spray (R2) while sweeping the cursor with the left stick, then walk around.
+30
+32 tilt_right
+33 tilt_right shake
+35 tilt_right
+36 tilt_right r2 lx=60 ly=60
+39 tilt_right r2 lx=200 ly=60
+42 tilt_right r2 lx=200 ly=200
+45 tilt_right r2 lx=60 ly=200
+48 tilt_right r2 lx=128 ly=128
+50 tilt_right shake
+52 tilt_right r2 lx=90 ly=110
+55 tilt_right r2 lx=170 ly=150
+58
+60 cross
+61
+62 ly=0
+66 ly=0 rx=230
+68 ly=0
+70 ly=0 cross
+71 ly=0
+73 square
+74
+75 square
+76
+77 lx=0
+80 ly=255
+83 r1
+84
+85 l1 r1
+87
+90 circle
+91

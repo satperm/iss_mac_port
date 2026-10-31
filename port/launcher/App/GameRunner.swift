@@ -1,0 +1,72 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// ISS launcher (adapted from bloodborne_mac_port's launcher/App/GameRunner.swift).
+import AppKit
+import Foundation
+
+/// Process work for the launcher: the game, the game check, Rosetta.
+enum GameRunner {
+    /// Runs a short command; its status and output (stdout and stderr together).
+    @discardableResult
+    static func run(_ command: [String]) -> (status: Int32, output: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: command[0])
+        process.arguments = Array(command.dropFirst())
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        do { try process.run() } catch { return (-1, error.localizedDescription) }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return (process.terminationStatus, String(decoding: data, as: UTF8.self))
+    }
+
+    /// The game's processes (one copy at a time).
+    static var isGameRunning: Bool {
+        ["tlg-probe", "tlggpu-host", "tlggpu-host-macos27"].contains { run(["/usr/bin/pgrep", "-x", $0]).status == 0 }
+    }
+
+    static var hasRosetta: Bool { run(["/usr/bin/arch", "-x86_64", "/usr/bin/true"]).status == 0 }
+
+    /// Asks for an administrator password (macOS's dialog) and installs Rosetta 2.
+    static func installRosetta() -> Bool {
+        run(["/usr/bin/osascript", "-e",
+             "do shell script \"/usr/sbin/softwareupdate --install-rosetta --agree-to-license\" with administrator privileges"])
+        return hasRosetta
+    }
+
+    /// nil when the folder holds a usable game, else why not.
+    static func checkGame(_ folder: URL) -> String? {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: folder.appendingPathComponent("eboot.bin").path) else {
+            return "There is no eboot.bin in this folder. Choose the folder that contains eboot.bin and sce_sys."
+        }
+        guard fm.fileExists(atPath: folder.appendingPathComponent("sce_sys/param.sfo").path) else {
+            return "There is no sce_sys/param.sfo in this folder."
+        }
+        return nil
+    }
+
+    /// Starts the game; `done` gets its exit status on the main queue, after the session log
+    /// (`log`: the game's output, timestamped line by line) is complete.
+    static func start(_ plan: LaunchPlan, log: SessionLogWriter, done: @escaping (Int32) -> Void) throws -> Process {
+        let pipe = Pipe()
+        let process = Process()
+        process.executableURL = plan.executable
+        process.arguments = plan.arguments
+        process.environment = plan.environment
+        process.currentDirectoryURL = plan.directory
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = pipe
+        process.standardError = pipe
+        process.terminationHandler = { finished in
+            let status = finished.terminationStatus
+            DispatchQueue.global(qos: .userInitiated).async {
+                log.finish(status: status) // waits briefly for the rest of the output
+                DispatchQueue.main.async { done(status) }
+            }
+        }
+        log.read(pipe)
+        try process.run()
+        return process
+    }
+}

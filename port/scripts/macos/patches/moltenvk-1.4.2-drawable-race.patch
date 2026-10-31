@@ -1,0 +1,109 @@
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKImage.h b/MoltenVK/MoltenVK/GPUObjects/MVKImage.h
+index 45ddd3a..d3df788 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKImage.h
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKImage.h
+@@ -507,6 +507,7 @@ protected:
+ 	MVKSwapchainSignaler getPresentationSignaler();
+ 
+ 	id<CAMetalDrawable> _mtlDrawable = nil;
++	std::mutex _mtlDrawableLock;	// iss_mac_port: guards _mtlDrawable (MoltenVK #2791)
+ 	id<MTLTexture> _mtlTextureHeadless = nil;
+ 	MVKSwapchainImageAvailability _availability;
+ 	MVKSmallVector<MVKSwapchainSignaler, 1> _availabilitySignalers;
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKImage.mm b/MoltenVK/MoltenVK/GPUObjects/MVKImage.mm
+index ef8ca60..26b7dc9 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKImage.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKImage.mm
+@@ -1609,24 +1609,35 @@ id<CAMetalDrawable> MVKPresentableSwapchainImage::getCAMetalDrawable() {
+ 
+ 	if (_mtlTextureHeadless) { return nil; }	// If headless, there is no drawable.
+ 
+-	if ( !_mtlDrawable ) {
+-		@autoreleasepool {
+-			bool hasInvalidFormat = false;
+-			uint32_t attemptCnt = _swapchain->getImageCount();	// Attempt a resonable number of times
+-			for (uint32_t attemptIdx = 0; !_mtlDrawable && attemptIdx < attemptCnt; attemptIdx++) {
+-				uint64_t startTime = getPerformanceTimestamp();
+-				_mtlDrawable = [_swapchain->getCAMetalLayer().nextDrawable retain];	// retained
+-				addPerformanceInterval(getPerformanceStats().queue.retrieveCAMetalDrawable, startTime);
+-				hasInvalidFormat = _mtlDrawable && !_mtlDrawable.texture.pixelFormat;
+-				if (hasInvalidFormat) { releaseMetalDrawable(); }
+-			}
+-			if (hasInvalidFormat) {
+-				setConfigurationResult(reportError(VK_ERROR_OUT_OF_DATE_KHR, "CAMetalDrawable with valid format could not be acquired after %d attempts.", attemptCnt));
+-			} else if ( !_mtlDrawable ) {
+-				setConfigurationResult(reportError(VK_ERROR_OUT_OF_POOL_MEMORY, "CAMetalDrawable could not be acquired after %d attempts.", attemptCnt));
+-			}
++	// iss_mac_port (MoltenVK #2791): _mtlDrawable is read and published under _mtlDrawableLock,
++	// which is never held across the blocking nextDrawable call.
++	{
++		lock_guard<mutex> lock(_mtlDrawableLock);
++		if (_mtlDrawable) { return _mtlDrawable; }
++	}
++	id<CAMetalDrawable> fetched = nil;
++	@autoreleasepool {
++		bool hasInvalidFormat = false;
++		uint32_t attemptCnt = _swapchain->getImageCount();	// Attempt a resonable number of times
++		for (uint32_t attemptIdx = 0; !fetched && attemptIdx < attemptCnt; attemptIdx++) {
++			uint64_t startTime = getPerformanceTimestamp();
++			fetched = [_swapchain->getCAMetalLayer().nextDrawable retain];	// retained
++			addPerformanceInterval(getPerformanceStats().queue.retrieveCAMetalDrawable, startTime);
++			hasInvalidFormat = fetched && !fetched.texture.pixelFormat;
++			if (hasInvalidFormat) { [fetched release]; fetched = nil; }
++		}
++		if (hasInvalidFormat) {
++			setConfigurationResult(reportError(VK_ERROR_OUT_OF_DATE_KHR, "CAMetalDrawable with valid format could not be acquired after %d attempts.", attemptCnt));
++		} else if ( !fetched ) {
++			setConfigurationResult(reportError(VK_ERROR_OUT_OF_POOL_MEMORY, "CAMetalDrawable could not be acquired after %d attempts.", attemptCnt));
+ 		}
+ 	}
++	lock_guard<mutex> lock(_mtlDrawableLock);
++	if (_mtlDrawable) {
++		[fetched release];	// another thread published one meanwhile
++	} else {
++		_mtlDrawable = fetched;
++	}
+ 	return _mtlDrawable;
+ }
+ 
+@@ -1645,7 +1656,13 @@ VkResult MVKPresentableSwapchainImage::presentCAMetalDrawable(id<MTLCommandBuffe
+ 	// MTLCommandBuffer scheduled-handler than it is to call MTLCommandBuffer presentDrawable:.
+ 	// But get current drawable now, intead of in handler, because a new drawable might be acquired by then.
+ 	// Attach present handler before presenting to avoid race condition.
+-	id<CAMetalDrawable> mtlDrwbl = getCAMetalDrawable();
++	// iss_mac_port (MoltenVK #2791): the keep-alive retain is taken together with the read.
++	getCAMetalDrawable();
++	id<CAMetalDrawable> mtlDrwbl = nil;
++	{
++		lock_guard<mutex> lock(_mtlDrawableLock);
++		mtlDrwbl = [_mtlDrawable retain];
++	}
+ 	MVKSwapchainSignaler signaler = getPresentationSignaler();
+ 	[mtlCmdBuff addScheduledHandler: ^(id<MTLCommandBuffer> mcb) {
+ 
+@@ -1670,7 +1687,6 @@ VkResult MVKPresentableSwapchainImage::presentCAMetalDrawable(id<MTLCommandBuffe
+ 	// from this callback, because the last one or two presentation completion
+ 	// callbacks can occasionally stall.
+ 	retain();
+-	[mtlDrwbl retain];
+ 	auto* fence = presentInfo.fence;
+ 	if (fence) { fence->retain(); }
+ 	[mtlCmdBuff addCompletedHandler: ^(id<MTLCommandBuffer> mcb) {
+@@ -1760,8 +1776,15 @@ void MVKPresentableSwapchainImage::endPresentation(const MVKImagePresentInfo& pr
+ 
+ // Releases the CAMetalDrawable underlying this image.
+ void MVKPresentableSwapchainImage::releaseMetalDrawable() {
+-    [_mtlDrawable release];
+-	_mtlDrawable = nil;
++	// iss_mac_port (MoltenVK #2791): swapped out under the lock, released outside it, so two
++	// threads releasing at once cannot release the same drawable twice.
++	id<CAMetalDrawable> drawable = nil;
++	{
++		lock_guard<mutex> lock(_mtlDrawableLock);
++		drawable = _mtlDrawable;
++		_mtlDrawable = nil;
++	}
++	[drawable release];
+ }
+ 
+ // Signal, untrack, and release any signalers that are tracking.

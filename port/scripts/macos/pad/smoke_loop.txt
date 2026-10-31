@@ -1,0 +1,385 @@
+# Smoke powers (save after the car crash; the smoke-shot tutorial starts ~4-5 min in): from 90 s, every 8 s: run + dash (circle), aim and shoot (l1 r2), jump.
+90 ly=0
+91 ly=0 circle
+92 ly=0 circle
+93 ly=0
+94 l1
+95 l1 r2
+96 l1 r2
+97 cross
+98 ly=0
+99 ly=0 circle
+100 ly=0 circle
+101 ly=0
+102 l1
+103 l1 r2
+104 l1 r2
+105 cross
+106 ly=0
+107 ly=0 circle
+108 ly=0 circle
+109 ly=0
+110 l1
+111 l1 r2
+112 l1 r2
+113 cross
+114 ly=0
+115 ly=0 circle
+116 ly=0 circle
+117 ly=0
+118 l1
+119 l1 r2
+120 l1 r2
+121 cross
+122 ly=0
+123 ly=0 circle
+124 ly=0 circle
+125 ly=0
+126 l1
+127 l1 r2
+128 l1 r2
+129 cross
+130 ly=0
+131 ly=0 circle
+132 ly=0 circle
+133 ly=0
+134 l1
+135 l1 r2
+136 l1 r2
+137 cross
+138 ly=0
+139 ly=0 circle
+140 ly=0 circle
+141 ly=0
+142 l1
+143 l1 r2
+144 l1 r2
+145 cross
+146 ly=0
+147 ly=0 circle
+148 ly=0 circle
+149 ly=0
+150 l1
+151 l1 r2
+152 l1 r2
+153 cross
+154 ly=0
+155 ly=0 circle
+156 ly=0 circle
+157 ly=0
+158 l1
+159 l1 r2
+160 l1 r2
+161 cross
+162 ly=0
+163 ly=0 circle
+164 ly=0 circle
+165 ly=0
+166 l1
+167 l1 r2
+168 l1 r2
+169 cross
+170 ly=0
+171 ly=0 circle
+172 ly=0 circle
+173 ly=0
+174 l1
+175 l1 r2
+176 l1 r2
+177 cross
+178 ly=0
+179 ly=0 circle
+180 ly=0 circle
+181 ly=0
+182 l1
+183 l1 r2
+184 l1 r2
+185 cross
+186 ly=0
+187 ly=0 circle
+188 ly=0 circle
+189 ly=0
+190 l1
+191 l1 r2
+192 l1 r2
+193 cross
+194 ly=0
+195 ly=0 circle
+196 ly=0 circle
+197 ly=0
+198 l1
+199 l1 r2
+200 l1 r2
+201 cross
+202 ly=0
+203 ly=0 circle
+204 ly=0 circle
+205 ly=0
+206 l1
+207 l1 r2
+208 l1 r2
+209 cross
+210 ly=0
+211 ly=0 circle
+212 ly=0 circle
+213 ly=0
+214 l1
+215 l1 r2
+216 l1 r2
+217 cross
+218 ly=0
+219 ly=0 circle
+220 ly=0 circle
+221 ly=0
+222 l1
+223 l1 r2
+224 l1 r2
+225 cross
+226 ly=0
+227 ly=0 circle
+228 ly=0 circle
+229 ly=0
+230 l1
+231 l1 r2
+232 l1 r2
+233 cross
+234 ly=0
+235 ly=0 circle
+236 ly=0 circle
+237 ly=0
+238 l1
+239 l1 r2
+240 l1 r2
+241 cross
+242 ly=0
+243 ly=0 circle
+244 ly=0 circle
+245 ly=0
+246 l1
+247 l1 r2
+248 l1 r2
+249 cross
+250 ly=0
+251 ly=0 circle
+252 ly=0 circle
+253 ly=0
+254 l1
+255 l1 r2
+256 l1 r2
+257 cross
+258 ly=0
+259 ly=0 circle
+260 ly=0 circle
+261 ly=0
+262 l1
+263 l1 r2
+264 l1 r2
+265 cross
+266 ly=0
+267 ly=0 circle
+268 ly=0 circle
+269 ly=0
+270 l1
+271 l1 r2
+272 l1 r2
+273 cross
+274 ly=0
+275 ly=0 circle
+276 ly=0 circle
+277 ly=0
+278 l1
+279 l1 r2
+280 l1 r2
+281 cross
+282 ly=0
+283 ly=0 circle
+284 ly=0 circle
+285 ly=0
+286 l1
+287 l1 r2
+288 l1 r2
+289 cross
+290 ly=0
+291 ly=0 circle
+292 ly=0 circle
+293 ly=0
+294 l1
+295 l1 r2
+296 l1 r2
+297 cross
+298 ly=0
+299 ly=0 circle
+300 ly=0 circle
+301 ly=0
+302 l1
+303 l1 r2
+304 l1 r2
+305 cross
+306 ly=0
+307 ly=0 circle
+308 ly=0 circle
+309 ly=0
+310 l1
+311 l1 r2
+312 l1 r2
+313 cross
+314 ly=0
+315 ly=0 circle
+316 ly=0 circle
+317 ly=0
+318 l1
+319 l1 r2
+320 l1 r2
+321 cross
+322 ly=0
+323 ly=0 circle
+324 ly=0 circle
+325 ly=0
+326 l1
+327 l1 r2
+328 l1 r2
+329 cross
+330 ly=0
+331 ly=0 circle
+332 ly=0 circle
+333 ly=0
+334 l1
+335 l1 r2
+336 l1 r2
+337 cross
+338 ly=0
+339 ly=0 circle
+340 ly=0 circle
+341 ly=0
+342 l1
+343 l1 r2
+344 l1 r2
+345 cross
+346 ly=0
+347 ly=0 circle
+348 ly=0 circle
+349 ly=0
+350 l1
+351 l1 r2
+352 l1 r2
+353 cross
+354 ly=0
+355 ly=0 circle
+356 ly=0 circle
+357 ly=0
+358 l1
+359 l1 r2
+360 l1 r2
+361 cross
+362 ly=0
+363 ly=0 circle
+364 ly=0 circle
+365 ly=0
+366 l1
+367 l1 r2
+368 l1 r2
+369 cross
+370 ly=0
+371 ly=0 circle
+372 ly=0 circle
+373 ly=0
+374 l1
+375 l1 r2
+376 l1 r2
+377 cross
+378 ly=0
+379 ly=0 circle
+380 ly=0 circle
+381 ly=0
+382 l1
+383 l1 r2
+384 l1 r2
+385 cross
+386 ly=0
+387 ly=0 circle
+388 ly=0 circle
+389 ly=0
+390 l1
+391 l1 r2
+392 l1 r2
+393 cross
+394 ly=0
+395 ly=0 circle
+396 ly=0 circle
+397 ly=0
+398 l1
+399 l1 r2
+400 l1 r2
+401 cross
+402 ly=0
+403 ly=0 circle
+404 ly=0 circle
+405 ly=0
+406 l1
+407 l1 r2
+408 l1 r2
+409 cross
+410 ly=0
+411 ly=0 circle
+412 ly=0 circle
+413 ly=0
+414 l1
+415 l1 r2
+416 l1 r2
+417 cross
+418 ly=0
+419 ly=0 circle
+420 ly=0 circle
+421 ly=0
+422 l1
+423 l1 r2
+424 l1 r2
+425 cross
+426 ly=0
+427 ly=0 circle
+428 ly=0 circle
+429 ly=0
+430 l1
+431 l1 r2
+432 l1 r2
+433 cross
+434 ly=0
+435 ly=0 circle
+436 ly=0 circle
+437 ly=0
+438 l1
+439 l1 r2
+440 l1 r2
+441 cross
+442 ly=0
+443 ly=0 circle
+444 ly=0 circle
+445 ly=0
+446 l1
+447 l1 r2
+448 l1 r2
+449 cross
+450 ly=0
+451 ly=0 circle
+452 ly=0 circle
+453 ly=0
+454 l1
+455 l1 r2
+456 l1 r2
+457 cross
+458 ly=0
+459 ly=0 circle
+460 ly=0 circle
+461 ly=0
+462 l1
+463 l1 r2
+464 l1 r2
+465 cross
+466 ly=0
+467 ly=0 circle
+468 ly=0 circle
+469 ly=0
+470 l1
+471 l1 r2
+472 l1 r2
+473 cross

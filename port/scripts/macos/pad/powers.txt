@@ -1,0 +1,37 @@
+# Scripted pad (scripts/macos/diag_run.sh PAD_SCRIPT): free roam with powers, to bring out
+# particle and smoke effects. Gameplay starts about 30 s after launch.
+32 ly=0
+34 ly=0 circle
+35 ly=0
+36 ly=0 circle
+37 ly=0 rx=220
+39 l1
+40 l1 r1
+41 l1
+42 l1 r1
+43 l1
+44 l1 r1
+45
+46 square
+47
+48 square
+49 ly=0 cross
+50 ly=0
+51 ly=0 circle
+52 lx=255 circle
+53 lx=255
+54 l1 r1
+56 l1
+57 l1 r1
+58
+59 r2
+61
+62 ly=0 circle
+63 ly=0 rx=40
+65 l1 r1
+67
+68 square
+69
+70 ly=255 circle
+72 l1 r1
+74
