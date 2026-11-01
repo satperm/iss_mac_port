@@ -457,3 +457,11 @@ loop: TLG_MAC_CS_LOOP_CAP (default 1M back-edges) did not prevent it.
   deterministic trigger (e.g. log in the host when a draw samples an image whose guest range was
   written since its last upload without an invalidation), or compare the host's invalidation events
   with tlg-probe's write faults.
+- 2026-11-01 midday: smoke glyph artifact came back with the texture-set memo off (one clean run
+  was luck). Likely cause: TextureCache::RefreshImage judged a MaybeCpuDirty image (under a page,
+  untracked since MarkAsMaybeDirty) unchanged by hashing only its first 8x8 pixels; a texture
+  streamed into the same memory with equal corners stayed stale. Now the whole image is hashed.
+  Unverified (user had to stop); the memo-off default in the host stays for now. Native baseline
+  (memo off): fire 36.8, smoke 55.4 FPS. Also reported in native mode: rain streaks in mid-air
+  missing in the smoke tutorial (only ground splashes). Next: verify the glyph fix, rain streaks,
+  then native perf (MVK prefill 2 / sync submits A/B were interrupted).

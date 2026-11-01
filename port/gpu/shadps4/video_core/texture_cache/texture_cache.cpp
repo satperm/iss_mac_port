@@ -1482,15 +1482,12 @@ void TextureCache::RefreshImage(Image& image) {
         False(image.flags & ImageFlagBits::CpuDirty)) {
         // The image size should be less than page size to be considered MaybeCpuDirty
         // So this calculation should be very uncommon and reasonably fast
-        // For now we'll just check up to 64 first pixels
+        // tlg: the whole image is hashed (as MarkAsMaybeDirty does), not its first 8x8 pixels:
+        // a texture streamed into the same memory with equal corners (transparent sprite edges)
+        // was taken as unchanged, and the old one stayed (smoke drawn with text glyphs in the
+        // native GPU process, 2026-11-01). These images are under a page: a few KB to hash.
         const auto addr = std::bit_cast<u8*>(image.info.guest_address);
-        const u32 w = std::min(image.info.size.width, u32(8));
-        const u32 h = std::min(image.info.size.height, u32(8));
-
-        const u32 s_w = image.info.props.is_block ? Common::DivCeil(w, 4u) : w;
-        const u32 s_h = image.info.props.is_block ? Common::DivCeil(h, 4u) : h;
-        const u32 size = s_w * s_h * (image.info.num_bits / 8);
-        const u64 hash = XXH3_64bits(addr, size);
+        const u64 hash = XXH3_64bits(addr, image.info.guest_size);
         if (image.hash == hash) {
             image.flags &= ~ImageFlagBits::MaybeCpuDirty;
             return;
