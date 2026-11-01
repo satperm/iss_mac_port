@@ -1686,6 +1686,49 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
     DrawIndirectRecord(pipeline, is_indexed, indirect);
 }
 
+namespace {
+// tlg: TLG_INDIRECT_STATS=1: every 5 s, per vertex shader: indirect draws, and the records' vertex
+// and instance counts as guest memory shows them when the draw is recorded (GPU-written counts of
+// an earlier frame in unified memory). Compares particle systems between runs, whatever the camera.
+void IndirectStats(u64 vs, u32 prim, bool indexed, VAddr args, u32 max_count, bool mapped) {
+    static const bool on = std::getenv("TLG_INDIRECT_STATS") != nullptr;
+    if (!on) {
+        return;
+    }
+    struct Entry {
+        u64 draws = 0, verts = 0, insts = 0, zero = 0;
+        u32 prim = 0;
+        bool indexed = false;
+    };
+    static std::mutex mutex;
+    static std::map<u64, Entry> entries;
+    static auto next = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    std::scoped_lock lk{mutex};
+    auto& e = entries[vs];
+    ++e.draws;
+    e.prim = prim;
+    e.indexed = indexed;
+    if (mapped && max_count > 0) {
+        const auto* w = reinterpret_cast<const u32*>(args);
+        e.verts += w[0];
+        e.insts += w[1];
+        e.zero += (w[0] == 0 || w[1] == 0) ? 1 : 0;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= next) {
+        next = now + std::chrono::seconds(5);
+        std::printf("Indirect stats (5 s):\n");
+        for (const auto& [hash, x] : entries) {
+            std::printf("  vs %08llx prim %u %s: %llu draws, avg %llu verts x %llu inst, %llu empty\n",
+                        (unsigned long long)hash, x.prim, x.indexed ? "indexed" : "plain",
+                        (unsigned long long)x.draws, (unsigned long long)(x.verts / std::max<u64>(x.draws, 1)),
+                        (unsigned long long)(x.insts / std::max<u64>(x.draws, 1)), (unsigned long long)x.zero);
+        }
+        entries.clear();
+    }
+}
+} // namespace
+
 void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_indexed,
                                     const IndirectDraw& indirect) {
     CountTessDraw(pipeline, true);
@@ -1716,6 +1759,9 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
         std::ranges::find(skip_vs, pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash) != skip_vs.end()) {
         return;
     }
+    IndirectStats(pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash,
+                  u32(pipeline->GetGraphicsKey().prim_type), is_indexed, indirect.args, indirect.max_count,
+                  memory->IsValidGpuMapping(indirect.args, 0));
     // TLG_MAC_INDIRECT_LOG=<hex vs hash> (diagnostic): the first 40 indirect draws of that vertex
     // shader: count, stride, the records as the CPU sees them, and its user data.
     static const u64 indirect_log = [] {

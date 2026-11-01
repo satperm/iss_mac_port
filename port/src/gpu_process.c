@@ -292,7 +292,8 @@ static int spawn(const char *path, mach_port_t port) {
     posix_spawn_file_actions_init(&files);
     posix_spawnattr_setflags(&attr, POSIX_SPAWN_CLOEXEC_DEFAULT); /* no game files in the host */
     for (int fd = 0; fd < 3; ++fd) posix_spawn_file_actions_addinherit_np(&files, fd);
-    cpu_type_t arm64 = CPU_TYPE_ARM64;
+    /* TLG_GPU_HOST_X86=1: an x86-64 host under Rosetta (memory-ordering comparison). */
+    cpu_type_t arm64 = getenv("TLG_GPU_HOST_X86") ? CPU_TYPE_X86_64 : CPU_TYPE_ARM64;
     size_t set = 0;
     posix_spawnattr_setbinpref_np(&attr, 1, &arm64, &set);
     char *argv[] = {(char *)path, NULL};

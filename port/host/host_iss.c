@@ -31,8 +31,12 @@ void runtime_report(void) {}
 /* The guest's TSC as the game sees it under Rosetta: the counter scaled to 1 GHz
  * (gpu/shadps4/common/rdtsc.h). */
 uint64_t runtime_read_tsc(void) {
+#if defined(__x86_64__) /* the x86 test host (memory-ordering comparison): Rosetta's TSC is it */
+    return __builtin_ia32_rdtsc();
+#else
     uint64_t ticks, frequency;
     __asm__ volatile("mrs %0, cntvct_el0" : "=r"(ticks));
     __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(frequency));
     return frequency == 1000000000 ? ticks : (uint64_t)((unsigned __int128)ticks * 1000000000 / frequency);
+#endif
 }

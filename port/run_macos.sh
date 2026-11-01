@@ -122,6 +122,9 @@ export TLG_MAC_QUAD_INDEX=${TLG_MAC_QUAD_INDEX:-1}
 # Optional (launcher toggle) until its picture matches: rain streaks are missing and some smoke
 # showed stale textures there (2026-11-01). Default: one x86-64 process under Rosetta.
 export TLG_GPU_PROCESS=${TLG_GPU_PROCESS:-0}
+# Natively MoltenVK picks MTLEvent semaphores, under Rosetta the implicit single-queue ordering;
+# with ~50 submissions a frame the implicit one is faster: native burning building 37.8 -> 43.9 FPS.
+[[ $TLG_GPU_PROCESS == 1 ]] && export MVK_CONFIG_VK_SEMAPHORE_SUPPORT_STYLE=${MVK_CONFIG_VK_SEMAPHORE_SUPPORT_STYLE:-0}
 TLG_PARTICLES=${TLG_PARTICLES:-shared}
 case $TLG_PARTICLES in
     shared)

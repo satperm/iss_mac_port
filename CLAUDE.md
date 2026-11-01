@@ -483,3 +483,14 @@ loop: TLG_MAC_CS_LOOP_CAP (default 1M back-edges) did not prevent it.
   under Rosetta) is the remaining time, nothing after it is measurable. With TLG_BP08=1 no frame
   within 25 s: the blob stays off. Rain streaks: capture diff by shader was inconclusive (captures
   differ by camera); parked while native is optional. After a rebuild the first start is slower.
+- 2026-11-01 night, native mode: MVK_CONFIG_VK_SEMAPHORE_SUPPORT_STYLE=0 default when
+  TLG_GPU_PROCESS=1 (fire 37.8 -> 43.9, smoke same; prefill 2: no gain). The whole-image hash did NOT
+  end the smoke glyphs (user saw them again). Rain/glyphs are not arm64 ordering: an x86-64 host under
+  Rosetta (build by hand into out/x86host with -arch x86_64 against out/gpu, TLG_GPU_HOST=<path>
+  TLG_GPU_HOST_X86=1) shows the same picture, so the SPLIT itself is the cause. Not the cause:
+  command buffer arena copies (reading guest buffers directly: same), frames ahead, late read
+  (needed in both modes), shaders (SPIR-V same), semaphores. TLG_INDIRECT_STATS=1: per-VS indirect
+  draws and counts every 5 s: same five particle VS in all modes (3ab1ca58, 5e6e49c1, 6df3789c,
+  bbd2d927 plain quads 12-40k verts, e90701f9 single quads), counts differ. Next: skip each VS in
+  normal mode (TLG_MAC_SKIP_VS) to find the streak system; then diff its inputs; also what else the
+  split changes: DingDong/compute queue order, fault relays, stubs in host_iss.c.

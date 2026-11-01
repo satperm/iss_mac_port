@@ -83,7 +83,11 @@ static void fault(int sig, siginfo_t *info, void *context) {
         siglongjmp(*recover, 1);
     }
     const ucontext_t *uc = context;
+#if defined(__x86_64__)
+    const uintptr_t pc = (uintptr_t)uc->uc_mcontext->__ss.__rip;
+#else
     const uintptr_t pc = (uintptr_t)uc->uc_mcontext->__ss.__pc;
+#endif
     char line[512];
     Dl_info where;
     int n;
