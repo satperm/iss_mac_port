@@ -465,3 +465,14 @@ loop: TLG_MAC_CS_LOOP_CAP (default 1M back-edges) did not prevent it.
   (memo off): fire 36.8, smoke 55.4 FPS. Also reported in native mode: rain streaks in mid-air
   missing in the smoke tutorial (only ground splashes). Next: verify the glyph fix, rain streaks,
   then native perf (MVK prefill 2 / sync submits A/B were interrupted).
+- 2026-11-01 evening, particles by mode (smoke tutorial, crops of the same area):
+  normal + shared + late read: rain streaks in mid-air, few ground splashes.
+  native + shared + late read: no streaks, many white splash blobs ("too big droplets", user).
+  native, TLG_MAC_QUAD_INDEX=0: same as native (not the quad path). Normal + quad path: streaks.
+  native + late read off: no rain at all (as normal without it).
+  native + TLG_PARTICLES=precise: splashes, real smoke, blue shards, still no streaks, 34 FPS.
+  So each mode draws a different SUBSET of particle systems; streaks need something only the
+  single process has. Shaders are not the difference: SPIR-V of 578 common shaders identical except
+  7 vertex permutations (b4a8ad8e_3, b94242a8_8-13: numbering?). GPU timestamps: same ns clock.
+  Next: compare the streak system's data between modes (TLG_MAC_INDIRECT_LOG / capture of its
+  draw: VS, counts, buffers), start from which draw renders streaks in normal mode (TLG_SKIP_DRAW_PS).
