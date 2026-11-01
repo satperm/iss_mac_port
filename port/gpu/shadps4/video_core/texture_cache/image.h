@@ -207,6 +207,7 @@ public:
     u64 hash{};
     u64 stale_hash = 0; ///< tlg: TLG_STALE_CHECK: guest memory hash at the last upload
     std::vector<u64> stale_chunks; ///< tlg: the same per 64 KiB, to locate a change
+    std::vector<u8> stale_copy; ///< tlg: guest bytes at the upload (images under 16 MiB)
 
 private:
     static Common::IncrementalIdProvider<u64> global_image_uid;

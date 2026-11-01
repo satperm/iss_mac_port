@@ -12,6 +12,7 @@
 #include <cmath>
 #include <unordered_set>
 #include <xxhash.h>
+#include "tlg_split.h"
 #include "video_core/renderer_vulkan/ui_composition.h"
 #include "common/cpu_relax.h"
 #include "tlg_toggles.h"
@@ -3835,6 +3836,23 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
                                 image.stale_chunks[c] = h;
                             }
                         }
+                        if (!image.stale_copy.empty()) {
+                            // What changed: the first differing dwords, and how much in all.
+                            const auto* was = reinterpret_cast<const u32*>(image.stale_copy.data());
+                            const auto* is = std::bit_cast<const u32*>(image.info.guest_address);
+                            const u64 dwords = image.stale_copy.size() / 4;
+                            u64 diffs = 0;
+                            std::printf("  old->new:");
+                            for (u64 d = 0; d < dwords; ++d) {
+                                if (was[d] != is[d]) {
+                                    if (diffs++ < 8) {
+                                        std::printf(" +%llx:%08x->%08x", (unsigned long long)d * 4, was[d], is[d]);
+                                    }
+                                }
+                            }
+                            std::printf(" (%llu dwords differ)\n", (unsigned long long)diffs);
+                            std::memcpy(image.stale_copy.data(), is, dwords * 4);
+                        }
                         std::printf("  changed %u of %zu chunks, first +0x%llx last +0x%llx; tracked +0x%llx..+0x%llx; mips %u layers %u\n",
                                     changed, image.stale_chunks.size(), (unsigned long long)first,
                                     (unsigned long long)last,
@@ -4755,6 +4773,11 @@ void Rasterizer::FillBuffer(VAddr address, u32 num_bytes, u32 value, bool is_gds
     if (!is_gds) {
         texture_cache.ClearMeta(address);
         if (!buffer_cache.IsRegionGpuModified(address, num_bytes)) {
+            // tlg: in the split nothing protects the host's view of guest memory, so this write
+            // does not fault as it does in one process: same invalidation, by hand.
+            if (TlgSplit::Host()) {
+                InvalidateMemory(address, num_bytes);
+            }
             u32* buffer = std::bit_cast<u32*>(address);
             std::fill(buffer, buffer + (num_bytes / sizeof(u32)), value);
             return;
@@ -4797,6 +4820,16 @@ void Rasterizer::CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, b
         if (!src_gds && !buffer_cache.IsRegionGpuModified(src, num_bytes) &&
             !texture_cache.FindImageFromRange(src, num_bytes)) {
             // Both buffers were not transferred to GPU yet. Can safely copy in host memory.
+            // tlg: in the split nothing protects the host's view of guest memory, so this copy
+            // does not fault as it does in one process: same invalidation, by hand.
+            if (TlgSplit::Host()) {
+                static const bool log = std::getenv("TLG_HOST_WRITE_LOG") != nullptr;
+                if (log && num_bytes >= 4096) {
+                    std::printf("Host copy: %#llx <- %#llx, %u bytes\n", (unsigned long long)dst,
+                                (unsigned long long)src, num_bytes);
+                }
+                InvalidateMemory(dst, num_bytes);
+            }
             std::memcpy(std::bit_cast<void*>(dst), std::bit_cast<void*>(src), num_bytes);
             return;
         }

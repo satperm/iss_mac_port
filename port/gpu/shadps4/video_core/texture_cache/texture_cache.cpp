@@ -1565,6 +1565,10 @@ void TextureCache::RefreshImage(Image& image) {
     if (stale_check) {
         image.stale_hash = XXH3_64bits(std::bit_cast<const u8*>(image.info.guest_address),
                                        image.info.guest_size);
+        if (image.info.guest_size < (16u << 20)) {
+            const auto* guest = std::bit_cast<const u8*>(image.info.guest_address);
+            image.stale_copy.assign(guest, guest + image.info.guest_size);
+        }
         image.stale_chunks.clear();
         for (u64 at = 0; at < image.info.guest_size; at += 0x10000) {
             image.stale_chunks.push_back(

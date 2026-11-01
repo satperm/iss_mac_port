@@ -508,3 +508,12 @@ loop: TLG_MAC_CS_LOOP_CAP (default 1M back-edges) did not prevent it.
   Next: identify the writer: who writes those arrays (log write faults in that range on both
   sides; are pages really protected in tlg-probe at that moment: vm_region; GPU-side writers).
   User also reports new big black dots in native mode (not analysed).
+- **Native stale textures fixed (2026-11-01):** the writer is the renderer itself: `Rasterizer::CopyBuffer`'s
+  memcpy branch (DMA copies of texture data, e.g. 0x70717d4500 <- 0x70e31e2000, ~21k per smoke run).
+  In one process that copy faults on the protected page, which invalidates; the host's view of guest
+  memory is never protected, so nothing happened. CopyBuffer and FillBuffer now call `InvalidateMemory` by
+  hand when `TlgSplit::Host()` (`TLG_HOST_WRITE_LOG=1` logs copies >= 4 KiB). Burning building stale check:
+  native 9 -> 0. Smoke, native: ground luminance 11.5 = normal, 60-64 FPS (normal 52-57); fire native
+  ~40 FPS, 240 s without a hang. `TLG_STALE_CHECK` runs (~4 FPS) in the fire scene end in a Metal GPU hang
+  in both modes, also before this fix: an effect of the check. Liverpool's WriteData memcpys are still
+  not invalidated in the host. To check by eye: glyph smoke, rain streaks, big droplets, black dots.

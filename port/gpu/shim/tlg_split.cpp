@@ -30,6 +30,27 @@ std::atomic<Mode> g_mode{Mode::Single};
 TlgGpuShared* g_shared;
 std::mutex g_push_mutex;  // producers on this side of each ring
 std::mutex g_fault_mutex; // game: producers of the fault ring (fault handlers)
+
+// tlg: TLG_WATCH=<hex address>,<hex size> (diagnostic): the protection requests and write faults of
+// that range, with microsecond times (a timeline of how a write can go unnoticed).
+bool WatchHit(u64 address, u64 size) {
+    static const auto range = [] {
+        std::pair<u64, u64> r{0, 0};
+        if (const char* env = std::getenv("TLG_WATCH")) {
+            char* end = nullptr;
+            r.first = std::strtoull(env, &end, 16);
+            if (end && *end == ',') {
+                r.second = std::strtoull(end + 1, nullptr, 16);
+            }
+        }
+        return r;
+    }();
+    return range.second != 0 && address < range.first + range.second && address + size > range.first;
+}
+u64 WatchNowUs() {
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+               std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 std::atomic<u64> g_gpu_idle_seq;
 
 constexpr u64 Second = 1'000'000'000;
@@ -92,6 +113,11 @@ void InitRemote(TlgGpuShared* shared) {
             const auto* p = reinterpret_cast<const TlgGpuProtect*>(r);
             runtime_memory_gpu_protect(p->address, p->size, static_cast<int>(p->read),
                                        static_cast<int>(p->write));
+            if (WatchHit(p->address, p->size)) {
+                std::printf("Watch %llu: protect 0x%llx+0x%llx read %u write %u\n",
+                            (unsigned long long)WatchNowUs(), (unsigned long long)p->address,
+                            (unsigned long long)p->size, p->read, p->write);
+            }
             const u32 seq = p->seq;
             tlggpu_ring_pop(&s->protect, r);
             __atomic_store_n(&s->protect_done, seq, __ATOMIC_RELEASE);
@@ -129,6 +155,10 @@ s64 Request(void* record, u32* slot) {
 bool RelayFault(u64 address, bool write) {
     if (address < TLGGPU_GUEST_MIN || address >= TLGGPU_GUEST_MAX) {
         return false;
+    }
+    if (WatchHit(address, 8)) {
+        std::printf("Watch %llu: fault 0x%llx %s\n", (unsigned long long)WatchNowUs(),
+                    (unsigned long long)address, write ? "write" : "read");
     }
     const auto start = std::chrono::steady_clock::now();
     const int slot = tlggpu_reply_claim(g_shared);
