@@ -436,3 +436,14 @@ loop: TLG_MAC_CS_LOOP_CAP (default 1M back-edges) did not prevent it.
   used all of 2026-10-31 were ~25% slower on the bridge (33-40 -> 45-51 FPS, particles on); fire
   scene unchanged (fence-bound). TLG_LOD_SCALE=0.5: bridge 45-51 -> 48-56 (~+8%), fire unchanged
   (indoor); not default (distant detail). PREFILL=1/2, fast math, heaps, SUBMIT_DRAWS=256: noise.
+- 2026-11-01 native GPU process (TLG_GPU_PROCESS=1, rebuilt with the day's fixes; arm64 MoltenVK
+  replaced by the patched one too): smoke tutorial 60-64 FPS (single 45-50), burning building
+  36-44 (single ~36), bridge 45-52 clean. First run after a rebuild compiles everything again
+  (own shader cache: 10 s freeze, 630 compiles). ARTIFACT (user-reported, confirmed): in the
+  burning building the smoke shows hard-edged rectangles and faint large glyphs/digits ("0 0"),
+  i.e. smoke sprites sample a stale text/font texture; single process is clean at the same spot
+  (SHOT_SIZE=1920 SHOT_SECONDS=0.5 diag runs, crop x 38-68%, y 18-48%). Not the quad index path
+  (TLG_MAC_QUAD_INDEX=0: glyphs still there). TLG_GPU_PROCESS_VERIFY_MS samples 0 bytes (useless
+  as is). One start hung: "GPU split: request 19 unanswered for 30 s". Next: find the texture the
+  smoke draw samples in the host vs single (TLG_ADDR_TEX_LOG in the host) and why the host's
+  texture cache misses its invalidation.
