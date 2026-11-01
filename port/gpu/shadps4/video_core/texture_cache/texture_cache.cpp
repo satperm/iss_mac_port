@@ -1560,6 +1560,18 @@ void TextureCache::RefreshImage(Image& image) {
         e.a = image.info.guest_size; TlgPerf::Emit(e);
     }
     runtime.UploadImage(&image, buffer, image_copies);
+    // tlg: TLG_STALE_CHECK=1 (diagnostic): see Rasterizer::BindTextures.
+    static const bool stale_check = std::getenv("TLG_STALE_CHECK") != nullptr;
+    if (stale_check) {
+        image.stale_hash = XXH3_64bits(std::bit_cast<const u8*>(image.info.guest_address),
+                                       image.info.guest_size);
+        image.stale_chunks.clear();
+        for (u64 at = 0; at < image.info.guest_size; at += 0x10000) {
+            image.stale_chunks.push_back(
+                XXH3_64bits(std::bit_cast<const u8*>(image.info.guest_address + at),
+                            std::min<u64>(0x10000, image.info.guest_size - at)));
+        }
+    }
 }
 
 void TextureCache::UploadDecodedImage(Image& image) {

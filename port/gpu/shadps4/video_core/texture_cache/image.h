@@ -205,6 +205,8 @@ public:
     boost::container::static_vector<u64, 16> mip_hashes{};
     u64 lru_id{};
     u64 hash{};
+    u64 stale_hash = 0; ///< tlg: TLG_STALE_CHECK: guest memory hash at the last upload
+    std::vector<u64> stale_chunks; ///< tlg: the same per 64 KiB, to locate a change
 
 private:
     static Common::IncrementalIdProvider<u64> global_image_uid;

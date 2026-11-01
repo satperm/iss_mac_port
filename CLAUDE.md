@@ -494,3 +494,17 @@ loop: TLG_MAC_CS_LOOP_CAP (default 1M back-edges) did not prevent it.
   bbd2d927 plain quads 12-40k verts, e90701f9 single quads), counts differ. Next: skip each VS in
   normal mode (TLG_MAC_SKIP_VS) to find the streak system; then diff its inputs; also what else the
   split changes: DingDong/compute queue order, fault relays, stubs in host_iss.c.
+- 2026-11-01 late: ROOT CAUSE AREA of the native artifacts PROVEN with TLG_STALE_CHECK=1 (image's
+  guest memory hash at upload vs at bind; =2 also re-uploads, 3 FPS): normal mode 0 stale, native:
+  0x7071278500 (512x512, 16 layers), 0x70717d4500 (256x256, 64 layers), 0x7071d44500 (128x128, 256
+  layers), all BC fmt 137, sampled by the rain PS 24dad4be and stage f8eafe6c; and 0x70ee252000 (2048
+  layers, 174 MB, fmt 143) by lighting ce1675e0. Reported fully tracked and clean, yet 6-48 of their
+  64 KiB chunks changed, scattered, no write fault reached the texture cache. VS bbd2d927 draws the
+  streaks (TLG_MAC_SKIP_VS removes them); its args show half the verts in native. With repair the
+  ground lighting matched normal mode and the white blobs vanished (too slow to judge streaks).
+  Ruled out as the writer's path: guest mprotect (protects=0), protection function (same one),
+  tlggpu_cpu_write, command buffer copies, x86 vs arm64. Note: runtime_memory_set_gpu_hooks seems never
+  called in the host (TLG_TOGGLE_FILE watcher never starts): check MAP/UNMAP/INVALIDATE hooks there.
+  Next: identify the writer: who writes those arrays (log write faults in that range on both
+  sides; are pages really protected in tlg-probe at that moment: vm_region; GPU-side writers).
+  User also reports new big black dots in native mode (not analysed).

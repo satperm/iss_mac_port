@@ -1770,7 +1770,13 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     }();
     if (indirect_log != 0 && pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash == indirect_log) {
         static std::atomic<u32> logged{0};
-        if (logged.fetch_add(1, std::memory_order_relaxed) < 40) {
+        // TLG_MAC_INDIRECT_LOG_SKIP=<n>: the 40 logged draws start after n draws.
+        static const u32 log_skip = [] {
+            const char* env = std::getenv("TLG_MAC_INDIRECT_LOG_SKIP");
+            return env && *env ? u32(std::atoi(env)) : 0u;
+        }();
+        const u32 log_index = logged.fetch_add(1, std::memory_order_relaxed);
+        if (log_index >= log_skip && log_index < log_skip + 40) {
             std::printf("Indirect log: vs %llx max_count %u stride %u count_addr %#llx args %#llx:",
                         static_cast<unsigned long long>(indirect_log), indirect.max_count, indirect.stride,
                         static_cast<unsigned long long>(indirect.count),
@@ -1806,6 +1812,17 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
             std::printf(" ud:");
             for (u32 i = 0; i < 16; ++i) {
                 std::printf(" %x", ud[i]);
+            }
+            // The buffer at user data 12-13 as floats (particle records), at the start and deeper.
+            const VAddr data = (VAddr(ud[13] & 0xffff) << 32) | ud[12];
+            if (memory->IsValidGpuMapping(data, 0x1100)) {
+                for (const u32 at : {0u, 0x1000u}) {
+                    std::printf("\n  data+%x:", at);
+                    const auto* f = reinterpret_cast<const float*>(data + at);
+                    for (u32 i = 0; i < 24; ++i) {
+                        std::printf(" %.3g", f[i]);
+                    }
+                }
             }
             std::printf("\n");
             std::fflush(stdout);
@@ -3785,6 +3802,55 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
             auto& image = texture_cache.GetImage(image_id);
             if (AddrTex().addr) [[unlikely]] {
                 AddrTex().Note(stage.pgm_hash, binding_index, image_id, image, false);
+            }
+            // tlg: TLG_STALE_CHECK=1 (diagnostic): an image taken as clean whose guest memory no
+            // longer hashes as at its last upload is stale: the write was not noticed.
+            static const bool stale_check = std::getenv("TLG_STALE_CHECK") != nullptr;
+            if (stale_check && !is_storage && image.stale_hash != 0 &&
+                False(image.flags & VideoCore::ImageFlagBits::Dirty) &&
+                False(image.flags & VideoCore::ImageFlagBits::GpuModified) &&
+                !image.info.props.is_depth) {
+                const u64 now = XXH3_64bits(std::bit_cast<const u8*>(image.info.guest_address),
+                                            image.info.guest_size);
+                if (now != image.stale_hash) {
+                    static std::atomic<u32> found{0};
+                    const u32 n = found.fetch_add(1, std::memory_order_relaxed);
+                    if (n < 40 || (n & 1023) == 0) {
+                        std::printf("Stale texture #%u: stage %llx binding %u: 0x%llx+0x%x %ux%u fmt %d tracked %d flags %x\n",
+                                    n, (unsigned long long)stage.pgm_hash, binding_index,
+                                    (unsigned long long)image.info.guest_address, image.info.guest_size,
+                                    image.info.size.width, image.info.size.height,
+                                    int(image.info.pixel_format), image.IsTracked() ? 1 : 0,
+                                    u32(image.flags));
+                        u32 changed = 0;
+                        u64 first = ~0ull, last = 0;
+                        for (u64 c = 0; c < image.stale_chunks.size(); ++c) {
+                            const u64 at = c * 0x10000;
+                            const u64 h = XXH3_64bits(std::bit_cast<const u8*>(image.info.guest_address + at),
+                                                      std::min<u64>(0x10000, image.info.guest_size - at));
+                            if (h != image.stale_chunks[c]) {
+                                ++changed;
+                                first = std::min(first, at);
+                                last = at;
+                                image.stale_chunks[c] = h;
+                            }
+                        }
+                        std::printf("  changed %u of %zu chunks, first +0x%llx last +0x%llx; tracked +0x%llx..+0x%llx; mips %u layers %u\n",
+                                    changed, image.stale_chunks.size(), (unsigned long long)first,
+                                    (unsigned long long)last,
+                                    (unsigned long long)(image.track_addr - image.info.guest_address),
+                                    (unsigned long long)(image.track_addr_end - image.info.guest_address),
+                                    image.info.resources.levels, image.info.resources.layers);
+                    }
+                    image.stale_hash = now;
+                    // TLG_STALE_CHECK=2: also repair (a test of the diagnosis; hashing every bind
+                    // is slow): the image is marked modified and uploaded again now.
+                    static const bool repair = std::getenv("TLG_STALE_CHECK")[0] == '2';
+                    if (repair) {
+                        image.flags |= VideoCore::ImageFlagBits::CpuDirty;
+                        texture_cache.UpdateImage(image_id);
+                    }
+                }
             }
             auto& image_view = texture_cache.FindTexture(
                 image_id, desc, memo_entry ? &memo_entry->view_memo : nullptr, !on_helper);
