@@ -113,8 +113,9 @@ export TLG_BP08=${TLG_BP08:-0}
 export TLG_MAC_QUAD_INDEX=${TLG_MAC_QUAD_INDEX:-1}
 # The renderer as a native arm64 process next to the game (out/tlggpu-host; docs/macos/
 # GPU_PROCESS_PLAN.md): burning building ~36 -> ~44 FPS, bridge the same (2026-11-01).
-# TLG_GPU_PROCESS=0: everything in one x86-64 process under Rosetta, as before.
-export TLG_GPU_PROCESS=${TLG_GPU_PROCESS:-1}
+# Optional (launcher toggle) until its picture matches: rain streaks are missing and some smoke
+# showed stale textures there (2026-11-01). Default: one x86-64 process under Rosetta.
+export TLG_GPU_PROCESS=${TLG_GPU_PROCESS:-0}
 TLG_PARTICLES=${TLG_PARTICLES:-shared}
 case $TLG_PARTICLES in
     shared)

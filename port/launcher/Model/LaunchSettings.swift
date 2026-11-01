@@ -68,7 +68,7 @@ struct LaunchSettings: Equatable {
     var particles = ParticleMode.auto
     var textLanguage = "1"
     var voiceLanguage = ""
-    var gpuProcess = true
+    var gpuProcess = false
 
     private var ini = IniFile()
 
@@ -89,7 +89,7 @@ struct LaunchSettings: Equatable {
         textLanguage = value("TLG_LANGUAGE").flatMap { code in GameLanguage.text.contains { $0.code == code } ? code : nil } ?? "1"
         voiceLanguage = value("TLG_AUDIO_LANGUAGE") ?? ""
         particles = value("TLG_PARTICLES").flatMap(ParticleMode.init(rawValue:)) ?? .auto
-        gpuProcess = flag("TLG_GPU_PROCESS", true)
+        gpuProcess = flag("TLG_GPU_PROCESS", false)
     }
 
     /// The file's text with the settings written in.
@@ -107,7 +107,7 @@ struct LaunchSettings: Equatable {
         set("TLG_PARTICLES", particles == .auto ? nil : particles.rawValue)
         set("TLG_LANGUAGE", textLanguage)
         set("TLG_AUDIO_LANGUAGE", voiceLanguage.isEmpty ? nil : voiceLanguage)
-        set("TLG_GPU_PROCESS", gpuProcess ? "1" : "0")
+        set("TLG_GPU_PROCESS", gpuProcess ? "1" : nil)
         return out.text
     }
 
