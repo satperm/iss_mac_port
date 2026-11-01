@@ -800,6 +800,13 @@ vk::Format TrySurfaceFormat(AmdGpu::DataFormat data_format, AmdGpu::NumberFormat
 
 vk::Format SurfaceFormat(AmdGpu::DataFormat data_format, AmdGpu::NumberFormat num_format) {
     vk::Format result = surface_format_table[GetSurfaceFormatTableIndex(data_format, num_format)];
+    // tlg: seen in 2 of 726 test runs, mid-game, and it stopped the game. Same layout as the float
+    // format the game uses. Who asks for it is not known yet.
+    if (result == vk::Format::eUndefined && data_format == AmdGpu::DataFormat::Format10_11_11 &&
+        num_format == AmdGpu::NumberFormat::Unorm) {
+        LOG_WARNING(Render_Vulkan, "tlg: 10_11_11 unorm surface format: using the float one");
+        return vk::Format::eB10G11R11UfloatPack32;
+    }
     bool found =
         result != vk::Format::eUndefined || data_format == AmdGpu::DataFormat::FormatInvalid;
     ASSERT_MSG(found, "Unknown data_format={} and num_format={}", static_cast<u32>(data_format),

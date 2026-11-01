@@ -23,6 +23,7 @@
 #include "video_core/amdgpu/regs_shader.h"
 #include "video_core/amdgpu/resource.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
+#include "common/backports.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_pipeline_serialization.h"
 #include "video_core/renderer_vulkan/vk_precompile.h"
@@ -770,14 +771,18 @@ Precompile::Result PipelineCache::Precompile(
         pool->Finish();
         collect(pool->TakeDone());
         pool.reset();
-        // The pipelines the build threads compiled go into the cache the game saves.
-        std::vector<vk::PipelineCache> sources;
-        for (const auto& cache : caches) {
-            sources.push_back(*cache);
-        }
-        if (instance.GetDevice().mergePipelineCaches(*pipeline_cache, sources) !=
-            vk::Result::eSuccess) {
-            std::printf("Precompile: merging the build threads' pipeline caches failed\n");
+        // The pipelines the build threads compiled go into the cache the game saves. tlg: only
+        // when it is saved (BP08): merged for nothing they stayed in memory all session, 4 GB;
+        // Metal's own disk cache keeps the compiled shaders either way.
+        if (Common::Backports::On(Common::Backports::Id::PipelineCacheBlob)) {
+            std::vector<vk::PipelineCache> sources;
+            for (const auto& cache : caches) {
+                sources.push_back(*cache);
+            }
+            if (instance.GetDevice().mergePipelineCaches(*pipeline_cache, sources) !=
+                vk::Result::eSuccess) {
+                std::printf("Precompile: merging the build threads' pipeline caches failed\n");
+            }
         }
     }
     if (progress) {

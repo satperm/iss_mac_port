@@ -517,3 +517,26 @@ loop: TLG_MAC_CS_LOOP_CAP (default 1M back-edges) did not prevent it.
   ~40 FPS, 240 s without a hang. `TLG_STALE_CHECK` runs (~4 FPS) in the fire scene end in a Metal GPU hang
   in both modes, also before this fix: an effect of the check. Liverpool's WriteData memcpys are still
   not invalidated in the host. To check by eye: glyph smoke, rain streaks, big droplets, black dots.
+- **Native is the default (2026-11-01 night, for the owner's 1-2 h play test):** run_macos.sh
+  TLG_GPU_PROCESS=1, launcher toggle on (writes 0 when off). README's FPS table is still normal mode.
+- **First-start precompile wired in:** run_macos.sh -> scripts/macos/prepare_shader_jobs.py (46 s, once;
+  `<user>/cache/shader-jobs.bin` + .stamp) -> vk_precompile (13 threads). Metal cache cold 127 s, warm
+  19 s, 25175 records, 42 fail harmlessly (MarkReadConstBufferSharpSources assert, caught). Cache ~800 MB.
+  Bridge: in-game compile time 25.8 s cold without it -> 1.3 s, worst frame 13 s -> ~1 s. diag_run sets
+  TLG_PRECOMPILE=0 unless asked, as test saves are copied. Not tried yet from ISS.app with port/user.
+- **Test caches are empty:** the cache folder name changes with the build key and bridge/smoke/chase-save
+  hold an old one, so tests compile from nothing (warm-up never ran there). A rebuild did NOT reset the
+  Metal cache (19 s after two rebuilds): why the bridge was cold on 2026-11-01 evening is unknown.
+- **Storage hang:** cache_storage.cpp num_requests was a plain u32 (compile threads ++, I/O thread --): a
+  lost update left the I/O thread spinning at 100% and WaitIdle waiting forever (3 of 4 first starts).
+  Atomic now: 0 of 5 first starts since. Worth a look: FPS may gain from one core not spinning in normal play.
+- Precompile's merge into the main VkPipelineCache only when BP08 is on: first-start footprint 12 -> 7.7 GB.
+  Second start 8.2 GB vs 7.2 GB without precompile (warm-up's shader stages; matters on 16 GB Macs).
+- SurfaceFormat: 10_11_11 unorm (fatal in 2 of 726 runs, mid-game) now maps to the float format with a
+  warning. Who asks for it is unknown. 1 s frames with 0 compiles are the harness's screenshots
+  (4 per 150 s with SHOT_SECONDS=1, none with 0). Bridge end-of-script view: 10k draws, steady 29 FPS.
+- **Plan for 2026-11-02:** (1) owner's 1-2 h play test on native + precompile: logs in ~/Library/Logs/ISS,
+  first-start timing, artifacts, crashes, 10_11_11 warnings. (2) Fix what it finds. (3) Measure: normal vs
+  native at the open city view (29 FPS), FPS gain from the storage fix, README's table for native.
+  (4) Second-start memory (warm-up stages) for 16 GB Macs. (5) Self-contained ISS.app + GitHub release:
+  bundle Python and scripts/build_jobs.py + tools/xpps, first-start progress UI in the launcher.

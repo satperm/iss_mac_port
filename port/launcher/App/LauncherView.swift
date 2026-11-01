@@ -159,9 +159,9 @@ struct LauncherView: View {
                     Text("Smoke, sparks, neon and rain are simulated on the GPU. Auto: shared memory (on, the default). Off: no GPU particles, fastest. All particles: exactly as on the PS4, much slower.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Section("Experimental") {
+                Section("Renderer") {
                     Toggle("Native GPU process", isOn: $model.settings.gpuProcess)
-                    Text("The renderer runs as a native Apple Silicon process next to the game (no Rosetta for the GPU work). Faster in tests; newer, so watch for missing effects.")
+                    Text("The renderer runs as a native Apple Silicon process next to the game (no Rosetta for the GPU work). On by default; turn it off to run everything under Rosetta if you see a problem.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }

@@ -26,7 +26,9 @@
 namespace {
 
 std::mutex submit_mutex{};
-u32 num_requests{};
+// tlg: atomic: the compile threads add, the I/O thread subtracts. As a plain u32 an update got lost
+// under the first-start compile: the I/O thread spun on an empty queue and WaitIdle never returned.
+std::atomic<u32> num_requests{};
 std::condition_variable_any request_cv{};
 std::queue<std::packaged_task<void()>> req_queue{};
 std::mutex m_request{};
@@ -116,7 +118,7 @@ void ProcessIO(const std::stop_token& stoken) {
     while (!stoken.stop_requested()) {
         {
             std::unique_lock lk{submit_mutex};
-            Common::CondvarWait(request_cv, lk, stoken, [&] { return num_requests; });
+            Common::CondvarWait(request_cv, lk, stoken, [&] { return num_requests.load() != 0; });
         }
 
         if (stoken.stop_requested()) {
@@ -404,7 +406,7 @@ void DataBase::ForEachBlobName(BlobType type,
 }
 
 void DataBase::WaitIdle() {
-    while (opened && std::atomic_ref<u32>(num_requests).load()) {
+    while (opened && num_requests.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 }

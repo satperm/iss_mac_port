@@ -85,8 +85,10 @@ Open **ISS.app** (in the repository folder; you can drag it to the Dock). The fi
 1. Under **Game folder**, click **Choose…** and select your game folder.
 2. Pick the **Text** and **Voices** languages, then **Play**.
 
-The first start compiles shaders and takes longer, and new areas stutter briefly the first time
-they are seen; this settles as the shader cache fills.
+The first start prepares the shaders once: about a minute with no window while it lists them from
+your game files, then up to about two minutes on a "Compiling shaders" screen (measured on an M3 Max).
+It needs about 900 MB of disk space and runs again only when the game files or the port change. Later
+starts skip it. To skip it entirely, set `TLG_PRECOMPILE=0`; shaders then compile during play and stutter.
 
 Without the app, from a Terminal:
 
@@ -120,7 +122,7 @@ In the launcher:
 | Detail | Original (as on the PS4), Lower, Lowest (the game's own lower settings: particles, high-resolution textures, pedestrians; for slower Macs) |
 | Frame pacing | Smooth (even frame times, default), 60 Hz steps |
 | Window | Full screen (needed for macOS Game Mode) or windowed; fill 16:10 screens without black bars |
-| Native GPU process | Experimental: runs the renderer as a native Apple Silicon process. Newer; watch for missing effects |
+| Native GPU process | On by default: runs the renderer as a native Apple Silicon process. Turn it off to run everything under Rosetta |
 | Show FPS, Metal Performance HUD | On-screen counters |
 
 Hold ⌥ (Option) while opening the app to show the launcher window when it is set to start the game

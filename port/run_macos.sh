@@ -119,9 +119,9 @@ export TLG_BP08=${TLG_BP08:-0}
 export TLG_MAC_QUAD_INDEX=${TLG_MAC_QUAD_INDEX:-1}
 # The renderer as a native arm64 process next to the game (out/tlggpu-host; docs/macos/
 # GPU_PROCESS_PLAN.md): burning building ~36 -> ~44 FPS, bridge the same (2026-11-01).
-# Optional (launcher toggle) until its picture matches: rain streaks are missing and some smoke
-# showed stale textures there (2026-11-01). Default: one x86-64 process under Rosetta.
-export TLG_GPU_PROCESS=${TLG_GPU_PROCESS:-0}
+# The default since its stale textures were fixed (2026-11-01). TLG_GPU_PROCESS=0 (launcher toggle
+# off): one x86-64 process under Rosetta.
+export TLG_GPU_PROCESS=${TLG_GPU_PROCESS:-1}
 # Natively MoltenVK picks MTLEvent semaphores, under Rosetta the implicit single-queue ordering;
 # with ~50 submissions a frame the implicit one is faster: native burning building 37.8 -> 43.9 FPS.
 [[ $TLG_GPU_PROCESS == 1 ]] && export MVK_CONFIG_VK_SEMAPHORE_SUPPORT_STYLE=${MVK_CONFIG_VK_SEMAPHORE_SUPPORT_STYLE:-0}
@@ -151,4 +151,15 @@ export TLG_READBACK_LINEAR=${TLG_READBACK_LINEAR:-1}
 export TLG_DEFERRED_READBACK=${TLG_DEFERRED_READBACK:-1}
 probe_args=("$out/boot-linked.bin" --content-profile "$out/content.bin" --patches "$out/patches.bin" --app0 "$game"
     --user "${TLG_USER_DIR:-$data/user}" --timeout "${TLG_TIMEOUT:-0}" ${isa_args[@]+"${isa_args[@]}"} "$@")
+# First-start shader compilation (vk_precompile.h): the job list from the player's game files, then
+# the game compiles it behind a loading screen, in parallel. On a cold cache the bridge lost ~26 s to
+# compiles on the render thread, frames up to 13 s; with this no frame over about a second
+# (2026-11-01). TLG_PRECOMPILE=0: shaders compile in game.
+if [[ ${TLG_PRECOMPILE:-1} != 0 && -z ${TLG_PRECOMPILE_JOBS:-} ]]; then
+    jobs=${TLG_USER_DIR:-$data/user}/cache/shader-jobs.bin
+    if [[ ! -f $jobs ]] && command -v osascript >/dev/null; then
+        osascript -e 'display notification "Preparing shaders from your game files, once. The game opens in about a minute." with title "ISS"' 2>/dev/null || true
+    fi
+    "$PYTHON" scripts/macos/prepare_shader_jobs.py "$game" "$jobs" && export TLG_PRECOMPILE_JOBS=$jobs
+fi
 exec "$probe" "${probe_args[@]}"

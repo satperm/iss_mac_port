@@ -12,6 +12,8 @@
 set -uo pipefail
 [[ -n ${PAD_SCRIPT:-} ]] && PAD_SCRIPT=$(cd -- "$(dirname -- "$PAD_SCRIPT")" && pwd)/$(basename -- "$PAD_SCRIPT")
 cd -- "$(dirname -- "$0")/../.."
+# Tests start from a copied save: no first-start compile unless asked (TLG_PRECOMPILE=1).
+export TLG_PRECOMPILE=${TLG_PRECOMPILE:-0}
 label=${1:?usage: diag_run.sh <label> [seconds] [VAR=value ...]}; shift
 seconds=60
 if [[ ${1:-} =~ ^[0-9]+$ ]]; then seconds=$1; shift; fi
