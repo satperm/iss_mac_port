@@ -151,6 +151,22 @@ void host_view_apply(uint32_t op, uint32_t prot, uint64_t address, uint64_t size
 
 /* ---- runtime_* for the GPU library ------------------------------------------------------- */
 uint64_t runtime_disabled_optimizations;
+/* TLG_DISABLED_MASK=<decimal mask>: optimizations switched off from the start in this process
+ * (the TLG_TOGGLE_FILE watcher only starts with the runtime's GPU hooks, which the host does not
+ * install). For A/B tests of the native GPU process. */
+__attribute__((constructor)) static void disabled_mask_from_env(void) {
+    /* Default here: the texture-set memo (TlgToggle::TextureSetMemo, 1 << 45) off. In this process
+     * its hits sometimes bound a stale texture set: smoke drawn with text/glyph textures in the
+     * burning building (2026-11-01; clean with it off, same FPS). Why the key matches there is
+     * still open. */
+    runtime_disabled_optimizations = UINT64_C(1) << 45;
+    const char *mask = getenv("TLG_DISABLED_MASK");
+    if (mask && *mask) {
+        runtime_disabled_optimizations = strtoull(mask, NULL, 10);
+        say("disabled optimizations mask=%llu (TLG_DISABLED_MASK)",
+            (unsigned long long)runtime_disabled_optimizations);
+    }
+}
 __thread sigjmp_buf *runtime_fault_recover;
 static __thread int32_t thread_errno;
 
