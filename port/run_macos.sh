@@ -107,7 +107,14 @@ export MTL_HUD_ENABLED=${MTL_HUD_ENABLED:-1}
 # Quad lists (particles) as indexed triangles instead of MoltenVK's tessellation emulation, the
 # indexed ones expanded on the GPU (2026-10-31): burning building 21-25 -> 30-34 FPS, 9.1 -> 6.5 GB,
 # bridge 28-37 -> 35-43, same picture. TLG_MAC_QUAD_INDEX=0 restores tessellation.
+# BP08 (the driver VkPipelineCache blob, ~80 MB) off: loading it hung ~half of the starts at
+# "driver pipeline cache loaded" in both modes (2026-11-01: 0 of 4 hangs without it).
+export TLG_BP08=${TLG_BP08:-0}
 export TLG_MAC_QUAD_INDEX=${TLG_MAC_QUAD_INDEX:-1}
+# The renderer as a native arm64 process next to the game (out/tlggpu-host; docs/macos/
+# GPU_PROCESS_PLAN.md): burning building ~36 -> ~44 FPS, bridge the same (2026-11-01).
+# TLG_GPU_PROCESS=0: everything in one x86-64 process under Rosetta, as before.
+export TLG_GPU_PROCESS=${TLG_GPU_PROCESS:-1}
 TLG_PARTICLES=${TLG_PARTICLES:-shared}
 case $TLG_PARTICLES in
     shared)

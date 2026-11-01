@@ -447,3 +447,13 @@ loop: TLG_MAC_CS_LOOP_CAP (default 1M back-edges) did not prevent it.
   as is). One start hung: "GPU split: request 19 unanswered for 30 s". Next: find the texture the
   smoke draw samples in the host vs single (TLG_ADDR_TEX_LOG in the host) and why the host's
   texture cache misses its invalidation.
+- 2026-11-01 late morning: START-UP HANG FIX: TLG_BP08=0 default (run_macos.sh). Loading the ~80 MB
+  driver VkPipelineCache blob hung about half the starts at "driver pipeline cache loaded" in BOTH
+  modes (0 of 4 hangs without it, alternating modes; no FPS change seen). Native GPU process made
+  the default (run_macos.sh TLG_GPU_PROCESS=1, launcher toggle default on, writes 0 when off).
+  Smoke glyph artifact in native mode: INTERMITTENT (user saw it in the 10:58 run hsbb, not in hsba;
+  my 0.5 s full-res crops rarely catch it). Not the quad path, not the driver cache blob. Frame
+  captures of both modes differ by timing, so per-pass texture diffs are inconclusive. Next: a
+  deterministic trigger (e.g. log in the host when a draw samples an image whose guest range was
+  written since its last upload without an invalidation), or compare the host's invalidation events
+  with tlg-probe's write faults.
