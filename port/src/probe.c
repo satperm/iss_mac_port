@@ -1078,6 +1078,10 @@ int main(int argc, char **argv) {
 static int probe_main(int argc, char **argv) {
 #else
 int main(int argc, char **argv) {
+    if (getenv("TLG_START_TRACE")) { /* wall-clock marks of the start-up (vk_presenter.cpp StartMark) */
+        struct timeval tv; gettimeofday(&tv,NULL);
+        printf("Start trace: %lld tlg-probe main\n",(long long)tv.tv_sec*1000+tv.tv_usec/1000);
+    }
 #endif
     setvbuf(stdout, NULL, _IONBF, 0);
     alias_port_environment();

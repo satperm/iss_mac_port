@@ -293,6 +293,17 @@ static vk::Rect2D FitImage(s32 frame_width, s32 frame_height, s32 swapchain_widt
 
 // tlg: screenshot capture and ImGui overlays removed; the port presents directly.
 
+// tlg: TLG_START_TRACE=1: wall-clock marks of the renderer's start-up (with the epoch, to compare
+// against the launch time).
+void StartMark(const char* what) {
+    static const bool on = std::getenv("TLG_START_TRACE") != nullptr;
+    if (on) {
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::system_clock::now().time_since_epoch()).count();
+        std::printf("Start trace: %lld %s\n", (long long)ms, what);
+    }
+}
+
 Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_)
     : window{window_}, liverpool{liverpool_},
       instance{window, EmulatorSettings.GetGpuId(), EmulatorSettings.IsVkValidationEnabled(),
@@ -317,7 +328,9 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
 
     fsr_pass.Create(device, instance.GetAllocator(), num_images);
     pp_pass.Create(device, swapchain.GetSurfaceFormat().format);
+    StartMark("presenter members built (instance, device, rasterizer)");
     TlgOverlay::Init(instance, swapchain.GetSurfaceFormat().format, num_images);
+    StartMark("overlay ready");
 
     // tlg: first-run shader compilation (vk_precompile.h): the job file the launcher wrote from
     // the game files compiles once per cache, behind the loading screen, before the game starts.
@@ -348,6 +361,7 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
                               EmulatorSettings.IsPipelineCacheEnabled();
     const bool capture_only = EmulatorSettingsImpl::Flag("TLG_PIPELINE_BINARY_ISOLATED", false) &&
                               EmulatorSettingsImpl::Flag("TLG_PIPELINE_CAPTURE_ONLY", false);
+    StartMark("precompile check done");
     if (UseOnDemandPipelines(binary_cache, instance.GetPipelineBinaryGlobalKey().keySize != 0,
                             capture_only)) {
         rasterizer->GetPipelineCache().StartOnDemand();

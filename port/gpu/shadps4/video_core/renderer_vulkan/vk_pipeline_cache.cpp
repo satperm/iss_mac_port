@@ -579,10 +579,13 @@ void PipelineCache::StopDriverCacheSaver() {
     }
 }
 
+void StartMark(const char* what);
+
 PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
                              AmdGpu::Liverpool* liverpool_, u32 sparse_page_shift)
     : instance{instance_}, scheduler{scheduler_}, liverpool{liverpool_},
       desc_heap{instance, scheduler.GetWorkSemaphore(), DescriptorHeapSizes} {
+    StartMark("pipeline cache constructor begins");
     sel.regs = liverpool ? &liverpool->regs : nullptr;
     const auto& vk12_props = instance.GetVk12Properties();
     profile = Shader::Profile{

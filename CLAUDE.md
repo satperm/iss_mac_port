@@ -476,3 +476,10 @@ loop: TLG_MAC_CS_LOOP_CAP (default 1M back-edges) did not prevent it.
   7 vertex permutations (b4a8ad8e_3, b94242a8_8-13: numbering?). GPU timestamps: same ns clock.
   Next: compare the streak system's data between modes (TLG_MAC_INDIRECT_LOG / capture of its
   draw: VS, counts, buffers), start from which draw renders streaks in normal mode (TLG_SKIP_DRAW_PS).
+- 2026-11-01 evening: default back to normal mode (native optional). Start-up time (warm cache, first
+  presented frame, was 7.3 s): run_macos.sh keeps the ISA rewrite table until the image, script or
+  CPU features change (isa_rewrite.py took 2 s each start). TLG_START_TRACE=1 prints wall-clock
+  marks; everything until the pipeline cache constructor (scripts, game load, window, Vulkan device
+  under Rosetta) is the remaining time, nothing after it is measurable. With TLG_BP08=1 no frame
+  within 25 s: the blob stays off. Rain streaks: capture diff by shader was inconclusive (captures
+  differ by camera); parked while native is optional. After a rebuild the first start is slower.

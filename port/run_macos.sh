@@ -72,7 +72,13 @@ features=$("$probe" --cpu-features) || features_status=$?
 echo "$features"
 if (( features_status == 20 )); then exit 20; fi
 if [[ ${TLG_ISA_REWRITE:-} != 0 ]] && { [[ $features == "CPU: missing "* ]] || [[ -n ${TLG_ISA_REWRITE:-} ]]; }; then
-    if "$PYTHON" scripts/isa_rewrite.py "$out/boot-linked.bin" --out "$out"; then
+    # The table only depends on the linked image, the script and the CPU's feature list; building
+    # it takes ~2 s of every start, so it is kept until one of them changes.
+    isa_key=$( { shasum "$out/boot-linked.bin" scripts/isa_rewrite.py | cut -d' ' -f1; echo "$features"; } | shasum | cut -d' ' -f1)
+    if [[ -f $out/isa-rewrite.bin && -f $out/isa-rewrite.key && $(<"$out/isa-rewrite.key") == "$isa_key" ]]; then
+        isa_args=(--isa-rewrite "$out/isa-rewrite.bin")
+    elif "$PYTHON" scripts/isa_rewrite.py "$out/boot-linked.bin" --out "$out"; then
+        echo "$isa_key" > "$out/isa-rewrite.key"
         isa_args=(--isa-rewrite "$out/isa-rewrite.bin")
     else
         echo 'ISA rewrite failed: starting without the table' >&2
