@@ -9,12 +9,13 @@ It is a macOS fork of [iss_pc](https://github.com/HayatoG/iss_pc), the native PC
 
 > **Status: work in progress, playable.** The story can be played from the start, with GPU
 > particles (smoke, rain, sparks) and a clean picture. On an M3 Max MacBook Pro expect about
-> 45-55 FPS outdoors and 30-40 FPS in heavy effect scenes. See
+> 50-60 FPS outdoors and 30-45 FPS in heavy effect scenes. See
 > [Expected performance](#expected-performance) and [Known issues](#known-issues).
 
 ## Contents
 
 - [Requirements](#requirements)
+- [Download](#download)
 - [Getting the game files](#getting-the-game-files)
 - [Build](#build)
 - [Play](#play)
@@ -38,8 +39,19 @@ It is a macOS fork of [iss_pc](https://github.com/HayatoG/iss_pc), the native PC
 - [Homebrew](https://brew.sh) (the default arm64 one).
 - About 10 GB of free disk space for dependencies and builds, plus the game itself.
 
-A ready-to-download app is planned (see [Roadmap](#roadmap)). For now the port is built from
-source, which takes about 30-60 minutes the first time.
+To build from source, which takes about 30-60 minutes the first time, you also need Xcode and
+Homebrew. A downloaded app only needs Rosetta 2 and your game files: see [Download](#download).
+
+## Download
+
+If a release is available on the [Releases](https://github.com/satperm/iss_mac_port/releases) page:
+
+1. Download `ISS-macOS-<version>.zip`, unzip it and move `ISS.app` to Applications.
+2. The app is not notarised, so macOS blocks a downloaded copy. Clear the download flag once:
+   `xattr -dr com.apple.quarantine /Applications/ISS.app`
+3. Open it and continue at [Play](#play).
+
+Settings, saves and caches are in `~/Library/Application Support/ISS`.
 
 ## Getting the game files
 
@@ -98,9 +110,9 @@ cd port && TLG_GAME_DIR=/path/to/CUSA00223 bash run_macos.sh
 
 ### Saves
 
-Saves live in `port/user/savedata`. The launcher's **Saves…** window backs them up (**Back Up
+Saves live in `port/user/savedata` (in a downloaded app: `~/Library/Application Support/ISS/user/savedata`). The launcher's **Saves…** window backs them up (**Back Up
 Now**), restores a backup and starts a new game (**Start New Game…**). A backup is also made
-automatically before every start; the newest 10 are kept. Backups are in `port/out/save-backups`.
+automatically before every start; the newest 10 are kept. Backups are in `out/save-backups` next to `user`.
 
 ## Settings and shortcuts
 
@@ -134,14 +146,18 @@ outdoor views).
 ## Expected performance
 
 Measured on a **MacBook Pro with M3 Max**, macOS 26, internal display, 1080p rendering, default
-settings (GPU particles on, Detail: Original), optimized build, 2026-11-01. Each row is the range
-over a 2-4 minute scripted run.
+settings (GPU particles on, Detail: Original), optimized build, 2026-11-02. Each row is the range
+over a 2-4 minute scripted run, after the first seconds.
 
 | Scene | FPS |
 |---|---|
-| Opening area: bridge with rain, camera turning | 45-55 |
-| Smoke-shot tutorial (forest, drone, smoke powers) | 45-50 |
-| Burning building (heavy fire and sparks) | 32-39 |
+| Opening area: bridge with rain, camera turning | 50-55, dips to about 40 |
+| Open view of the city from the bridge | 41-46 |
+| Smoke-shot tutorial (forest, drone, smoke powers) | 60-64 |
+| Burning building (heavy fire and sparks) | 29-49, mostly 35-45 |
+
+With the native GPU process off (everything under Rosetta) the bridge runs at 40-45 and the open
+view at 25-27.
 
 What changes it:
 
@@ -151,7 +167,7 @@ What changes it:
 - **Detail: Lower / Lowest**: lighter particles, textures and crowds.
 - Resolution and upscaling do not help much: the limit is not pixel count (see
   [Known issues](#known-issues)).
-- Memory in game: about 6-9 GB.
+- Memory in game: about 6-8 GB.
 
 Other Macs have not been measured yet. The limit is mostly CPU-to-GPU round trips, so chips with
 fewer performance cores and smaller GPUs (M1, M2, base M3) will be slower than these numbers; Pro
@@ -177,10 +193,10 @@ Fixed recently:
 ## Known issues
 
 - **Frame rate.** Not a steady 60 FPS yet; effect-heavy scenes drop into the 30s. The limit is
-  the round trip between the game's CPU code and the GPU (about 20 waits per frame, each going
-  through MoltenVK under Rosetta), not the GPU's raw speed or the resolution.
-- **Shader compilation stutter** on the first start and in new areas.
-- **Memory**: 6-9 GB in game; on 16 GB Macs close other large apps.
+  the round trip between the game's CPU code and the GPU (about 20 waits per frame), not the GPU's
+  raw speed or the resolution.
+- **Shaders the first-start list misses** still compile during play, with short stutters.
+- **Memory**: 6-8 GB in game; on 16 GB Macs close other large apps.
 - Some HUD elements (for example the current objective text) may be missing at times.
 - MoltenVK, the Vulkan-on-Metal layer the port uses, is deprecated by Khronos (KosmicKrisp is its
   successor); the port keeps a patched MoltenVK 1.4.2 for now.
@@ -192,19 +208,13 @@ model, macOS version, the scene and the session log (see below). No game files, 
 
 Near term:
 
-1. **Downloadable app**: a self-contained ISS.app as a GitHub release (no Xcode, Homebrew or build;
-   only Rosetta and your game files).
-2. **Particle performance**: fewer render-pass breaks around particle draws.
-3. **HUD**: find the missing objective text.
+1. **Particle performance**: fewer render-pass breaks around particle draws.
+2. **HUD**: find the missing objective text.
 
 Toward 60 FPS:
 
-4. **Native GPU process**: the renderer and MoltenVK as native Apple Silicon code (a separate
-   process sharing the game's memory) instead of under Rosetta. It is in the launcher as an
-   experiment; making it the default needs testing. The same step in the Bloodborne Mac port made
-   this kind of work about 1.75x faster.
-5. **KosmicKrisp**, Khronos' successor to MoltenVK, once the GPU side is native.
-6. A native Metal renderer, only if profiling shows the Vulkan layer is still the bottleneck.
+3. **KosmicKrisp**, Khronos' successor to MoltenVK, now that the GPU side is native.
+4. A native Metal renderer, only if profiling shows the Vulkan layer is still the bottleneck.
 
 ## Troubleshooting and logs
 

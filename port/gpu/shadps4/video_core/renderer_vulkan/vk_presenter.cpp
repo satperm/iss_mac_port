@@ -371,6 +371,12 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
     // tlg: by default the cached pipelines load while the game runs (a corner note shows the
     // progress). Otherwise rebuilding them takes up to minutes before the first game frame:
     // show what is happening instead of a black window.
+    // tlg: TLG_ON_DEMAND=1: no warm-up at all, each shader loads from the cache when first drawn
+    // (the warm-up's shader stages cost about 1 GB on a precompiled cache).
+    if (const char* on_demand = std::getenv("TLG_ON_DEMAND"); on_demand && *on_demand == '1') {
+        rasterizer->GetPipelineCache().StartOnDemand();
+        return;
+    }
     const char* background_warmup = std::getenv("TLG_BACKGROUND_WARMUP");
     if ((!background_warmup || *background_warmup != '0') &&
         rasterizer->GetPipelineCache().StartBackgroundWarmUp()) {

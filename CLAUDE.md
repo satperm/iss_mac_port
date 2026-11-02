@@ -540,3 +540,12 @@ loop: TLG_MAC_CS_LOOP_CAP (default 1M back-edges) did not prevent it.
   native at the open city view (29 FPS), FPS gain from the storage fix, README's table for native.
   (4) Second-start memory (warm-up stages) for 16 GB Macs. (5) Self-contained ISS.app + GitHub release:
   bundle Python and scripts/build_jobs.py + tools/xpps, first-start progress UI in the launcher.
+- **2026-11-02 measurements (M3 Max, no screenshots, which cost FPS):** native vs normal: bridge 50-55 vs
+  40-45, open city view 41-46 vs 25-27. Native smoke 60-64, burning building 29-49. README table is native.
+- TLG_ON_DEMAND=1 (no warm-up): 770 MB less, but 19.6 s of compiling and an 8 s frame: not the default.
+  The second-start memory stays at 8.2 GB.
+- **Release app:** scripts/macos/package_app.sh [version] -> port/dist/ISS.app + zip (49 MB). Layout finds
+  Resources/port, data in Application Support/ISS. iced-x86 1.22.0 there (1.21 has no wheel for 3.12):
+  ISA table byte-identical. Metal's cache is per app: first start in a new bundle 127.7 s, second start
+  7 s to the first frame. Not tried on another Mac or with the quarantine flag. gh is not installed here.
+- SDL's signal handlers swallowed SIGTERM, so Stop did nothing: SDL_NO_SIGNAL_HANDLERS=1 in run_macos.sh.

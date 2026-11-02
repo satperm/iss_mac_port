@@ -48,6 +48,10 @@ struct LauncherView: View {
                 }
                 if model.running {
                     Text(model.stopping ? "Stopping…" : "Game running").foregroundStyle(.secondary)
+                    if model.preparingShaders && !model.stopping {
+                        Text("First start: preparing shaders from your game files, once. The game window opens in about a minute, then compiles for up to a few minutes.")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
                     Button(action: { model.stop() }) {
                         Label("Stop", systemImage: "stop.fill").frame(minWidth: 80)
                     }

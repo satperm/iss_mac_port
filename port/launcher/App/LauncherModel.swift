@@ -17,6 +17,8 @@ final class LauncherModel: ObservableObject {
     @Published private(set) var preparingCrashBundle = false
     @Published private(set) var sessionLog: URL?
     @Published var showingSaves = false
+    /// This start lists and compiles the shaders first (run_macos.sh): minutes, once.
+    @Published private(set) var preparingShaders = false
 
     let layout: Layout
     /// The launcher's environment, plus the game binary inside the bundle (make_app.sh links it
@@ -38,7 +40,7 @@ final class LauncherModel: ObservableObject {
 
     init(layout: Layout) { self.layout = layout }
 
-    var saves: SaveStore { SaveStore(port: layout.port, userDir: env["TLG_USER_DIR"]) }
+    var saves: SaveStore { SaveStore(port: layout.data, userDir: env["TLG_USER_DIR"]) }
 
     var canPlay: Bool { !running && settings.gameDir != nil && gameProblem == nil }
     /// The window can stay closed (the game starts at once) when everything needed is there.
@@ -104,6 +106,9 @@ final class LauncherModel: ObservableObject {
             sessionStart = log.start
             stopping = false
             running = true
+            let user = env["TLG_USER_DIR"].map { URL(fileURLWithPath: $0) } ?? layout.data.appendingPathComponent("user")
+            preparingShaders = env["TLG_PRECOMPILE"] != "0" && !FileManager.default.fileExists(
+                atPath: user.appendingPathComponent("cache/shader-jobs.bin").path)
             exitMessage = nil
             onStarted?()
         } catch {
@@ -124,6 +129,7 @@ final class LauncherModel: ObservableObject {
         let wasStopped = stopping
         gameProcess = nil
         running = false
+        preparingShaders = false
         stopping = false
         if !wasStopped, status != 0, retryStartupCrash() {
             return
