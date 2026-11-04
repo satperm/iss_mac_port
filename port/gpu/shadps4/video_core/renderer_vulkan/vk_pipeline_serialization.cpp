@@ -39,7 +39,7 @@
 namespace Serialization {
 /* You should increment versions below once corresponding serialization scheme is changed. */
 static constexpr u32 ShaderBinaryVersion = 9u; // tlg: LDS barrier scope per guest wave
-static constexpr u32 ShaderMetaVersion = 12u; // tlg: 12 load bounds compute only (macOS); 11 compute loop cap; 10 portable SRT walker
+static constexpr u32 ShaderMetaVersion = 14u; // tlg: 14 NaN guard on float outputs; 13 NaN/Inf tests on bits, mac/mad legacy; 12 load bounds compute only (macOS); 11 compute loop cap; 10 portable SRT walker
 static constexpr u32 PipelineKeyVersion = 5u; // tlg: Info layout (ImageResource::needs_native)
 } // namespace Serialization
 

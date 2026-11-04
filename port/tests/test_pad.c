@@ -16,6 +16,7 @@ void tlggpu_frame_counters(TlgGpuFrameCounters *out) { memset(out,0,sizeof(*out)
 int tlggpu_overlay_captures_input(void) { return capture; }
 const bool *tlggpu_split_keyboard(void) { return NULL; } /* single process: the SDL keyboard */
 /* The GPU library (not linked here): on-screen notices, the graffiti guide, the menu's aim speed. */
+void tlggpu_screenshot(void) {}
 void tlggpu_overlay_notice(const char *text, float seconds) { (void)text; (void)seconds; }
 void tlggpu_graffiti_guide(int force) { (void)force; }
 float tlggpu_sensor_aim_scale(void) { return 1.0f; }

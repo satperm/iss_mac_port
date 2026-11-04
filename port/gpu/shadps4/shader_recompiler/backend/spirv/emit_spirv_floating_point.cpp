@@ -163,6 +163,14 @@ Id EmitFPSqrt(EmitContext& ctx, Id value) {
     return ctx.OpSqrt(ctx.F32[1], value);
 }
 
+// tlg (from bloodborne_mac_port): NaN and Inf tested on the bit pattern. Metal's fast math assumes
+// neither exists and folds isnan/isinf to false, which undid GCN's NaN-safe ops (clamp, legacy
+// min/max, v_cmp_class).
+static Id MagnitudeBits32(EmitContext& ctx, Id value) {
+    return ctx.OpBitwiseAnd(ctx.U32[1], ctx.OpBitcast(ctx.U32[1], value),
+                            ctx.ConstU32(0x7fffffffu));
+}
+
 Id EmitFPSaturate32(EmitContext& ctx, Id value) {
     const Id zero{ctx.ConstF32(f32{0.0})};
     const Id one{ctx.ConstF32(f32{1.0})};
@@ -170,9 +178,14 @@ Id EmitFPSaturate32(EmitContext& ctx, Id value) {
         // tlg: BP05 (shadPS4 #5257): NaN saturates to 0 like HLSL/DX10_CLAMP (FClamp is
         // undefined for NaN). NClamp(x, lo, hi) == NMin(NMax(x, lo), hi).
         Common::Backports::Hit(Common::Backports::Id::SaturateNan);
-        return ctx.OpNMin(ctx.F32[1], ctx.OpNMax(ctx.F32[1], value, zero), one);
+        // tlg: also on the bit pattern: fast math may treat NMin/NMax as plain min/max.
+        const Id is_nan = ctx.OpUGreaterThan(ctx.U1[1], MagnitudeBits32(ctx, value), ctx.ConstU32(0x7f800000u));
+        return ctx.OpSelect(ctx.F32[1], is_nan, zero,
+                            ctx.OpNMin(ctx.F32[1], ctx.OpNMax(ctx.F32[1], value, zero), one));
     }
-    return ctx.OpFClamp(ctx.F32[1], value, zero, one);
+    // tlg: GCN's clamp modifier turns NaN into 0 (FClamp leaves NaN undefined).
+    const Id nan = ctx.OpUGreaterThan(ctx.U1[1], MagnitudeBits32(ctx, value), ctx.ConstU32(0x7f800000u));
+    return ctx.OpSelect(ctx.F32[1], nan, zero, ctx.OpFClamp(ctx.F32[1], value, zero, one));
 }
 
 Id EmitFPSaturate64(EmitContext& ctx, Id value) {
@@ -402,7 +415,7 @@ Id EmitFPIsNan16(EmitContext& ctx, Id value) {
 }
 
 Id EmitFPIsNan32(EmitContext& ctx, Id value) {
-    return ctx.OpIsNan(ctx.U1[1], value);
+    return ctx.OpUGreaterThan(ctx.U1[1], MagnitudeBits32(ctx, value), ctx.ConstU32(0x7f800000u));
 }
 
 Id EmitFPIsNan64(EmitContext& ctx, Id value) {
@@ -410,7 +423,7 @@ Id EmitFPIsNan64(EmitContext& ctx, Id value) {
 }
 
 Id EmitFPIsInf32(EmitContext& ctx, Id value) {
-    return ctx.OpIsInf(ctx.U1[1], value);
+    return ctx.OpIEqual(ctx.U1[1], MagnitudeBits32(ctx, value), ctx.ConstU32(0x7f800000u));
 }
 
 Id EmitFPIsInf64(EmitContext& ctx, Id value) {

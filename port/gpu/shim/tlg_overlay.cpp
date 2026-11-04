@@ -33,6 +33,7 @@ inline bool Mark(unsigned) { return false; }
 
 extern TlgActorSlot tlg_actor_slots[2];
 extern "C" void runtime_restart(void); // src/probe.c: starts run.py again, ends this process
+extern "C" void tlggpu_screenshot(void); // tlggpu.cpp
 #include "common/elf_info.h"
 #ifndef TLG_RENDERER_V2
 #include "common/backports.h"
@@ -1970,6 +1971,12 @@ bool HandleEvent(const SDL_Event& event) {
         const bool command = (event.key.mod & SDL_KMOD_GUI) != 0;
         if (down && !event.key.repeat && command && event.key.key == SDLK_COMMA) {
             SetOpen(!is_open);
+            return true;
+        }
+        // tlg: F8 or Cmd+8 saves a screenshot at any time (F8 alone is a media key on Mac keyboards).
+        if (down && !event.key.repeat &&
+            (event.key.key == SDLK_F8 || (command && event.key.key == SDLK_8))) {
+            tlggpu_screenshot();
             return true;
         }
         // tlg: F9 shows or hides Apple's Metal Performance HUD (macOS) at any time.

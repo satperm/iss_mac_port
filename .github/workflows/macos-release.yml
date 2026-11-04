@@ -1,0 +1,70 @@
+# Builds ISS.app (port/scripts/macos/package_app.sh) on Apple Silicon, after bloodborne_mac_port's
+# workflow. A pushed mac-v* tag attaches the zip to that tag's GitHub release (created as a
+# pre-release if missing); a manual run keeps it as a workflow artifact.
+name: macOS app
+
+on:
+  push:
+    tags: ['mac-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Tools and Rosetta 2
+        run: |
+          brew install cmake ninja nasm glslang pkgconf boost
+          arch -x86_64 /usr/bin/true 2>/dev/null || sudo softwareupdate --install-rosetta --agree-to-license
+
+      - name: Dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            port/deps
+          key: deps-${{ runner.os }}-${{ hashFiles('port/scripts/macos/bootstrap_deps.sh', 'port/scripts/macos/build_moltenvk.sh', 'port/scripts/macos/patches/**', 'port/scripts/macos/package_app.sh') }}
+
+      - name: Dependencies (x86-64 and arm64)
+        run: |
+          bash port/scripts/macos/bootstrap_deps.sh
+          ISS_DEPS_ARCH=arm64 bash port/scripts/macos/bootstrap_deps.sh
+
+      - name: Build
+        run: |
+          bash port/build_macos.sh
+          bash port/scripts/macos/build_launcher.sh
+
+      # Informational: the runner is a VM (its GPU and Rosetta differ from a real Mac).
+      - name: Tests
+        continue-on-error: true
+        run: bash port/build_macos.sh --test
+
+      - name: Package
+        run: |
+          version=${GITHUB_REF_NAME#mac-v}
+          [[ $GITHUB_REF_TYPE == tag ]] || version=dev-$(git rev-parse --short HEAD)
+          bash port/scripts/macos/package_app.sh "$version"
+          echo "ZIP=port/dist/ISS-macOS-$version.zip" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ISS-macOS
+          path: ${{ env.ZIP }}
+
+      - name: Attach to the release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 ||
+              gh release create "$GITHUB_REF_NAME" --prerelease --title "$GITHUB_REF_NAME" --notes "See README.md."
+          gh release upload "$GITHUB_REF_NAME" "$ZIP" --clobber

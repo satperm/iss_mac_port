@@ -84,6 +84,8 @@ void tlggpu_save_toast(int kind);
 int tlggpu_overlay_captures_input(void);
 /* A short message at the top of the screen (any thread). */
 void tlggpu_overlay_notice(const char *text, float seconds);
+/* The player's screenshot of the next presented frame (F8, the controller's PS button; any thread). */
+void tlggpu_screenshot(void);
 /* Guest memcpy (src) / memset (src NULL, fill) into GPU-modified memory without a fault or a
  * GPU wait (TLG_WRITE_MERGE=1); 0: the caller writes normally. */
 int tlggpu_cpu_write(void *dst, const void *src, int fill, uint64_t size);

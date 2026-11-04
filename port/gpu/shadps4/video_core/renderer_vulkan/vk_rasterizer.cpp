@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #ifndef _WIN32
+#include <set>
 #include <array>
 #include <atomic>
 #include <filesystem>
@@ -1763,6 +1764,38 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     IndirectStats(pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash,
                   u32(pipeline->GetGraphicsKey().prim_type), is_indexed, indirect.args, indirect.max_count,
                   memory->IsValidGpuMapping(indirect.args, 0));
+    // TLG_MAC_INDIRECT_TRACE=<file> (diagnostic): one line per indirect draw of TLG_MAC_INDIRECT_LOG's
+    // vertex shader: time, fragment shader, args address, the vertex count the CPU sees now, and the
+    // previous draw's count read again now (it differs if the GPU was still writing it).
+    static FILE* const indirect_trace = [] {
+        const char* env = std::getenv("TLG_MAC_INDIRECT_TRACE");
+        return env && *env ? std::fopen(env, "w") : nullptr;
+    }();
+    static const u64 indirect_trace_vs = [] {
+        const char* env = std::getenv("TLG_MAC_INDIRECT_LOG");
+        return env && *env ? std::strtoull(env, nullptr, 16) : 0ull;
+    }();
+    if (indirect_trace && pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash == indirect_trace_vs &&
+        memory->IsValidGpuMapping(indirect.args, 0)) {
+        static VAddr prev_args = 0;
+        static u32 prev_seen = 0;
+        const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now().time_since_epoch())
+                                .count();
+        const auto* ps = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
+        const u32 seen = *reinterpret_cast<const u32*>(indirect.args);
+        const auto& trace_cb = Regs().color_buffers[0];
+        std::fprintf(indirect_trace, "%lld %llx %llx %u %u %u %u %u %llx %u\n", static_cast<long long>(now_ms),
+                     ps ? static_cast<unsigned long long>(ps->pgm_hash) : 0ull,
+                     static_cast<unsigned long long>(indirect.args), indirect.max_count, seen,
+                     reinterpret_cast<const u32*>(indirect.args)[1], prev_seen,
+                     prev_args ? *reinterpret_cast<const u32*>(prev_args) : 0u,
+                     trace_cb ? static_cast<unsigned long long>(trace_cb.Address()) : 0ull,
+                     trace_cb ? u32(trace_cb.Pitch()) : 0u);
+        std::fflush(indirect_trace);
+        prev_args = indirect.args;
+        prev_seen = seen;
+    }
     // TLG_MAC_INDIRECT_LOG=<hex vs hash> (diagnostic): the first 40 indirect draws of that vertex
     // shader: count, stride, the records as the CPU sees them, and its user data.
     static const u64 indirect_log = [] {
@@ -2259,6 +2292,49 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
     const auto& cs_program = CsRegs();
 
     const auto& cs = pipeline->GetStage(Shader::SwStage::Compute);
+    // TLG_CS_WATCH=<hex address>[,<hex address>...] (diagnostic): the first dispatch of each compute
+    // shader whose buffers cover one of these addresses, and if it may write them.
+    static const std::vector<VAddr> cs_watch = [] {
+        std::vector<VAddr> list;
+        if (const char* env = std::getenv("TLG_CS_WATCH")) {
+            for (const char* p = env; *p;) {
+                char* end = nullptr;
+                const VAddr v = std::strtoull(p, &end, 16);
+                if (end == p) {
+                    break;
+                }
+                list.push_back(v);
+                p = *end == ',' ? end + 1 : end;
+            }
+        }
+        return list;
+    }();
+    if (!cs_watch.empty()) {
+        static std::set<u64> watched;
+        for (const auto& desc : cs.buffers) {
+            const auto sharp = desc.GetSharp(cs);
+            for (const VAddr at : cs_watch) {
+                const VAddr base = sharp.base_address;
+                if (at >= base && at < base + sharp.GetSize() &&
+                    watched.insert(cs.pgm_hash ^ (u64(desc.is_written) << 63)).second) {
+                    std::printf("CS watch: shader %016llx %s %#llx (buffer %#llx + %#llx, %ux%ux%u, %ux%ux%u threads)\n",
+                                static_cast<unsigned long long>(cs.pgm_hash),
+                                desc.is_written ? "writes" : "reads",
+                                static_cast<unsigned long long>(at), static_cast<unsigned long long>(base),
+                                static_cast<unsigned long long>(sharp.GetSize()), cs_program.dim_x,
+                                cs_program.dim_y, cs_program.dim_z, cs_program.num_thread_x.full,
+                                cs_program.num_thread_y.full, cs_program.num_thread_z.full);
+                    for (const auto& other : cs.buffers) {
+                        const auto o = other.GetSharp(cs);
+                        std::printf("CS watch:   buffer %#llx + %#llx stride %u %s\n",
+                                    static_cast<unsigned long long>(o.base_address),
+                                    static_cast<unsigned long long>(o.GetSize()), u32(o.GetStride()),
+                                    other.is_written ? "written" : "read");
+                    }
+                }
+            }
+        }
+    }
     // After the resource binding: its transfers (image uploads, downloads) mark themselves.
     const auto mark = [&] {
         if (auto* profiler = GpuProfiler::Get()) {
@@ -3410,6 +3486,14 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
             buffer_infos.emplace_back(constant_ring->Handle(), ring->offset, ring->size);
         } else if (desc.IsSpecial()) {
             if (desc.buffer_type == Shader::BufferType::GdsBuffer) {
+                static const bool gds_log = std::getenv("TLG_GDS_LOG") != nullptr;
+                if (gds_log) {
+                    static std::set<u64> seen;
+                    if (seen.insert(stage.pgm_hash).second) {
+                        std::printf("GDS log: shader %016llx binds GDS\n",
+                                    static_cast<unsigned long long>(stage.pgm_hash));
+                    }
+                }
                 const auto* gds_buf = buffer_cache.GetGdsBuffer();
                 buffer_infos.emplace_back(gds_buf->Handle(), 0, gds_buf->SizeBytes());
                 needs_barrier |= runtime.IsBufferAccessed(gds_buf, 0, gds_buf->SizeBytes());
@@ -4815,6 +4899,15 @@ void Rasterizer::FillBuffer(VAddr address, u32 num_bytes, u32 value, bool is_gds
 }
 
 void Rasterizer::CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, bool src_gds) {
+    // TLG_GDS_LOG=1 (diagnostic): each new GDS slot -> memory copy.
+    static const bool gds_log = std::getenv("TLG_GDS_LOG") != nullptr;
+    if (gds_log && src_gds) {
+        static std::set<std::pair<VAddr, VAddr>> seen;
+        if (seen.emplace(dst, src).second) {
+            std::printf("GDS log: copy GDS %#llx -> %#llx, %u bytes\n", static_cast<unsigned long long>(src),
+                        static_cast<unsigned long long>(dst), num_bytes);
+        }
+    }
     DrainDrawPipe();
     if (!dst_gds && !buffer_cache.IsRegionGpuModified(dst, num_bytes)) {
         if (!src_gds && !buffer_cache.IsRegionGpuModified(src, num_bytes) &&
@@ -4836,6 +4929,17 @@ void Rasterizer::CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, b
     }
     texture_cache.InvalidateMemoryFromGPU(dst, num_bytes);
     const auto* gds_buffer = buffer_cache.GetGdsBuffer();
+    // tlg: the copy of a GDS counter waits for the compute shaders that count: without the barrier
+    // Metal may overlap them and it reads the particle count mid-count (smoke flicker).
+    // TLG_GDS_BARRIER=0: as before.
+    static const bool gds_barrier = [] {
+        const char* env = std::getenv("TLG_GDS_BARRIER");
+        return !env || *env != '0';
+    }();
+    if (src_gds && gds_barrier) {
+        runtime.AccessBuffer(gds_buffer, src, num_bytes, vk::PipelineStageFlagBits2::eComputeShader,
+                             vk::AccessFlagBits2::eShaderWrite);
+    }
     const auto [src_buffer, src_offset] = [&] -> std::pair<const VideoCore::Buffer*, u64> {
         if (src_gds) {
             return {gds_buffer, src};

@@ -362,6 +362,7 @@ void LowerWave64BallotPass(IR::Program& program, const RuntimeInfo& runtime_info
 
     std::vector<IR::Inst*> worklist;
     std::vector<IR::Inst*> divergent_ballots;
+    u32 divergent_first_lanes = 0;
     const auto uniform_blocks = FindWave64UniformBlocks(program);
     for (IR::Block* block : program.blocks) {
         const bool is_uniform = std::ranges::contains(uniform_blocks, block);
@@ -389,6 +390,9 @@ void LowerWave64BallotPass(IR::Program& program, const RuntimeInfo& runtime_info
                 // On 32-wide hardware the second half read its own first lane, which never
                 // reserved anything (ISS: flickering lights and steam).
                 worklist.push_back(&inst);
+            } else if (inst.GetOpcode() == IR::Opcode::ReadFirstLane && !is_uniform &&
+                       !IsProvablyWaveUniform(inst.Arg(0))) {
+                ++divergent_first_lanes;
             } else if (inst.GetOpcode() == IR::Opcode::Ballot) {
                 const auto is_unpack = [](const IR::Use& use) {
                     return use.user->GetOpcode() == IR::Opcode::UnpackUint2x32;
@@ -423,6 +427,10 @@ void LowerWave64BallotPass(IR::Program& program, const RuntimeInfo& runtime_info
     if (!divergent_ballots.empty()) {
         LOG_INFO(Render_Recompiler, "shader {:#x}: {} divergent ballots kept per 32-lane half",
                  program.info.pgm_hash, divergent_ballots.size());
+    }
+    if (divergent_first_lanes != 0) {
+        LOG_WARNING(Render_Recompiler, "tlg: wave64 compute shader {:#x}: {} ReadFirstLane left on 32 lanes",
+                    program.info.pgm_hash, divergent_first_lanes);
     }
     if (worklist.empty()) {
         return;

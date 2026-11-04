@@ -85,10 +85,11 @@ inline bool LaneDivergence() {
 /// Lowers v_readfirstlane in every compute shader wider than a 32-lane host wave (not only in
 /// those that also use ballots or v_mbcnt): the two host halves of a wave64 swap the value
 /// through LDS so both read the first active lane of the whole wave, in uniform flow, unless the
-/// value is provably the same in every lane. TLG_RFL_ALL=0/1; default off (experiment: adds two
-/// workgroup barriers per lowered instruction).
+/// value is provably the same in every lane. TLG_RFL_ALL=0/1; default on for ISS only (two workgroup
+/// barriers per lowered instruction). 2026-11-04, blind full-screen test at the truck crash: the smoke
+/// flickers visibly less, FPS about the same; some flicker stays.
 inline bool ReadFirstLaneAll() {
-    static const bool enabled = Detail::EnvFlag("TLG_RFL_ALL", [] { return false; });
+    static const bool enabled = Detail::EnvFlag("TLG_RFL_ALL", &Detail::IssDefault);
     return enabled;
 }
 
@@ -104,11 +105,18 @@ inline bool DynamicBufferStride() {
 
 /// Bits for the shader binary cache version: shaders recompiled under other switches must not
 /// be reused (the cache key only hashes the recompiler sources).
+/// NaN and Inf never enter a float render target or storage image (EmitSetAttribute). TLG_NAN_GUARD=0/1;
+/// default on.
+inline bool NanGuard() {
+    static const bool enabled = Detail::EnvFlag("TLG_NAN_GUARD", &Detail::AlwaysOn);
+    return enabled;
+}
+
 inline std::uint32_t ShaderBinarySalt() {
     return (SmallGroupLdsBarriers() ? 1u : 0u) | (MultiWaveLdsBarriers() ? 2u : 0u) |
            (LdsUniformReadLane() ? 4u : 0u) | (WholeQuadMode() ? 0u : 8u) |
            (LaneDivergence() ? 16u : 0u) | (ReadFirstLaneAll() ? 32u : 0u) |
-           (DynamicBufferStride() ? 64u : 0u);
+           (DynamicBufferStride() ? 64u : 0u) | (NanGuard() ? 0u : 128u);
 }
 
 /// One line per switch with its state (shown once, when the GPU starts). Takes the logger as a

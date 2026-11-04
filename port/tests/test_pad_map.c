@@ -14,6 +14,7 @@ uint64_t tlggpu_total_draws(void) { return 0; }
 void tlggpu_frame_counters(TlgGpuFrameCounters *out) { memset(out,0,sizeof(*out)); }
 int tlggpu_overlay_captures_input(void) { return 0; }
 const bool *tlggpu_split_keyboard(void) { return NULL; } /* single process: the SDL keyboard */
+void tlggpu_screenshot(void) {}
 void tlggpu_overlay_notice(const char *text, float seconds) { (void)text; (void)seconds; }
 uintptr_t runtime_lookup(const RuntimeExport *table, size_t count, const char *name) {
     (void)table; (void)count; (void)name;

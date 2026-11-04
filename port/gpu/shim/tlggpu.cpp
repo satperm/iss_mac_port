@@ -590,6 +590,9 @@ static void HostUiCall(const TlgGpuUiCall& c) {
     case TLGGPU_UI_OVERLAY_NOTICE:
         tlggpu_overlay_notice(in.Str(), c.f[0]);
         break;
+    case TLGGPU_UI_SCREENSHOT:
+        tlggpu_screenshot();
+        break;
     case TLGGPU_UI_MOUSE_TAKE: {
         static_assert(sizeof(TlgGpuMouse) <= sizeof s->ui_reply);
         TlgGpuMouse mouse{};
@@ -828,6 +831,17 @@ extern "C" int tlggpu_cpu_write(void* dst, const void* src, int fill, uint64_t s
                : 0;
 }
 
+
+namespace Vulkan {
+void RequestFrameShot();
+}
+extern "C" void tlggpu_screenshot(void) {
+    if (TlgSplit::Remote()) {
+        TlgUi::Call(TLGGPU_UI_SCREENSHOT, {}, 0, {});
+        return;
+    }
+    Vulkan::RequestFrameShot();
+}
 
 extern "C" void tlggpu_overlay_notice(const char* text, float seconds) {
     if (TlgSplit::Remote()) {

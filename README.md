@@ -7,9 +7,10 @@ shadPS4) on Metal through MoltenVK. The game's x86-64 code runs under Rosetta 2.
 
 It is a macOS fork of [iss_pc](https://github.com/HayatoG/iss_pc), the native PC port.
 
-> **Status: work in progress, playable.** The story can be played from the start, with GPU
-> particles (smoke, rain, sparks) and a clean picture. On an M3 Max MacBook Pro expect about
-> 50-60 FPS outdoors and 30-45 FPS in heavy effect scenes. See
+> **Status: first test version, work in progress.** The story can be played from the start with
+> GPU particles (smoke, rain, sparks). Tested on one Mac (M3 Max, 36 GB) as far as the first missions
+> in Seattle. Translucent smoke still flickers. On that Mac expect about 50-60 FPS in calm outdoor
+> scenes and 25-45 FPS in heavy ones. See
 > [Expected performance](#expected-performance) and [Known issues](#known-issues).
 
 ## Contents
@@ -122,6 +123,7 @@ In game:
 |---|---|
 | ⌘ , | Port menu (graphics, LOD distance, controls) |
 | ⌘ 0 | Show or hide the FPS counter |
+| ⌘ 8, F8 or the PS button | Save a screenshot to `Desktop/ISS Screenshots` |
 | ⌘ 9 | Show or hide Apple's Metal performance HUD |
 
 A PlayStation or Xbox controller is recommended; keyboard and mouse also work.
@@ -169,6 +171,10 @@ What changes it:
   [Known issues](#known-issues)).
 - Memory in game: about 6-8 GB.
 
+These are scripted runs. In one play session (2026-11-03) the bridge ran at 25-30 FPS while a
+standing test there gave about 67 FPS (2026-11-04), so the frame rate depends heavily on what is
+happening; the difference is not explained yet.
+
 Other Macs have not been measured yet. The limit is mostly CPU-to-GPU round trips, so chips with
 fewer performance cores and smaller GPUs (M1, M2, base M3) will be slower than these numbers; Pro
 and Max chips of any generation should be closer to them. Reports with your Mac model and FPS are
@@ -176,13 +182,20 @@ welcome in [Issues](https://github.com/satperm/iss_mac_port/issues).
 
 ## Status
 
-- The game runs from the first cutscene; saving and loading work.
+- The game runs from the first cutscene; saving and loading work. Played from a new game to the first
+  missions in Seattle (about 70 minutes) on an M3 Max without a crash. Later parts are untested.
 - GPU particles: smoke powers, rain, neon, sparks and fire.
-- Text and voice languages; controller, keyboard and mouse.
+- Text and voice languages; controller (USB-C DualSense tested), keyboard and mouse.
 - Launcher with save manager, crash reports and session logs.
+- Native GPU process (arm64) on by default.
+- First start compiles the shaders behind a loading screen (about 2 minutes on an M3 Max).
+- Screenshots at any time: ⌘ 8, F8 or the PS button.
 
 Fixed recently:
 
+- Black rounded squares in the sky and in smoke (NaN pixels spread by the game's blur passes).
+- Smoke flickers less: lowered wave64 `ReadFirstLane`, and the particle counter copied out of GDS only
+  after the compute shaders finished. Some flicker remains (see below).
 - Frames where the scenery vanished into fog during camera turns (a depth fast-clear bug).
 - The start-up crash right after the splash screen (a MoltenVK drawable race,
   [MoltenVK #2791](https://github.com/KhronosGroup/MoltenVK/issues/2791); the build uses a patched
@@ -192,9 +205,18 @@ Fixed recently:
 
 ## Known issues
 
-- **Frame rate.** Not a steady 60 FPS yet; effect-heavy scenes drop into the 30s. The limit is
-  the round trip between the game's CPU code and the GPU (about 20 waits per frame), not the GPU's
-  raw speed or the resolution.
+- **Smoke flickers.** Translucent white and dark smoke (fires, chimneys, drones) still flickers and
+  moves less naturally than on PS4: parts of it vanish for a frame. Better than before, cause not
+  fully found. The smoke of your own powers looks right.
+- **Frame rate.** Not a steady 60 FPS; heavy scenes drop to 25-40. In scripted scenes the limit is the
+  round trip between the game's CPU code and the GPU (about 20 waits per frame), not the GPU's raw speed
+  or the resolution. The drops seen while playing on the bridge are not explained yet.
+- **Not checked against PS4 yet:** bright points on the black D.U.P. walls in Seattle and hard-edged
+  black boxes behind some HUD icons. They may be the game's own look. The glitchy columns before
+  the tunnel to Seattle are the game's own effect, the PS4 version has them too.
+- **Only one Mac tested.** The downloadable app has not yet been run on another Mac. Gyro in the
+  graffiti scene is unconfirmed; the PS button screenshot too.
+- Cutscenes and movies cannot be skipped so far.
 - **Shaders the first-start list misses** still compile during play, with short stutters.
 - **Memory**: 6-8 GB in game; on 16 GB Macs close other large apps.
 - Some HUD elements (for example the current objective text) may be missing at times.
@@ -208,13 +230,15 @@ model, macOS version, the scene and the session log (see below). No game files, 
 
 Near term:
 
-1. **Particle performance**: fewer render-pass breaks around particle draws.
-2. **HUD**: find the missing objective text.
+1. **Smoke**: find the remaining flicker.
+2. **Frame rate** on the bridge and in other scenes while playing.
+3. **Particle performance**: fewer render-pass breaks around particle draws.
+4. **HUD**: find the missing objective text.
 
 Toward 60 FPS:
 
-3. **KosmicKrisp**, Khronos' successor to MoltenVK, now that the GPU side is native.
-4. A native Metal renderer, only if profiling shows the Vulkan layer is still the bottleneck.
+5. **KosmicKrisp**, Khronos' successor to MoltenVK, now that the GPU side is native.
+6. A native Metal renderer, only if profiling shows the Vulkan layer is still the bottleneck.
 
 ## Troubleshooting and logs
 

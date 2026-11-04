@@ -7,6 +7,7 @@
 #include "shader_recompiler/ir/microinstruction.h"
 
 namespace Shader::Backend::SPIRV {
+Id NanGuardF32(EmitContext& ctx, Id value); // emit_spirv_context_get_set.cpp
 
 struct ImageOperands {
     void Add(spv::ImageOperandsMask new_mask, Id value) {
@@ -301,7 +302,17 @@ void EmitImageWrite(EmitContext& ctx, IR::Inst* inst, u32 handle, Id coords, Id 
         image_ptr = ctx.OpAccessChain(single_image_ptr_type, image_ptr, std::array{lod});
     }
     const Id image = ctx.OpLoad(texture.image_type, image_ptr);
-    const Id texel = texture.is_integer ? ctx.OpBitcast(color_type, color) : color;
+    Id texel;
+    if (texture.is_integer) {
+        texel = ctx.OpBitcast(color_type, color);
+    } else {
+        // tlg: see EmitSetAttribute.
+        std::array<Id, 4> channels;
+        for (u32 i = 0; i < 4; ++i) {
+            channels[i] = NanGuardF32(ctx, ctx.OpCompositeExtract(ctx.F32[1], color, i));
+        }
+        texel = ctx.OpCompositeConstruct(color_type, channels);
+    }
     ctx.OpImageWrite(image, coords, texel, operands.mask, operands.operands);
 }
 

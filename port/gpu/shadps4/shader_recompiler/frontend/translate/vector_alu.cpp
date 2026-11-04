@@ -26,7 +26,7 @@ void Translator::EmitVectorAlu(const GcnInst& inst) {
     case Opcode::V_SUBREV_F32:
         return V_SUBREV_F32(inst);
     case Opcode::V_MAC_LEGACY_F32:
-        return V_MAC_F32(inst);
+        return V_MAC_LEGACY_F32(inst);
     case Opcode::V_MUL_LEGACY_F32:
         return V_MUL_LEGACY_F32(inst);
     case Opcode::V_MUL_F32:
@@ -436,7 +436,7 @@ void Translator::EmitVectorAlu(const GcnInst& inst) {
 
         // VOP3a
     case Opcode::V_MAD_LEGACY_F32:
-        return V_MAD_F32(inst);
+        return V_MAD_LEGACY_F32(inst);
     case Opcode::V_MAD_F32:
         return V_MAD_F32(inst);
     case Opcode::V_MAD_I32_I24:
@@ -751,6 +751,17 @@ void Translator::V_MAC_F32(const GcnInst& inst) {
     const auto src1 = GetSrc<IR::F32>(inst.src[1]);
     const auto dst0 = GetSrc<IR::F32>(inst.dst[0]);
     SetDst(inst.dst[0], ir.FPAdd(ir.FPMul(src0, src1), dst0));
+}
+
+// tlg (from bloodborne_mac_port): DX9 multiply: zero times anything (Inf and NaN included) is +0.
+// As a plain multiply 0 * Inf reached the targets as NaN.
+void Translator::V_MAC_LEGACY_F32(const GcnInst& inst) {
+    const auto src0 = GetSrc<IR::F32>(inst.src[0]);
+    const auto src1 = GetSrc<IR::F32>(inst.src[1]);
+    const auto dst0 = GetSrc<IR::F32>(inst.dst[0]);
+    const IR::F32 zero{ir.Imm32(0.0f)};
+    const IR::U1 either_zero{ir.LogicalOr(ir.FPEqual(src0, zero), ir.FPEqual(src1, zero))};
+    SetDst(inst.dst[0], ir.FPAdd(IR::F32{ir.Select(either_zero, zero, ir.FPMul(src0, src1))}, dst0));
 }
 
 void Translator::V_MADMK_F32(const GcnInst& inst) {
@@ -1399,6 +1410,15 @@ void Translator::V_MAD_F32(const GcnInst& inst) {
     const IR::F32 src1{GetSrc<IR::F32>(inst.src[1])};
     const IR::F32 src2{GetSrc<IR::F32>(inst.src[2])};
     SetDst(inst.dst[0], ir.FPAdd(ir.FPMul(src0, src1), src2));
+}
+
+void Translator::V_MAD_LEGACY_F32(const GcnInst& inst) {
+    const IR::F32 src0{GetSrc<IR::F32>(inst.src[0])};
+    const IR::F32 src1{GetSrc<IR::F32>(inst.src[1])};
+    const IR::F32 src2{GetSrc<IR::F32>(inst.src[2])};
+    const IR::F32 zero{ir.Imm32(0.0f)};
+    const IR::U1 either_zero{ir.LogicalOr(ir.FPEqual(src0, zero), ir.FPEqual(src1, zero))};
+    SetDst(inst.dst[0], ir.FPAdd(IR::F32{ir.Select(either_zero, zero, ir.FPMul(src0, src1))}, src2));
 }
 
 void Translator::V_MAD_I32_I24(const GcnInst& inst, bool is_signed) {

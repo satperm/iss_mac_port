@@ -549,3 +549,30 @@ loop: TLG_MAC_CS_LOOP_CAP (default 1M back-edges) did not prevent it.
   ISA table byte-identical. Metal's cache is per app: first start in a new bundle 127.7 s, second start
   7 s to the first frame. Not tried on another Mac or with the quarantine flag. gh is not installed here.
 - SDL's signal handlers swallowed SIGTERM, so Stop did nothing: SDL_NO_SIGNAL_HANDLERS=1 in run_macos.sh.
+- **2026-11-02 night, black rounded squares (both modes, opening forest, top left of the sky):** blobs are not
+  tile-aligned: one bad pixel spread by a blur window. Bit-tested NaN/Inf guard on float render targets and
+  storage images (NanGuardF32, meta version 14): 0 of 281 frames with black, was 7-50 per run. Porting
+  bloodborne 2c2da89 alone (bit tests, mac/mad legacy) did not fix it. Test: FPS ~42 -> ~38.5, maybe heat
+  (menu 112 instead of 120): measure. Owner has not confirmed by eye; dark smoke flicker not checked.
+  Also: SDL_UpdateGamepads in the game process (split had no pump; owner: controller works, gyro unconfirmed).
+  **All this is uncommitted, and the zip predates it.** Reproducer: out/latest-save (copy of the owner's save, no
+  route file), TLG_PAD_REPLAY_AUTO=1 taps Cross forever because gameplay_started() never fires in the split
+  (tlggpu_total_draws is the host's): also why TLG_PAD_RECORD_SECONDS records nothing. To fix.
+- 2026-11-03: NaN guard on/off (TLG_NAN_GUARD, own cache): route 39.1/39.0 vs 39.4/39.6, smoke 54 vs 57, fire 36.6 vs
+  33.6: no cost beyond noise. All runs are below yesterday's (route 42, smoke 60-64), guard off too: unexplained.
+  F8 / PS button: PNG in ~/Desktop/ISS Screenshots (tlggpu_screenshot); PS button unconfirmed on macOS.
+- 2026-11-04 smoke flicker (truck crash, copy in port/out/truck-save; tools in port/out/smoke-tools, ignored by git).
+  ALL translucent smoke+fire: one indirect draw a frame, VS 0xbbd2d927, PS 0x24dad4be (soft particles against depth, sun
+  shadow via Dref, array textures). Whole big patches vanish for one frame. Ruled out: depth read, textures, CPU vertex
+  count, TLG_PARTICLES=precise, compute fences, vblank 60, fixed GPU timestamps. Count path: GDS 0x404 -> copy to memory
+  (0x706ff58000 ring) -> CS 0xa16fa93a (thread 0 writes args = count*4 and 8-byte lists). 64 extra quads reduced dips
+  (4,3,2,11 vs ~15 of 400 shots) but owner saw artifacts: not a fix. Dip metric noise is huge (4-35, same settings): do not
+  trust one run; owner's BLIND A/B decided: TLG_RFL_ALL=1 (default on for ISS; less flicker, FPS same) and a GDS barrier.
+  GDS writes were not tracked, so no barrier before the copy. Barrier at every GDS-binding dispatch: owner preferred it blind, but bridge
+  FPS 61/49 vs 67/63. Now only in Rasterizer::CopyBuffer (TLG_GDS_BARRIER=0 off): bridge 67.3/67.6 vs 67.3;
+  THIS placement has NOT had a blind test. Flicker remains. Open: 5 wave64 CS with ReadFirstLane left on 32 lanes
+  (ce1675e0 e33305e5 a6931a4b a859c9f6 bfe009da, not in the dispatch timing top list, inconclusive), 30 shaders binding GDS.
+  Diagnostics kept: TLG_MAC_INDIRECT_TRACE, TLG_CS_WATCH, TLG_GDS_LOG. Owner's real save is the early one
+  ("Guests", 2%); Seattle is in port/out/save-backups/seattle-run-20261103. Columns before the tunnel = game effect (owner
+  checked PS4 video). Owner's play: bridge 25-30 FPS, not reproduced standing (67).
+  Release: .github/workflows/macos-release.yml, tag mac-v* (pre-release). Next: owner wants a gameplay video + Reddit post.

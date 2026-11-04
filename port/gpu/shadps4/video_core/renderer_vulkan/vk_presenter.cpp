@@ -22,6 +22,10 @@
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/texture_cache/image.h"
 
+#include <sys/wait.h>
+#include <fcntl.h>
+#include <spawn.h>
+#include <thread>
 #include <cstdlib>
 #include <algorithm>
 #include <array>
@@ -46,6 +50,8 @@
 #undef MemoryBarrier // tlg: winnt.h macro (through fmt), clashes with vk::MemoryBarrier
 #endif
 
+extern char** environ;
+
 namespace Vulkan {
 
 // tlg: frame stats the presentation threads accumulate and driver.cpp prints (it declares
@@ -59,9 +65,14 @@ std::atomic<u64> g_tlg_present_lock_wait_ns{0};
 // tlg: TLG_SHOT_DIR=<dir>: every TLG_SHOT_SECONDS (default 5) the presented game frame is
 // written as <dir>/shot-NNNN.ppm, so unattended runs can be looked at (scripts/macos/diag_run.sh;
 // screen capture needs a permission a terminal session does not have). Present thread only.
+// Cmd+8, F8 or the controller's PS button (tlggpu_screenshot): one shot for the player, as a PNG in
+// ~/Desktop/ISS Screenshots.
 namespace {
+std::atomic<bool> frame_shot_requested{false};
+
 struct FrameShots {
     std::string dir;
+    bool manual = false;
     std::chrono::milliseconds interval{5000};
     std::chrono::steady_clock::time_point next{};
     u32 count = 0;
@@ -89,10 +100,13 @@ struct FrameShots {
     void Record(const Instance& instance, vk::CommandBuffer cmdbuf, vk::Image image, u32 w, u32 h,
                 vk::Format format) {
         const auto now = std::chrono::steady_clock::now();
-        if (dir.empty() || now < next) {
+        manual = frame_shot_requested.exchange(false);
+        if (!manual && (dir.empty() || now < next)) {
             return;
         }
-        next = now + interval;
+        if (!manual) {
+            next = now + interval;
+        }
         const u64 needed = u64(w) * h * 4;
         if (needed > size) {
             if (buffer) {
@@ -110,7 +124,9 @@ struct FrameShots {
                                 &allocation, &info) != VK_SUCCESS) {
                 buffer = VK_NULL_HANDLE;
                 size = 0;
-                dir.clear();
+                if (!manual) {
+                    dir.clear();
+                }
                 return;
             }
             mapped = info.pMappedData;
@@ -133,22 +149,7 @@ struct FrameShots {
         pending = true;
     }
 
-    /// After the submission: waits for it and writes the shot.
-    void Write(const Instance& instance, vk::Fence done) {
-        if (!pending) {
-            return;
-        }
-        pending = false;
-        if (instance.GetDevice().waitForFences(done, true, 2'000'000'000) != vk::Result::eSuccess) {
-            return;
-        }
-        vmaInvalidateAllocation(instance.GetAllocator(), allocation, 0, VK_WHOLE_SIZE);
-        char path[64];
-        std::printf("GPU shot %u at %lld ms\n", count,
-                    (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::steady_clock::now().time_since_epoch()).count());
-        std::snprintf(path, sizeof(path), "/shot-%04u.ppm", count++);
-        std::ofstream out(dir + path, std::ios::binary);
+    void WritePixels(std::ostream& out) {
         out << "P6\n" << width << ' ' << height << "\n255\n";
         const auto* px = static_cast<const u8*>(mapped);
         std::vector<u8> row(u64(width) * 3);
@@ -161,6 +162,72 @@ struct FrameShots {
             }
             out.write(reinterpret_cast<const char*>(row.data()), std::streamsize(row.size()));
         }
+    }
+
+    void WritePlayerShot() {
+        const char* home = std::getenv("HOME");
+        const std::filesystem::path folder =
+            std::filesystem::path{home ? home : "/tmp"} / "Desktop" / "ISS Screenshots";
+        std::error_code ec;
+        std::filesystem::create_directories(folder, ec);
+        char name[64];
+        const std::time_t t = std::time(nullptr);
+        std::tm local{};
+        localtime_r(&t, &local);
+        std::strftime(name, sizeof(name), "ISS %Y-%m-%d %H-%M-%S", &local);
+        const auto ppm = folder / (std::string{name} + ".ppm");
+        const auto png = folder / (std::string{name} + ".png");
+        {
+            std::ofstream out(ppm, std::ios::binary);
+            WritePixels(out);
+            if (!out) {
+                TlgOverlay::Notice("Screenshot failed", 3.0f);
+                return;
+            }
+        }
+        std::printf("Screenshot: %s\n", png.c_str());
+        TlgOverlay::Notice("Screenshot saved: Desktop/ISS Screenshots", 2.0f);
+        // Converted off the present thread; the .ppm stays if sips fails.
+        std::thread([ppm, png] {
+            pid_t pid = 0;
+            const char* argv[] = {"/usr/bin/sips", "-s", "format", "png", ppm.c_str(), "--out", png.c_str(), nullptr};
+            int status = 1;
+            posix_spawn_file_actions_t actions;
+            posix_spawn_file_actions_init(&actions);
+            posix_spawn_file_actions_addopen(&actions, 1, "/dev/null", O_WRONLY, 0);
+            if (posix_spawn(&pid, argv[0], &actions, nullptr, const_cast<char* const*>(argv), environ) == 0) {
+                waitpid(pid, &status, 0);
+            }
+            posix_spawn_file_actions_destroy(&actions);
+            if (status == 0) {
+                std::error_code remove_ec;
+                std::filesystem::remove(ppm, remove_ec);
+            }
+        }).detach();
+    }
+
+    /// After the submission: waits for it and writes the shot.
+    void Write(const Instance& instance, vk::Fence done) {
+        if (!pending) {
+            return;
+        }
+        pending = false;
+        if (instance.GetDevice().waitForFences(done, true, 2'000'000'000) != vk::Result::eSuccess) {
+            return;
+        }
+        vmaInvalidateAllocation(instance.GetAllocator(), allocation, 0, VK_WHOLE_SIZE);
+        if (manual) {
+            WritePlayerShot();
+            return;
+        }
+        char path[64];
+        std::printf("GPU shot %u at %lld ms\n", count,
+                    (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch()).count());
+        std::snprintf(path, sizeof(path), "/shot-%04u.ppm", count++);
+        std::ofstream out(dir + path, std::ios::binary);
+        WritePixels(out);
+        const auto* px = static_cast<const u8*>(mapped);
         // tlg: TLG_CAPTURE_BROKEN=1: a shot whose top third is washed out (mean > 185, as
         // scripts/macos/broken_frames.py) after shot 40 requests one frame capture: the broken
         // views last ~0.5 s, so the next frame is broken too.
@@ -190,6 +257,10 @@ FrameShots& Shots() {
     return shots;
 }
 } // namespace
+
+void RequestFrameShot() {
+    frame_shot_requested = true;
+}
 
 /// tlg: takes the graphics queue lock for a present and counts the wait (TLG_FRAME_STATS).
 static std::unique_lock<std::mutex> LockQueueForPresent() {

@@ -162,6 +162,9 @@ static SDL_Gamepad *current_gamepad(void) {
     static uint64_t last_scan;
     if (!sdl_ready) sdl_ready = SDL_WasInit(SDL_INIT_GAMEPAD) ? 1 : SDL_InitSubSystem(SDL_INIT_GAMEPAD) ? 1 : -1;
     if (sdl_ready<0) { if (runtime_verbose()) { static int once; if (!once++) printf("Verbose: SDL gamepad subsystem failed to start (%s)\n",SDL_GetError()); } return NULL; }
+    /* Without a window in this process (the GPU process split: the window and its event loop are
+     * in tlggpu-host) nothing pumps SDL's events: poll the gamepads here. */
+    if (!SDL_WasInit(SDL_INIT_VIDEO)) SDL_UpdateGamepads();
     for (int i=0;i<MAX_GAMEPADS;++i)
         if (gamepads[i] && !SDL_GamepadConnected(gamepads[i])) {
             if (gamepads[i]==gamepad) gamepad=NULL;
@@ -732,6 +735,11 @@ static void sample_host(PadData *d) {
     d->connected=1; d->connected_count=connected_count ? connected_count : 1;
     d->timestamp=now_us();
     SDL_Gamepad *g=current_gamepad();
+    /* The PS button saves a screenshot (the game does not read it). */
+    static int guide_was_down;
+    const int guide_down=g && SDL_GetGamepadButton(g,SDL_GAMEPAD_BUTTON_GUIDE);
+    if (guide_down && !guide_was_down) tlggpu_screenshot();
+    guide_was_down=guide_down;
     if (tlggpu_overlay_captures_input()) return; /* settings menu open: neutral input */
     /* The window's keyboard: the GPU host's with the process split (TLG_GPU_PROCESS=1). */
     const bool *k=tlggpu_split_keyboard();

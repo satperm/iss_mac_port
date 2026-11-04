@@ -9,6 +9,7 @@
 #include "shader_recompiler/ir/attribute.h"
 #include "shader_recompiler/ir/microinstruction.h"
 #include "shader_recompiler/ir/patch.h"
+#include "shader_recompiler/recompiler_toggles.h"
 #include "shader_recompiler/runtime_info.h"
 
 #include <magic_enum/magic_enum.hpp>
@@ -275,6 +276,19 @@ Id EmitGetAttributeU32(EmitContext& ctx, IR::Attribute attr, u32 comp) {
     }
 }
 
+// tlg: NaN and Inf never enter a float render target or storage image (NanGuardF32, tested on the
+// bits, as Metal's fast math folds isnan). The game's blur passes spread one such pixel over their
+// whole window: black rounded squares in the sky of the opening forest.
+Id NanGuardF32(EmitContext& ctx, Id value) {
+    if (!Shader::Toggles::NanGuard()) {
+        return value;
+    }
+    const Id magnitude = ctx.OpBitwiseAnd(ctx.U32[1], ctx.OpBitcast(ctx.U32[1], value),
+                                          ctx.ConstU32(0x7fffffffu));
+    return ctx.OpSelect(ctx.F32[1], ctx.OpUGreaterThanEqual(ctx.U1[1], magnitude, ctx.ConstU32(0x7f800000u)),
+                        ctx.ConstF32(f32{0.0}), value);
+}
+
 void EmitSetAttribute(EmitContext& ctx, IR::Attribute attr, Id value, u32 element) {
     const auto op_store = [&](Id pointer) {
         const auto [component_type, is_integer] = OutputAttrComponentType(ctx, attr);
@@ -304,6 +318,9 @@ void EmitSetAttribute(EmitContext& ctx, IR::Attribute attr, Id value, u32 elemen
     if (IR::IsMrt(attr)) {
         const u32 index{u32(attr) - u32(IR::Attribute::RenderTarget0)};
         const auto& info{ctx.frag_outputs.at(index)};
+        if (!OutputAttrComponentType(ctx, attr).second) {
+            value = NanGuardF32(ctx, value);
+        }
         if (info.num_components == 1) {
             return op_store(info.id);
         } else {
