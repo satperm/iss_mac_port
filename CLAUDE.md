@@ -576,3 +576,8 @@ loop: TLG_MAC_CS_LOOP_CAP (default 1M back-edges) did not prevent it.
   ("Guests", 2%); Seattle is in port/out/save-backups/seattle-run-20261103. Columns before the tunnel = game effect (owner
   checked PS4 video). Owner's play: bridge 25-30 FPS, not reproduced standing (67).
   Release: .github/workflows/macos-release.yml, tag mac-v* (pre-release). Next: owner wants a gameplay video + Reddit post.
+- 2026-11-05: controller dead in the release app although "gamepad connected": tlg-probe sits inside ISS.app there (in the
+  local app it is a symlink to out/), macOS treats it as a background app and Game Controller withholds input; the window is
+  the GPU host's. SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 (run_macos.sh) fixes it, confirmed on the downloaded zip by the
+  owner including gyro in the graffiti scene. Side effect: pad input also while another app is in front.
+  Quick smoke test scene (owner): the very first intro screen with text.

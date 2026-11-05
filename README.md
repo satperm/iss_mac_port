@@ -214,8 +214,9 @@ Fixed recently:
 - **Not checked against PS4 yet:** bright points on the black D.U.P. walls in Seattle and hard-edged
   black boxes behind some HUD icons. They may be the game's own look. The glitchy columns before
   the tunnel to Seattle are the game's own effect, the PS4 version has them too.
-- **Only one Mac tested.** The downloadable app has not yet been run on another Mac. Gyro in the
-  graffiti scene is unconfirmed; the PS button screenshot too.
+- **Only one Mac tested.** The downloadable app has not yet been run on another Mac. The PS button
+  screenshot is unconfirmed.
+- The controller keeps reaching the game while another app is in front.
 - Cutscenes and movies cannot be skipped so far.
 - **Shaders the first-start list misses** still compile during play, with short stutters.
 - **Memory**: 6-8 GB in game; on 16 GB Macs close other large apps.

@@ -151,6 +151,9 @@ export TLG_READBACK_LINEAR=${TLG_READBACK_LINEAR:-1}
 export TLG_DEFERRED_READBACK=${TLG_DEFERRED_READBACK:-1}
 probe_args=("$out/boot-linked.bin" --content-profile "$out/content.bin" --patches "$out/patches.bin" --app0 "$game"
     --user "${TLG_USER_DIR:-$data/user}" --timeout "${TLG_TIMEOUT:-0}" ${isa_args[@]+"${isa_args[@]}"} "$@")
+# The controller is read here, but the window belongs to the GPU process: inside a release ISS.app
+# macOS takes this process for a background app, and Game Controller gives it no input without this.
+export SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=${SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS:-1}
 # SDL turns SIGTERM into a quit event that nothing in tlg-probe reads: the launcher's Stop did nothing.
 export SDL_NO_SIGNAL_HANDLERS=${SDL_NO_SIGNAL_HANDLERS:-1}
 # First-start shader compilation (vk_precompile.h): the job list from the player's game files, then

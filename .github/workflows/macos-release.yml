@@ -66,5 +66,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 ||
-              gh release create "$GITHUB_REF_NAME" --prerelease --title "$GITHUB_REF_NAME" --notes "See README.md."
+              gh release create "$GITHUB_REF_NAME" --prerelease --title "$GITHUB_REF_NAME" --notes-file - <<'NOTES'
+          Test version. You need your own decrypted copy of the game with update 1.07.
+
+          The app is not notarised, so macOS blocks it after download. Move ISS.app to Applications, then run:
+
+              xattr -dr com.apple.quarantine /Applications/ISS.app
+
+          See the README for setup and known issues.
+          NOTES
           gh release upload "$GITHUB_REF_NAME" "$ZIP" --clobber
