@@ -193,6 +193,9 @@ welcome in [Issues](https://github.com/satperm/iss_mac_port/issues).
 
 Fixed recently:
 
+- **About 3% more FPS on the bridge** (M3 Max, 65.5 -> 67.5 on average, steadier lows). A stencil test
+  that writes nothing keeps the depth buffer read-only, so it no longer changes layout, ending the render
+  pass, each time the game samples it (`TLG_STENCIL_RO=0` restores the old behaviour).
 - **Smoke no longer flickers** (fires, chimneys, the intro text). The game sorts its smoke particles on
   the GPU in steps that rely on the PS4's 64 lanes running in lockstep; Apple GPUs run 32 at a time, so
   the steps raced and particles were duplicated or dropped every frame. Compute shaders now get a

@@ -4632,8 +4632,31 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
 
         const bool has_stencil = image.info.props.has_stencil;
         // Stencil writes can be enabled while depth writes are off.
-        const bool stencil_write =
-            has_stencil && regs.depth_control.stencil_enable && !desc.view_info.is_storage;
+        // tlg: a stencil test that changes nothing (write mask 0 or every op Keep) keeps the
+        // read-only depth/stencil layout. Otherwise the depth buffer, sampled in the same frame,
+        // switches DepthReadOnlyStencilAttachment <-> DepthStencilReadOnly and each switch ends
+        // the render pass (~1,700 a second on the bridge). TLG_STENCIL_RO=0: as before.
+        static const bool stencil_ro = [] {
+            const char* env = std::getenv("TLG_STENCIL_RO");
+            return !(env && *env == '0');
+        }();
+        const auto stencil_changes = [&] {
+            const auto& sc = regs.stencil_control;
+            using SF = AmdGpu::StencilFunc;
+            const bool front = regs.stencil_ref_front.stencil_write_mask != 0 &&
+                               (sc.stencil_fail_front != SF::Keep ||
+                                sc.stencil_zpass_front != SF::Keep ||
+                                sc.stencil_zfail_front != SF::Keep);
+            const bool back = regs.depth_control.backface_enable &&
+                              regs.stencil_ref_back.stencil_write_mask != 0 &&
+                              (sc.stencil_fail_back != SF::Keep ||
+                               sc.stencil_zpass_back != SF::Keep ||
+                               sc.stencil_zfail_back != SF::Keep);
+            return front || back || is_stencil_clear;
+        };
+        const bool stencil_write = has_stencil && regs.depth_control.stencil_enable &&
+                                   !desc.view_info.is_storage &&
+                                   (!stencil_ro || stencil_changes());
         const auto new_layout = desc.view_info.is_storage
                                     ? has_stencil ? vk::ImageLayout::eDepthStencilAttachmentOptimal
                                                   : vk::ImageLayout::eDepthAttachmentOptimal
