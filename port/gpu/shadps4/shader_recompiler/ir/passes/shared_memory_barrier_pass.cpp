@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <queue>
 #include <unordered_set>
+#include <vector>
+#include "common/logging/log.h"
 #include "shader_recompiler/ir/breadth_first_search.h"
 #include "shader_recompiler/ir/passes/ir_passes.h"
 #include "shader_recompiler/ir/ir_emitter.h"
@@ -264,6 +266,264 @@ void SharedMemoryBarrierPass(IR::Program& program, const RuntimeInfo& runtime_in
         if (node.type == Type::Block && divergence_depth == 0) {
             EmitBarrierInBlock(node.data.block, ctx.subgroup);
         }
+    }
+}
+
+// --- Wave memory barriers (ported from iss_pc renderer 2, WaveMemoryBarrierPass) ---------------
+
+static bool IsLoadBuffer(const IR::Inst& inst) {
+    const IR::Opcode opcode = inst.GetOpcode();
+    return opcode >= IR::Opcode::LoadBufferU8 && opcode <= IR::Opcode::LoadBufferFormatF32;
+}
+
+static bool IsStoreBuffer(const IR::Inst& inst) {
+    const IR::Opcode opcode = inst.GetOpcode();
+    return opcode >= IR::Opcode::StoreBufferU8 && opcode <= IR::Opcode::StoreBufferFormatF32;
+}
+
+// Values that may differ between the invocations of a workgroup split across host subgroups:
+// invocation ids, subgroup operations (only uniform within one subgroup) and atomics (each
+// invocation receives its own previous value).
+static bool IsWorkgroupVaryingSource(const IR::Inst* inst) {
+    const IR::Opcode opcode = inst->GetOpcode();
+    if ((opcode >= IR::Opcode::SharedAtomicIAdd32 && opcode <= IR::Opcode::SharedAtomicCmpSwap64) ||
+        (opcode >= IR::Opcode::BufferAtomicIAdd32 && opcode <= IR::Opcode::BufferAtomicFCmpSwap32) ||
+        (opcode >= IR::Opcode::ImageAtomicIAdd32 && opcode <= IR::Opcode::ImageAtomicCmpSwap32)) {
+        return true;
+    }
+    switch (opcode) {
+    case IR::Opcode::GetAttributeU32: {
+        const IR::Attribute attribute = inst->Arg(0).Attribute();
+        return attribute == IR::Attribute::LocalInvocationId ||
+               attribute == IR::Attribute::LocalInvocationIndex ||
+               attribute == IR::Attribute::GlobalInvocationId ||
+               attribute == IR::Attribute::SubgroupLtMask;
+    }
+    case IR::Opcode::LaneId:
+    case IR::Opcode::Ballot:
+    case IR::Opcode::BallotFindLsb:
+    case IR::Opcode::ReadLane:
+    case IR::Opcode::ReadFirstLane:
+    case IR::Opcode::WriteLane:
+    case IR::Opcode::QuadBroadcast:
+    case IR::Opcode::MaskedBitCount32:
+    case IR::Opcode::DataAppend:
+    case IR::Opcode::DataConsume:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool IsWorkgroupDivergent(const IR::U1& cond) {
+    if (cond.IsImmediate()) {
+        return false;
+    }
+    return IR::BreadthFirstSearch(cond.Inst(), [](IR::Inst* inst) -> std::optional<bool> {
+               if (IsWorkgroupVaryingSource(inst)) {
+                   return true;
+               }
+               return std::nullopt;
+           }) == true;
+}
+
+// Instructions whose order with the barriers of a workgroup matters: memory accesses and
+// barriers. Code after a conditional block without them cannot observe which invocations ran it.
+static bool HasOrderedInst(const IR::Block& block) {
+    for (const IR::Inst& inst : block.Instructions()) {
+        const IR::Opcode opcode = inst.GetOpcode();
+        if (IsLoadBuffer(inst) || IsStoreBuffer(inst) || IsLoadShared(inst) ||
+            IsWriteShared(inst) || opcode == IR::Opcode::Barrier ||
+            opcode == IR::Opcode::WorkgroupMemoryBarrier ||
+            opcode == IR::Opcode::DeviceMemoryBarrier ||
+            (opcode >= IR::Opcode::SharedAtomicIAdd32 &&
+             opcode <= IR::Opcode::SharedAtomicCmpSwap64) ||
+            (opcode >= IR::Opcode::BufferAtomicIAdd32 &&
+             opcode <= IR::Opcode::BufferAtomicFCmpSwap32) ||
+            (opcode >= IR::Opcode::ImageAtomicIAdd32 &&
+             opcode <= IR::Opcode::ImageAtomicCmpSwap32) ||
+            opcode == IR::Opcode::ImageWrite || opcode == IR::Opcode::DataAppend ||
+            opcode == IR::Opcode::DataConsume) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// GCN waves run their 64 invocations in lockstep: within a wave, code can exchange data through
+// buffer memory without barriers, ordering its stores before the loads of the next step with
+// s_waitcnt only (the GPU particle sort merging runs no longer than a wave in a loop). Hosts with
+// smaller subgroups (Apple and NVIDIA: 32) split each wave into parts that run independently, and
+// the compiler may move the loads of a step before the stores of the previous one: the steps
+// race, the sorted list gets duplicated and missing particles, and the smoke flickers (iss_pc
+// #557: 1203-1632 duplicated quads a frame of ps 24dad4be / vs bbd2d927 -> 0). Workgroups spanning
+// several host subgroups are synchronized after the buffer stores of their uniform loops that
+// also load buffer memory. Invocations that skipped such a loop with a condition that leads to
+// the end of the shader do not take part in the barriers.
+void WaveMemoryBarrierPass(IR::Program& program, const RuntimeInfo& runtime_info,
+                           const Profile& profile) {
+    if (!Toggles::WaveMemoryBarriers() || program.info.hw_stage != HwStage::Compute) {
+        return;
+    }
+    const auto& cs_info = runtime_info.hw.cs;
+    const u32 threadgroup_size =
+        cs_info.workgroup_size[0] * cs_info.workgroup_size[1] * cs_info.workgroup_size[2];
+    if (profile.subgroup_size == 0 || threadgroup_size <= profile.subgroup_size) {
+        return;
+    }
+    using Type = IR::AbstractSyntaxNode::Type;
+    const IR::AbstractSyntaxList& list = program.syntax_list;
+    const size_t num_nodes = list.size();
+
+    // Matching structure nodes: the EndIf of each If, the Repeat of each Loop (by merge block).
+    std::vector<size_t> end_of(num_nodes, num_nodes);
+    {
+        std::vector<size_t> open;
+        for (size_t i = 0; i < num_nodes; ++i) {
+            const auto& node = list[i];
+            if (node.type == Type::If || node.type == Type::Loop) {
+                open.push_back(i);
+            } else if (node.type == Type::EndIf || node.type == Type::Repeat) {
+                if (open.empty()) {
+                    return;
+                }
+                const size_t start = open.back();
+                open.pop_back();
+                const auto& start_node = list[start];
+                const bool matches =
+                    node.type == Type::EndIf
+                        ? start_node.type == Type::If &&
+                              start_node.data.if_node.merge == node.data.end_if.merge
+                        : start_node.type == Type::Loop &&
+                              start_node.data.loop.merge == node.data.repeat.merge;
+                if (!matches) {
+                    return; // Unexpected nesting: leave the shader as it is.
+                }
+                end_of[start] = i;
+            }
+        }
+        if (!open.empty()) {
+            return;
+        }
+    }
+    // An If is a tail if when nothing after its EndIf accesses memory or synchronizes: the
+    // invocations that do not take it only leave the shader.
+    std::vector<bool> inert_suffix(num_nodes + 1, true);
+    for (size_t i = num_nodes; i-- > 0;) {
+        const auto& node = list[i];
+        bool inert = inert_suffix[i + 1];
+        switch (node.type) {
+        case Type::Block:
+            inert = inert && !HasOrderedInst(*node.data.block);
+            break;
+        case Type::EndIf:
+        case Type::Return:
+        case Type::Unreachable:
+            break;
+        default:
+            inert = false;
+            break;
+        }
+        inert_suffix[i] = inert;
+    }
+    const auto loads_in_range = [&](size_t first, size_t last) {
+        for (size_t i = first; i <= last && i < num_nodes; ++i) {
+            if (list[i].type != Type::Block) {
+                continue;
+            }
+            for (const IR::Inst& inst : list[i].data.block->Instructions()) {
+                if (IsLoadBuffer(inst)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+    NodeSet divergent_loops;
+    for (const IR::AbstractSyntaxNode& node : list) {
+        if (node.type == Type::Repeat && IsWorkgroupDivergent(node.data.repeat.cond)) {
+            divergent_loops.emplace(node.data.repeat.merge);
+        } else if (node.type == Type::Break && IsWorkgroupDivergent(node.data.break_node.cond)) {
+            divergent_loops.emplace(node.data.break_node.merge);
+        }
+    }
+
+    struct Scope {
+        size_t end;
+        bool divergent;    ///< Invocations of the workgroup may take different paths in it.
+        bool uniform_loop; ///< A loop all invocations iterate together.
+        bool loop_loads;   ///< The loop body loads buffer memory.
+    };
+    std::vector<Scope> scopes;
+    u32 num_barriers{};
+    for (size_t i = 0; i < num_nodes; ++i) {
+        while (!scopes.empty() && scopes.back().end < i) {
+            scopes.pop_back();
+        }
+        const auto& node = list[i];
+        if (node.type == Type::If) {
+            const size_t end = end_of[i];
+            const bool tail = end < num_nodes && inert_suffix[end + 1];
+            const bool divergent = !tail && IsWorkgroupDivergent(node.data.if_node.cond);
+            scopes.push_back({end, divergent, false, false});
+            continue;
+        }
+        if (node.type == Type::Loop) {
+            const size_t end = end_of[i];
+            const bool divergent = divergent_loops.contains(node.data.loop.merge);
+            scopes.push_back({end, divergent, !divergent, !divergent && loads_in_range(i, end)});
+            continue;
+        }
+        if (node.type != Type::Block) {
+            continue;
+        }
+        bool divergent = false;
+        bool in_loop_with_loads = false;
+        for (const auto& scope : scopes) {
+            divergent |= scope.divergent;
+        }
+        for (auto it = scopes.rbegin(); it != scopes.rend(); ++it) {
+            if (it->uniform_loop) {
+                in_loop_with_loads = it->loop_loads;
+                break;
+            }
+        }
+        if (divergent || !in_loop_with_loads) {
+            continue;
+        }
+        IR::Block* const block = node.data.block;
+        // A barrier after each store followed by a load in the block, and after the last store.
+        bool pending_store = false;
+        for (auto it = block->Instructions().begin(); it != block->Instructions().end(); ++it) {
+            if (IsLoadBuffer(*it) && pending_store) {
+                IR::IREmitter ir{*block, it};
+                ir.WorkgroupMemoryBarrier();
+                ir.Barrier();
+                ++num_barriers;
+                pending_store = false;
+            }
+            if (IsStoreBuffer(*it)) {
+                pending_store = true;
+            }
+        }
+        if (pending_store) {
+            auto last_store = block->Instructions().end();
+            for (auto it = block->Instructions().begin(); it != block->Instructions().end(); ++it) {
+                if (IsStoreBuffer(*it)) {
+                    last_store = it;
+                }
+            }
+            IR::IREmitter ir{*block, std::next(last_store)};
+            ir.WorkgroupMemoryBarrier();
+            ir.Barrier();
+            ++num_barriers;
+        }
+    }
+    if (num_barriers != 0) {
+        LOG_INFO(Render_Recompiler,
+                 "Compute shader {:#x}: {} buffer memory barriers for {} invocations exchanging "
+                 "data within GCN waves",
+                 program.info.pgm_hash, num_barriers, threadgroup_size);
     }
 }
 

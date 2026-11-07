@@ -581,3 +581,11 @@ loop: TLG_MAC_CS_LOOP_CAP (default 1M back-edges) did not prevent it.
   the GPU host's. SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 (run_macos.sh) fixes it, confirmed on the downloaded zip by the
   owner including gyro in the graffiti scene. Side effect: pad input also while another app is in front.
   Quick smoke test scene (owner): the very first intro screen with text.
+- 2026-11-07 SMOKE FLICKER FIXED: WaveMemoryBarrierPass (shared_memory_barrier_pass.cpp, ported from iss_pc renderer 2,
+  analysis in iss_pc #557 gist by nickospalatianos-blip): the particle sort exchanges data through buffer memory within a
+  GCN wave without barriers; 32-lane hosts race (duplicated/dropped particles). TLG_WAVE_MEM_BARRIERS (ISS default on,
+  shader salt bit 256). Test without user: first launch (empty save + cache copy), X at 30 s, the intro text crawl smoke;
+  port/out/smoke-tools/crawl_dump.sh <label> [VAR=val] dumps 180 consecutive frames at 50 s (TLG_FRAME_DUMP_TRIGGER/COUNT)
+  and rawdip.py counts one-frame dips: before 3-10 dip frames / 0.6-1.0% cells, with the pass 0 / 0.00% (twice), =0 back
+  to 0.65%. Owner confirmed by eye in the crawl and at the truck. Not tried yet: the LDS barrier pass never runs on
+  MoltenVK (needs_lds_barriers), the gist also enabled lds_barriers_multi_wave.

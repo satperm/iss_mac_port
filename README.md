@@ -9,7 +9,7 @@ It is a macOS fork of [iss_pc](https://github.com/HayatoG/iss_pc), the native PC
 
 > **Status: first test version, work in progress.** The story can be played from the start with
 > GPU particles (smoke, rain, sparks). Tested on one Mac (M3 Max, 36 GB) as far as the first missions
-> in Seattle. Translucent smoke still flickers. On that Mac expect about 50-60 FPS in calm outdoor
+> in Seattle. On that Mac expect about 50-60 FPS in calm outdoor
 > scenes and 25-45 FPS in heavy ones. See
 > [Expected performance](#expected-performance) and [Known issues](#known-issues).
 
@@ -193,9 +193,12 @@ welcome in [Issues](https://github.com/satperm/iss_mac_port/issues).
 
 Fixed recently:
 
+- **Smoke no longer flickers** (fires, chimneys, the intro text). The game sorts its smoke particles on
+  the GPU in steps that rely on the PS4's 64 lanes running in lockstep; Apple GPUs run 32 at a time, so
+  the steps raced and particles were duplicated or dropped every frame. Compute shaders now get a
+  barrier there (`TLG_WAVE_MEM_BARRIERS`, from the analysis in
+  [iss_pc #557](https://github.com/HayatoG/iss_pc/issues/557) on NVIDIA, which also has 32 lanes).
 - Black rounded squares in the sky and in smoke (NaN pixels spread by the game's blur passes).
-- Smoke flickers less: lowered wave64 `ReadFirstLane`, and the particle counter copied out of GDS only
-  after the compute shaders finished. Some flicker remains (see below).
 - Frames where the scenery vanished into fog during camera turns (a depth fast-clear bug).
 - The start-up crash right after the splash screen (a MoltenVK drawable race,
   [MoltenVK #2791](https://github.com/KhronosGroup/MoltenVK/issues/2791); the build uses a patched
@@ -205,9 +208,6 @@ Fixed recently:
 
 ## Known issues
 
-- **Smoke flickers.** Translucent white and dark smoke (fires, chimneys, drones) still flickers and
-  moves less naturally than on PS4: parts of it vanish for a frame. Better than before, cause not
-  fully found. The smoke of your own powers looks right.
 - **Frame rate.** Not a steady 60 FPS; heavy scenes drop to 25-40. In scripted scenes the limit is the
   round trip between the game's CPU code and the GPU (about 20 waits per frame), not the GPU's raw speed
   or the resolution. The drops seen while playing on the bridge are not explained yet.
@@ -231,15 +231,14 @@ model, macOS version, the scene and the session log (see below). No game files, 
 
 Near term:
 
-1. **Smoke**: find the remaining flicker.
-2. **Frame rate** on the bridge and in other scenes while playing.
-3. **Particle performance**: fewer render-pass breaks around particle draws.
-4. **HUD**: find the missing objective text.
+1. **Frame rate** on the bridge and in other scenes while playing.
+2. **Particle performance**: fewer render-pass breaks around particle draws.
+3. **HUD**: find the missing objective text.
 
 Toward 60 FPS:
 
-5. **KosmicKrisp**, Khronos' successor to MoltenVK, now that the GPU side is native.
-6. A native Metal renderer, only if profiling shows the Vulkan layer is still the bottleneck.
+4. **KosmicKrisp**, Khronos' successor to MoltenVK, now that the GPU side is native.
+5. A native Metal renderer, only if profiling shows the Vulkan layer is still the bottleneck.
 
 ## Troubleshooting and logs
 
