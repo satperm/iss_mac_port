@@ -1,3 +1,6 @@
+> **Agents: read `AGENTS.md` first** (rules, build, measuring, what is already known, priorities).
+> This file is the long engineering diary behind it.
+
 # CLAUDE.md — ISS macOS port (branch `macos`)
 
 Fork of HayatoG/iss_pc. x86-64 loader + HLE runtime (`port/src`) + shadPS4-derived Vulkan core
@@ -589,3 +592,139 @@ loop: TLG_MAC_CS_LOOP_CAP (default 1M back-edges) did not prevent it.
   and rawdip.py counts one-frame dips: before 3-10 dip frames / 0.6-1.0% cells, with the pass 0 / 0.00% (twice), =0 back
   to 0.65%. Owner confirmed by eye in the crawl and at the truck. Not tried yet: the LDS barrier pass never runs on
   MoltenVK (needs_lds_barriers), the gist also enabled lds_barriers_multi_wave.
+
+## Session 2026-11-07/08: smoke, flares, compute queue, launcher (local paths are the owner's Mac)
+
+
+State: master of this work = branch `macos` at e16ab52 (pushed). Working copy has UNCOMMITTED experiments, all default
+off (keep or drop; never stage the fsr-vulkan submodule):
+- TLG_LDS_BARRIERS=1 (force the LDS barrier pass on MoltenVK; salt bit 512): no visible/FPS change.
+- TLG_LOSSLESS=1 / TLG_LOSSLESS_PROBE=1 (image.cpp, vk_runtime.cpp UpgradeUsage, image_view.cpp stats): textures without
+  ShaderWrite/PixelFormatView, upgraded once on need (5-9 of ~2,000 images). Real mode: +0-3%, noise. Probe's +10% came
+  from broken rendering. Depth views count depth writes as is_storage (don't upgrade depth for that).
+- TLG_ACB_FENCE_WAITS=1 (liverpool.cpp): compute-queue WaitRegMem uses pending/deferred fence values; compute ReleaseMem
+  labels noted. No gain alone; needed with unified compute fences (GPU thread idle 0.7% -> 69%, 41 -> 44 FPS).
+- RunComputeReleaseMem passes its label to DeferUnifiedFence (only used when TLG_UNIFIED_FENCE_WAITS=1).
+- TLG_LAZY_COMPUTE_FLUSH=1 (DrawPipe::SetIdleHandler + Rasterizer::FlushLazyFences): deferred compute fences submit when
+  stage B idles: Vulkan submissions 64 -> 37/frame, FPS unchanged.
+- TLG_MUTEX_SPIN_US=N / TLG_MUTEX_STATS=1 (src/runtime_mutex.c): ~16k contended guest locks/s, spin wins almost all,
+  no FPS gain.
+- Diagnostics worth keeping: TLG_SKIP_CS=<hex,...> (drop compute dispatches), TLG_OCCLUSION_LOG=2 (draws counted by
+  occlusion queries: pass size, depth view, depth test/func).
+
+Measurement notes: always alternate variants, >=3-4 runs each (bridge spread 10-15% run to run); fps.sh <save> <label>
+<secs> [VAR=val] in port/out/smoke-tools (now syncs the cache back with rsync --delete: ditto merged stale cache files and
+the next warm-up crashed in MoltenVK with "cannot reserve buffer(0)"). Save copies: port/out/bridge-fresh (consistent
+cache; bridge after the crash), truck-save. Camera sweep: PAD_SCRIPT=scripts/macos/pad/camera_sweep.txt. Builds for tests:
+TLG_LTO=OFF bash scripts/macos/build_gpu_arm64.sh (~4 min); releases use LTO (CI). Owner plays with run sessions via
+diag_run.sh play-<x> 3600 TLG_USER_DIR=$PWD/out/testplay (copy of bridge-fresh), host input on.
+
+Profile (Metal System Trace, bridge ~61 FPS): GPU 81% busy (fragment 56%, compute 28.5%, vertex 19%), ~10.6k encoders/s
+(~175/frame, median 13 us). MoltenVK CPU share small. Pass enders: FlushBarriers ~10k/s; colour General->General
+feedback ~2,000/s can't stay in-pass (MoltenVK restarts Metal passes on General barriers: Apple GPUs can't read an
+attachment written in the same pass; real fix = framebuffer fetch, days). ColorAttachment->ShaderRead ~2,600/s is a real
+transition. TLG_MAC_KEEP_PASS=1: -3-12% passes, no FPS. Fast math: already effectively on (no NoContraction emitted,
+MoltenVK ON_DEMAND). TLG_GPU_PROFILE timestamps read 0 on MoltenVK (useless). Owner's heavy spot near the police car:
+~7,500 draws/frame, GPU thread idle 0.5%, ~5 us/draw -> ~25-30 FPS: CPU-bound draw processing (future target).
+TLG_LOD_SCALE=0.5 lever exists live in the ⌘, menu ("LOD distance"); owner was judging quality, no verdict yet.
+
+Open bug 1 (do first): HEADLIGHT/LAMP FLARES SHOW THROUGH WALLS and from far away (owner screenshots
+~/Desktop/ISS Screenshots/ISS 2026-11-07 20-50-50.png). Confirmed driven by occlusion queries: TLG_OCCLUSION_MODE=3 (all
+zero) hides them. Mode 4 counts every query (0 dropped, ~2,900/s); results written correctly (copyQueryPoolResults,
+eWait, valid bits). TLG_OCCLUSION_LOG=2 shows the test object (vs 3279e8b8 / ps ebb91ff5, 24 indices) drawn in three
+passes: 480x270 with a 512x384 D32 downsampled depth, test on, func 6; a no-attachment pass (reported 16384x16384), depth
+test off (likely the total-area reference); 1920x1080 with the full 2048x1152 depth, test on. Hypothesis: the 512x384
+downsampled depth is wrong (e.g. all far for reverse-Z GEQUAL) so every flare passes. Next: dump that depth image at the
+query (TLG_DIAG_DEPTH / frame dump tools) and check who writes it; also check the no-attachment pass clips to the guest
+viewport/scissor. Any fix must not cost FPS.
+
+Open bug 2: SMOKE VANISHES AT SOME CAMERA ANGLES (police car hood, bridge). Not occlusion-related. Fixed by
+TLG_UNIFIED_COMPUTE_FENCES=1 (compute fences written at GPU completion; particle survivor counts correct), owner
+confirmed by eye, but 60 -> 44 FPS (with TLG_ACB_FENCE_WAITS=1; 41 without). Cost = real extra particle compute
+(4.7 -> 9.7 ms/frame GPU, writes in place 2x), spread over many shaders (TLG_SKIP_CS of 5b1e2375, cde8e3d8, 8a4ea184,
+a4edc92b, 19100b24, 773bab89: each <= +1.6 FPS), not barriers (TLG_WAVE_MEM_BARRIERS=0 same), not submissions. Main guest
+thread waits ~75% on GPU fences (guest+0x53b340) either way. Not shippable until the FPS is back. Ideas: find why the
+early-fence path skips systems (which fences/labels, maybe only some need GPU-completion order), shader timeline in
+Instruments (Shader Timeline option) for per-shader cost.
+
+### 2026-11-08 session results (branch `perf-quality-view` = macos + 7 cherry-picked upstream View commits; rest uncommitted)
+- Flares (bug 1): occlusion queries verified correct. TLG_OCCLUSION_LOG=2 now also prints each counted query's sample
+  count (read back later) with its pass; TLG_DEPTH_TRACE=<addr> logs draws into a depth target; TLG_IMAGE_TRACE=<addr>
+  logs texture-cache lookups. The 480x270 depth (0x7107e00000) is cleared then filled each frame by proxy occluder meshes
+  (vs 0fc0b59e/c01162f7/10d037fb) before the query draws; walls give 0 samples. Not reproduced by script: needs the owner's
+  camera spot. Possibly the owner's "fixed" control run was mode 3. Parked.
+- Upstream iss_pc View commits (quality_floor / dyn_cull / draw_budget / quality_target_fps) cherry-picked, build OK. Truck
+  scene: floor 0 36.5 FPS / 4,776 draws; 4: 39.5 (smoke over the fire gone); 8: 42 (background trees and bushes gone); 11: 46;
+  14: 77.5 / 539 draws ("potato graphics", owner). Not a default; at most a manual option.
+- Truck scene is GPU-bound: Metal trace 84% busy (fragment 53%, compute 32%, vertex 15%), ~190 passes/frame.
+- Particles through MoltenVK tessellation (indirect rect lists ~108/frame): dropping them all (TLG_MAC_SKIP_RECT_INDIRECT=1)
+  gives only +2.7% at the truck and +2% on the bridge with correct smoke. Raising TESS_PER_SUBMIT/IN_FLIGHT: 0.
+- Correct smoke (TLG_UNIFIED_COMPUTE_FENCES=1): dispatches double (~400 -> ~1,000 a frame), compute 43% of GPU time.
+  - MoltenVK patch MVK_TLG_CONCURRENT_DISPATCH=1 (deps/src/MoltenVK-src, uncommitted; concurrent compute encoders + memory
+    barrier at each Vulkan barrier): 0 gain (barriers between nearly every dispatch). Installed lib = old one
+    (deps/*/lib/libMoltenVK.dylib.pre-concurrent; patched build saved as .concurrent).
+  - TLG_MAC_LOAD_BOUNDS=0 (no software bounds checks): 41 -> 23 FPS (garbage loops): checks are required.
+  - TLG_GPU_FENCE_WRITE=1 (compute fence label written by the GPU via vkCmdUpdateBuffer, IRQ only after completion): 0 gain.
+  - Remaining idea: per-dispatch fixed cost; cheaper bounds checks (one compare per vector load); find why ~1,000 tiny
+    dispatches cost ~10 ms (Xcode GPU capture of one frame, needs the owner at the Mac).
+- Spotlight (mds) was busy during later runs; FPS drifted 44 -> 37 over the afternoon: compare only alternated runs.
+- 2026-11-08 later: TLG_MAC_LOAD_BOUNDS=stores (loads unbounded) 39 -> 22 FPS: load bounds needed too.
+  Metal GPU capture trigger (TLG_METAL_CAPTURE_TRIGGER, shim/tlg_metal_capture.cpp): unusable, a device capture writes the
+  16 GB guest buffers (31 GB in 24 s, frame never ended).
+  FSR3 at TLG_RENDER_RES=1280x720 on the bridge: ~54 FPS (below native ~69) with flicker and artifacts on characters
+  (owner saw it): the v1 temporal path has no game jitter/motion calibration for ISS. MetalFX (temporal, Metal 4, frame
+  interpolation) needs the same inputs: first port upstream's game-side temporal hooks (1facb8c, 0d2ff89, ffdbdfa...,
+  written for renderer v2). Denoised scaler is for ray tracing (not in ISS); spatial MetalFX ~ FSR1 (already there).
+  Other ports surveyed: uncharted_pc small compute readback (not our problem: unified memory), SotC GENERAL-sync and
+  depth-RO barriers: implemented as TLG_GENERAL_SYNC=1 / TLG_RO_READS=1 (image.cpp), truck: passes -4%, FPS unchanged.
+- 2026-11-08 temporal upscaling, stage 1 done, stage 2 stopped (owner: Full HD looks fine on the Mac screen):
+  - Branch perf-quality-view has upstream's game-side hooks (1facb8c, ffdbdfa, e453f86, 0c58e2f; probe.c conflict: _WIN32
+    block dropped). CUSA00004 01.07 = same code as CUSA00223 01.07 (all signatures at +0x6f30 in the SELF), allowed in
+    probe.c install_iss_temporal and iss_native_resolution.h (uncommitted). Hook test passes against our eboot
+    (tests/test_iss_temporal_hook.cpp: _ symbol prefix on macOS, SELF segment offset found by signature;
+    port/gpu_v2/gpu/iss_temporal_math.h copied from upstream/developer).
+  - TLG_ISS_TEMPORAL=1 + TLG_ISS_TEMPORAL_READY=1 (test flag, probe side): markers every frame (liverpool.cpp logs
+    "ISS temporal marker"), 8-phase Halton jitter, reversed depth, near 10 far 1e7, FPS unchanged.
+  - Why FSR3 flickered: CameraMotion::OnConstants looks for GoW3's scene constants (far 3000): never found in ISS, so no
+    motion vectors and RunScaled never ran (spatial stretch only); TLG_RENDER_RES alone does not lower the game's render
+    size (needs iss_native_output/percent in the ini).
+  - Ceiling: iss_native_percent=67 (1286x724, no upscaler) at the truck 37.2 -> 41.2 FPS (+11%): the game is not
+    pixel-bound on an M3 Max; after FSR/MetalFX cost ~0-8%. Owner plays at 1920x1080 (window, or app full screen
+    unstretched on the 3456x2234 Retina). Resume stage 2 only for weaker Macs or for sharpness.
+  - Stage 2 plan if resumed: marker -> RunInOrder -> TemporalUpscaler::OnIssMarker (color by marker address, jitter from
+    the marker, Jitter() 0 for viewports), CameraMotion ISS mode with upstream iss_camera_motion.comp (reproject =
+    prevVP * inverse(curVP), IssTemporal::Reproject), run RunScaled at the marker; then MetalFX via MTLSharedEvent
+    imported into a timeline VkSemaphore and its own MTLCommandQueue (MoltenVK async submits break commit order).
+- 2026-11-08 compute measured per shader: MoltenVK patch MVK_TLG_SPLIT_DISPATCH=1 (each dispatch its own encoder, labelled
+  from vkCmdInsertDebugUtilsLabelEXT; lib deps/*/lib/libMoltenVK.dylib.split, swap in only for the trace) + TLG_DRAW_LABELS=1
+  (dispatch labels "cs vs <hash> ps 0 <groups>") + Metal System Trace; parser scratch cs.py. Result (bridge, correct smoke):
+  nearly every dispatch is 1 workgroup of 64 threads (cde8e3d8, 8a4ea184, a4edc92b, 19100b24, 773bab89, ...; 5b1e2375
+  1-9 groups, ~210 a frame), 6-20 us each = launch latency, run strictly one after another. Heavy single dispatches:
+  64ad2129 ~0.9 ms, ce1675e0 ~0.54 ms (once a frame).
+  TLG_QUEUE_STATS=1 (liverpool.cpp): per frame graphics ~316 dispatches either way; async compute (ACB) 158 a frame by
+  default, ~530 with correct smoke (TLG_UNIFIED_COMPUTE_FENCES=1). The extra smoke cost is the game's async compute queue,
+  which on PS4 overlaps graphics; here it runs serialized in the one Vulkan queue. => Next: async compute (ACB work on a
+  second VkQueue / MTLCommandQueue, synchronized at the game's own fences / WaitRegMem).
+- 2026-11-08 RELEASE PREP (worktree ../iss-rel, branch macos, NOT pushed yet): 650f779 occlusion mode 5 default (flares
+  never through walls; owner checked on the bridge; FPS = mode 4 within 1-2.5%), 28f41fc compute queue unordered
+  (TLG_ACB_UNORDERED, default on) + MoltenVK concurrent compute encoders (patches/moltenvk-1.4.2-concurrent-dispatch.patch,
+  MVK_TLG_CONCURRENT_DISPATCH=1 in run_macos.sh, build_moltenvk.sh applies all patches) + TLG_UNIFIED_COMPUTE_FENCES and
+  TLG_ACB_FENCE_WAITS default on. Release build: truck 36 -> 43-45 FPS with correct smoke (owner: smoke perfect, no
+  artifacts), bridge 69 -> 59 (owner chose this, "B"). Push + tag mac-v0.1.4 waits for the owner's explicit OK.
+  Key finding: ACB runs of ~95 dispatches end only at RELEASE_MEM (TLG_ACB_RUNS=1); barriers were 99.9% WAR/WAW
+  (TLG_BARRIER_WHY=1). Two Metal queues do NOT overlap (pure Metal probe scratch q2/mq.mm); MoltenVK per-dispatch cost
+  ~2 us without argument buffers. Bridge with B: GPU 62% busy, main waits on compute fences queued behind graphics:
+  next = a separate VkQueue for the game's compute queue (latency, not concurrency). zsh: pass env lists as ${=B}.
+  KosmicKrisp arm64 (deps/kosmickrisp-arm64): reaches gameplay after its own cache warms, but ~2x GPU time (36 vs 69).
+- 2026-11-08 late: released mac-v0.1.4 (flares mode 5, unordered compute queue + concurrent MoltenVK encoders, correct
+  smoke) and mac-v0.1.5 (launcher FPS cap / render scale, Benchmark at the truck crash with Share on GitHub (label
+  benchmark), Metal HUD fixed: window loop yields the main queue). Release branch work lives in worktree ~/iss-rel.
+  Uncommitted there (diagnostics/experiments, default off): TLG_GFX_UNORDERED (graphics-queue dispatch runs, ~110-146
+  dispatches each, no gain: bridge +1%, truck noise), TLG_GFX_RUNS, TLG_FENCE_LATENCY.
+- SEPARATE COMPUTE QUEUE = next big FPS step, feasibility confirmed: TLG_FENCE_LATENCY=1 on the bridge: compute
+  fences wait median 9.6 ms (p90 10.1) behind ~30 unfinished submissions (graphics 3.6 ms); truck 2.5-3.5 ms. Pure
+  Metal probe (scratch q2/mq2.mm): a tiny compute on a second MTLCommandQueue finishes in 0.25 ms while 130 ms of work
+  is queued on the first (it overtakes; the two do not run concurrently but are interleaved). Plan: the game's compute
+  queue (ACB) records into a second Scheduler/VkQueue (MoltenVK queue family 1), cross-queue sync with timeline
+  semaphores at the game's own WAIT_REG_MEM / RELEASE_MEM / EVENT_WRITE_EOP points; shared buffer/texture caches need
+  barrier/ownership handling. Days of work; expected: bridge back toward ~69 with correct smoke.

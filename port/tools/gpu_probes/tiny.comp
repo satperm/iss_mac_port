@@ -1,0 +1,10 @@
+#version 450
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) buffer B { float d[]; };
+layout(push_constant) uniform P { uint iters; };
+void main() {
+    uint i = gl_LocalInvocationID.x;
+    float x = d[i];
+    for (uint k = 0; k < iters; ++k) x = x * 0.999 + 1.0;
+    d[i] = x;
+}
