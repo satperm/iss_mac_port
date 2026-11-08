@@ -193,6 +193,9 @@ welcome in [Issues](https://github.com/satperm/iss_mac_port/issues).
 
 Fixed recently:
 
+- **Launcher: frame rate cap (Display / 60 / 30) and render scale (100% to 50%)** for slower Macs. 30 FPS
+  is steadier than an uneven 35-50; the render scale draws the game at a part of 1080p and scales it up
+  (`TLG_FPS_LIMIT`, `TLG_RENDER_SCALE`).
 - **Smoke and fire are complete and steady, and heavy scenes run faster** (truck crash, M3 Max: 36 -> 45
   FPS). The game runs its GPU particles as ~95 small compute jobs in a row on a compute queue, with no
   sync between them, as the PS4 allows; they now overlap on the GPU instead of running one after

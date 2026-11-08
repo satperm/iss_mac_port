@@ -9,6 +9,28 @@ enum FramePacing: String, CaseIterable, Identifiable {
     var label: String { self == .smooth ? "Smooth (uncapped)" : "60 Hz steps" }
 }
 
+/// The frame rate cap (TLG_FPS_LIMIT): the display's refresh rate (at most 120) unless a lower cap is
+/// chosen. 30 suits slower Macs: steadier than an uneven 35-50.
+enum FrameRateCap: String, CaseIterable, Identifiable {
+    case display = "", fps60 = "60", fps30 = "30"
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .display: "Display"
+        case .fps60: "60"
+        case .fps30: "30"
+        }
+    }
+}
+
+/// The game's render size as a percentage of 1080p (TLG_RENDER_SCALE, the eboot's native resolution
+/// patch): fewer pixels to shade on slower Macs; the picture is scaled up to the window.
+enum RenderScale: String, CaseIterable, Identifiable {
+    case full = "", p85 = "85", p75 = "75", p67 = "67", p50 = "50"
+    var id: String { rawValue }
+    var label: String { self == .full ? "100%" : "\(rawValue)%" }
+}
+
 enum QualityPreset: String, CaseIterable, Identifiable {
     case original = "", low = "low", lowest = "office"
     var id: String { rawValue }
@@ -65,6 +87,8 @@ struct LaunchSettings: Equatable {
     var showFPS = true
     var metalHUD = false
     var quality = QualityPreset.original
+    var fpsCap = FrameRateCap.display
+    var renderScale = RenderScale.full
     var particles = ParticleMode.auto
     var textLanguage = "1"
     var voiceLanguage = ""
@@ -86,6 +110,8 @@ struct LaunchSettings: Equatable {
         showFPS = flag("TLG_SHOW_FPS", true)
         metalHUD = flag("MTL_HUD_ENABLED", false)
         quality = value("TLG_PERF_MODE").flatMap(QualityPreset.init(rawValue:)) ?? .original
+        fpsCap = value("TLG_FPS_LIMIT").flatMap(FrameRateCap.init(rawValue:)) ?? .display
+        renderScale = value("TLG_RENDER_SCALE").flatMap(RenderScale.init(rawValue:)) ?? .full
         textLanguage = value("TLG_LANGUAGE").flatMap { code in GameLanguage.text.contains { $0.code == code } ? code : nil } ?? "1"
         voiceLanguage = value("TLG_AUDIO_LANGUAGE") ?? ""
         particles = value("TLG_PARTICLES").flatMap(ParticleMode.init(rawValue:)) ?? .auto
@@ -104,6 +130,8 @@ struct LaunchSettings: Equatable {
         set("TLG_SHOW_FPS", showFPS ? "1" : "0")
         set("MTL_HUD_ENABLED", metalHUD ? "1" : "0")
         set("TLG_PERF_MODE", quality == .original ? nil : quality.rawValue)
+        set("TLG_FPS_LIMIT", fpsCap == .display ? nil : fpsCap.rawValue)
+        set("TLG_RENDER_SCALE", renderScale == .full ? nil : renderScale.rawValue)
         set("TLG_PARTICLES", particles == .auto ? nil : particles.rawValue)
         set("TLG_LANGUAGE", textLanguage)
         set("TLG_AUDIO_LANGUAGE", voiceLanguage.isEmpty ? nil : voiceLanguage)
@@ -125,7 +153,8 @@ struct LaunchSettings: Equatable {
     /// For the session log and crash reports.
     var summary: [String] {
         [fullscreen ? "full screen" : "windowed", stretch ? "stretched" : "16:9", "pacing \(pacing.label)",
-         "quality \(quality.label)", "particles \(particles.label)", gpuProcess ? "GPU process" : "single process"]
+         "quality \(quality.label)", "FPS cap \(fpsCap.label)", "render scale \(renderScale.label)",
+         "particles \(particles.label)", gpuProcess ? "GPU process" : "single process"]
     }
 
     static func == (a: LaunchSettings, b: LaunchSettings) -> Bool { a.text == b.text }

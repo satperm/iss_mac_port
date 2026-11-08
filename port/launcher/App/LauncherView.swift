@@ -152,6 +152,16 @@ struct LauncherView: View {
                     }
                     Text("Lower and Lowest use the game's own lower settings (particles, high-resolution textures, pedestrians) for slower Macs. Original: as on the PS4.")
                         .font(.caption).foregroundStyle(.secondary)
+                    Picker("Frame rate cap", selection: $model.settings.fpsCap) {
+                        ForEach(FrameRateCap.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    Picker("Render scale", selection: $model.settings.renderScale) {
+                        ForEach(RenderScale.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    Text("30 FPS is steadier on slower Macs than an uneven 35-50. Render scale draws the game at a part of 1080p (sharp at 100%, softer below) and scales it up: more FPS where the GPU is the limit.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
             .formStyle(.grouped)

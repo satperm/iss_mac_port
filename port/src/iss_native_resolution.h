@@ -118,7 +118,7 @@ static inline void iss_native_changes(const IssNativePlan *p,IssNativeSite sites
 static inline int iss_native_apply(unsigned char *image,uint64_t size,const char *serial,
                                    const char *version,IssNativeConfig config) {
     IssNativePlan plan;
-    if(!image || strcmp(serial,"CUSA00223") || strcmp(version,"01.07") || !iss_native_plan(config,&plan))return 0;
+    if(!image || (strcmp(serial,"CUSA00223") && strcmp(serial,"CUSA00004")) || strcmp(version,"01.07") || !iss_native_plan(config,&plan))return 0;
     if(size<0x58030cu+sizeof(iss_native_projection) ||
        memcmp(image+0x58030c,iss_native_projection,sizeof(iss_native_projection)) ||
        memcmp(image+0x5802e6,iss_native_aspect_width,sizeof(iss_native_aspect_width)))return 0;
