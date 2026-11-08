@@ -286,20 +286,21 @@ DIAGNOSTICS = [
          'espera a GPU terminar antes de reusar essa memória. Desligado por padrão no Windows, onde segurava '
          'o jogo em 11-20 FPS; ligado no Linux. Não tem efeito no renderer deste port.'),
         pass_env=False),
-    _ab_choice('occlusion_mode', 'TLG_OCCLUSION_MODE', '4',
+    _ab_choice('occlusion_mode', 'TLG_OCCLUSION_MODE', '5',
                (('0', '0 · As before (fake counter, glare may show through)', '0 · Como antes (contador falso, o brilho pode atravessar)'),
                 ('1', '1 · Lights count as hidden', '1 · Luzes contam como tapadas'),
                 ('2', '2 · Lights count as fully visible', '2 · Luzes contam como totalmente visíveis'),
                 ('3', '3 · Zero counts (previous default)', '3 · Contagem zero (padrão anterior)'),
-                ('4', '4 · Real occlusion, counted by the GPU (recommended)', '4 · Oclusão real, contada pela GPU (recomendado)')),
+                ('4', '4 · Real occlusion, counted by the GPU', '4 · Oclusão real, contada pela GPU'),
+                ('5', '5 · Flares never through walls (recommended)', '5 · Brilhos nunca atravessam paredes (recomendado)')),
                ('Occlusion query (diagnostic)', 'Consulta de oclusão (diagnóstico)'),
                ('Test for the headlight glow that shows through characters and flickers: the counter the game '
                 'reads to know how much of a light is visible is a fake one. 1 = nothing visible, 2 = everything '
-                'visible, 3 = zero counts, 4 = real occlusion counted by the GPU (the default); 0 is the old behaviour. '
+                'visible, 3 = zero counts, 4 = real occlusion counted by the GPU, 5 = every light hidden through the ordered path (the default: no glare through walls); 0 is the old behaviour. '
                 'Send the log and a screenshot of each mode.',
                 'Teste do brilho dos faróis que atravessa personagens e pisca: o contador que o jogo lê para saber '
                 'quanto de uma luz está visível é falso. 1 = nada visível, 2 = tudo visível, 3 = contagem zero; '
-                '4 = oclusão real contada pela GPU (o padrão); 0 é o comportamento antigo. '
+                '4 = oclusão real contada pela GPU, 5 = toda luz tapada pelo caminho ordenado (o padrão: sem brilho atravessando paredes); 0 é o comportamento antigo. '
                 'Mande o log e uma captura de cada modo.'),
                source='diagnóstico (liverpool.cpp ZPASS_DONE)'),
     _ab('verbose_log', 'TLG_VERBOSE_LOG', False, False, False, ('Detailed log (for bug reports)', 'Log detalhado (para relatórios de problema)'),

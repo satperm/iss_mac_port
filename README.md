@@ -193,6 +193,10 @@ welcome in [Issues](https://github.com/satperm/iss_mac_port/issues).
 
 Fixed recently:
 
+- **Headlight and lamp glare no longer shows through walls** or from far away. The game asks the GPU how
+  much of each light is visible; every light is now answered "hidden" through the ordered path, so the
+  glare sprites stay off behind objects. Same FPS on the bridge (`TLG_OCCLUSION_MODE=4` restores the
+  counted queries).
 - **About 3% more FPS on the bridge** (M3 Max, 65.5 -> 67.5 on average, steadier lows). A stencil test
   that writes nothing keeps the depth buffer read-only, so it no longer changes layout, ending the render
   pass, each time the game samples it (`TLG_STENCIL_RO=0` restores the old behaviour).

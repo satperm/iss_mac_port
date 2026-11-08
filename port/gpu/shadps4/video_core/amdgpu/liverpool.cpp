@@ -563,6 +563,10 @@ bool Liverpool::KnownOcclusionValue(VAddr address, u32& value) const {
             value = 0;
             return true;
         case 2: // end counter, low half: the samples, known once the GPU is done
+            if (Common::Backports::OcclusionMode() == 5) {
+                value = 0; // mode 5: always hidden
+                return true;
+            }
             return false;
         default: // high halves: valid bit
             value = 0x80000000U;
@@ -1337,7 +1341,10 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                         static constexpr u64 OcclusionCounterStep = 0x2FFFFFFULL;
                         u64* results = event->Address<u64*>();
                         // tlg: mode 4 = real occlusion queries, in order with the draws.
-                        if (rasterizer && Common::Backports::OcclusionMode() == 4) {
+                        // tlg: mode 5 = mode 4's ordered path with every query hidden (no Vulkan
+                        // queries, no pass breaks): occluded lens flares never show through walls.
+                        if (rasterizer && (Common::Backports::OcclusionMode() == 4 ||
+                                           Common::Backports::OcclusionMode() == 5)) {
                             const OcclusionDumpTask task{event->Address<VAddr>(),
                                                          static_cast<u32>(num_counter_pairs)};
                             NoteOcclusionDump(task.address, task.num_pairs);
@@ -1491,7 +1498,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 // tlg: occlusion results (mode 4) whose value is known: no readback; and a wait
                 // that is always met reads nothing (mode 4 only, the other modes as before).
                 if (wait_reg_mem->mem_space.Value() == PM4CmdWaitRegMem::MemSpace::Memory &&
-                    Common::Backports::OcclusionMode() == 4) {
+                    Common::Backports::OcclusionMode() >= 4) {
                     if (wait_reg_mem->function.Value() == PM4CmdWaitRegMem::Function::Always) {
                         break;
                     }

@@ -132,12 +132,14 @@ inline std::array<std::atomic<std::int8_t>, kEntries.size()>& States() {
 
 /// TLG_OCCLUSION_MODE (ISS_ alias): how the ZPASS_DONE occlusion counter is answered. 0 = the old fake,
 /// ever-growing counter, 1 = both values equal, 2 = end far above begin, 3 = zero counts,
-/// 4 = real Vulkan occlusion queries (default; vk_occlusion.h; a query that cannot be counted gets
-/// mode 3's zero counts).
+/// 4 = real Vulkan occlusion queries (vk_occlusion.h; a query that cannot be counted gets
+/// mode 3's zero counts), 5 = mode 4's ordered path with every query answered "hidden" (default:
+/// headlight and lamp flares no longer show through walls or from far away; no Vulkan queries, so
+/// no render pass ends for them; same FPS as 4 on the bridge).
 inline int OcclusionMode() {
     static const int mode = [] {
         const char* v = std::getenv("TLG_OCCLUSION_MODE");
-        return v && *v ? std::atoi(v) : 4;
+        return v && *v ? std::atoi(v) : 5;
     }();
     return mode;
 }

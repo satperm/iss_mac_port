@@ -5101,7 +5101,8 @@ void Rasterizer::OcclusionDump(VAddr address, u32 num_pairs) {
     num_pairs = std::clamp<u32>(num_pairs, 1, OcclusionQueries::MaxCounterPairs);
     const u32 size = num_pairs * 2 * sizeof(u64);
     if (!occlusion) {
-        WriteHiddenOcclusion(address, num_pairs);
+        // Mode 5 (or no host query reset): the whole query block reads as zero samples.
+        WriteHiddenOcclusion(address & ~VAddr{15}, num_pairs);
         report();
         return;
     }
