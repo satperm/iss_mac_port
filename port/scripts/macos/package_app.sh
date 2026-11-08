@@ -81,6 +81,10 @@ done
 port=$contents/Resources/port
 install -m755 run_macos.sh "$port/"
 install -m644 scripts/*.py "$port/scripts/"
+# The benchmark save (launcher "Benchmark": the truck crash, standing still).
+if [[ -d benchmark/savedata ]]; then
+    mkdir -p "$port/benchmark" && cp -R benchmark/savedata "$port/benchmark/"
+fi
 mkdir -p "$port/scripts/macos"
 install -m644 scripts/macos/prepare_shader_jobs.py "$port/scripts/macos/"
 cp -R tools/xpps "$port/tools/xpps"

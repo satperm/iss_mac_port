@@ -193,6 +193,12 @@ welcome in [Issues](https://github.com/satperm/iss_mac_port/issues).
 
 Fixed recently:
 
+- **Benchmark in the launcher**: 90 s at the truck crash (fire, smoke, sparks), standing still, with your
+  settings; your saves are not touched. The result is shown, saved in `~/Library/Logs/ISS/Benchmarks`,
+  and "Share on GitHub" opens a filled-in issue (label `benchmark`) to compare Macs.
+- **Metal Performance HUD works** (launcher: FPS counter -> Metal HUD). The GPU process ran its window
+  loop as one main-queue block that never returned, so the HUD never attached; the loop now yields the
+  main queue every pass. One counter at a time: the game's or the HUD.
 - **Launcher: frame rate cap (Display / 60 / 30) and render scale (100% to 50%)** for slower Macs. 30 FPS
   is steadier than an uneven 35-50; the render scale draws the game at a part of 1080p and scales it up
   (`TLG_FPS_LIMIT`, `TLG_RENDER_SCALE`).

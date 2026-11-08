@@ -39,3 +39,6 @@ port/deps/
 port/.venv/
 ISS.app
 port/launch.conf
+port/benchmark-user/
+# The benchmark save's metadata (not a game file; its icon0.png, game art, is left out).
+!port/benchmark/savedata/**/param.bin

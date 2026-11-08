@@ -379,9 +379,50 @@ extern "C" int tlggpu_init(const TlgGpuConfig* config) {
 #ifdef __APPLE__
     // Cocoa only works on the main thread: tlg-probe runs the game on another thread and the main
     // run loop on the main thread, so the window and its event loop go to the main queue.
-    using Loop = decltype(window_loop);
-    dispatch_async_f(dispatch_get_main_queue(), new Loop(std::move(window_loop)),
-                     [](void* loop) { (*static_cast<Loop*>(loop))(); });
+    // tlg: one event pass per main-queue block, the next one 2 ms later, instead of one block that
+    // never returns: other main-queue work runs in between (Metal Performance HUD attaches its
+    // overlay there; with the endless block it never showed). TLG_WINDOW_LOOP=block: as before.
+    static const bool block_loop = [] {
+        const char* v = std::getenv("TLG_WINDOW_LOOP");
+        return v && !std::strcmp(v, "block");
+    }();
+    if (!block_loop) {
+        struct Tick {
+            static void Run(void* data) {
+                auto* window = static_cast<Frontend::WindowSDL*>(data);
+                if (window->PollEvents()) {
+                    dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_MSEC),
+                                     dispatch_get_main_queue(), window, &Run);
+                    return;
+                }
+                LOG_INFO(Frontend, "Window closed by user");
+                runtime_report();
+                std::fflush(stdout);
+                TlgPerf::Stop();
+                std::_Exit(0);
+            }
+        };
+        struct Start {
+            std::string title;
+            s32 width, height;
+        };
+        dispatch_async_f(dispatch_get_main_queue(), new Start{title, width, height}, [](void* data) {
+            std::unique_ptr<Start> start{static_cast<Start*>(data)};
+            Common::SetCurrentThreadName("tlg:window");
+            auto* window = new Frontend::WindowSDL(start->width, start->height, start->title.c_str());
+            {
+                std::scoped_lock lock{g_window_mutex};
+                g_window = window;
+                g_window_ready = true;
+            }
+            g_window_cv.notify_all();
+            Tick::Run(window);
+        });
+    } else {
+        using Loop = decltype(window_loop);
+        dispatch_async_f(dispatch_get_main_queue(), new Loop(std::move(window_loop)),
+                         [](void* loop) { (*static_cast<Loop*>(loop))(); });
+    }
 #else
     g_window_thread = std::thread(std::move(window_loop));
     g_window_thread.detach();

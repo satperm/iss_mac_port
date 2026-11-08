@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // The launcher window (layout as bloodborne_mac_port's: two pages of two columns, Play at the bottom).
+import AppKit
 import SwiftUI
 
 struct LauncherView: View {
@@ -37,6 +38,9 @@ struct LauncherView: View {
                     .help("Off: the app starts the game at once. Hold \u{2325} (Option) while opening it to see this window.")
                 Button("Saves…") { model.showingSaves = true }
                 Button("Logs") { model.openLogsFolder() }
+                Button("Benchmark") { model.runBenchmark() }
+                    .disabled(!model.canBenchmark)
+                    .help("90 s at the truck crash (fire, smoke, sparks), standing still, with these settings; your saves are not touched. Results also go to Logs/Benchmarks.")
                 Spacer()
                 if let message = model.exitMessage {
                     Text(message).foregroundStyle(.red).lineLimit(2)
@@ -47,7 +51,8 @@ struct LauncherView: View {
                     }
                 }
                 if model.running {
-                    Text(model.stopping ? "Stopping…" : "Game running").foregroundStyle(.secondary)
+                    Text(model.benchmarking ? "Benchmark running (90 s), don't touch the controls…"
+                         : model.stopping ? "Stopping…" : "Game running").foregroundStyle(.secondary)
                     if model.preparingShaders && !model.stopping {
                         Text("First start: preparing shaders from your game files, once. The game window opens in about a minute, then compiles for up to a few minutes.")
                             .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -70,6 +75,18 @@ struct LauncherView: View {
             .padding()
         }
         .frame(width: LauncherView.size.width, height: LauncherView.size.height)
+        .alert("Benchmark", isPresented: Binding(get: { model.benchmarkReport != nil },
+                                                set: { if !$0 { model.benchmarkReport = nil } })) {
+            Button("Copy") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(model.benchmarkReport ?? "", forType: .string)
+                model.benchmarkReport = nil
+            }
+            Button("Share on GitHub") { model.shareBenchmark() }
+            Button("OK", role: .cancel) { model.benchmarkReport = nil }
+        } message: {
+            Text(model.benchmarkReport ?? "")
+        }
         .sheet(isPresented: $model.showingCrashReport) {
             if let report = model.crashReport {
                 CrashReportView(report: report, model: model)
@@ -111,9 +128,11 @@ struct LauncherView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Overlays") {
-                    Toggle("Show FPS", isOn: $model.settings.showFPS)
-                    Toggle("Metal Performance HUD", isOn: $model.settings.metalHUD)
-                        .help("Apple's Metal HUD: FPS, GPU time, frame pacing and memory")
+                    Picker("FPS counter", selection: $model.settings.counter) {
+                        ForEach(FrameCounter.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .help("Game: the port's FPS counter. Metal HUD: Apple's Metal Performance HUD (FPS, GPU time, frame pacing, memory). One at a time.")
                 }
             }
             .formStyle(.grouped)

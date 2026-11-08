@@ -19,6 +19,13 @@ final class LauncherModel: ObservableObject {
     @Published var showingSaves = false
     /// This start lists and compiles the shaders first (run_macos.sh): minutes, once.
     @Published private(set) var preparingShaders = false
+    /// A benchmark run is in progress (Benchmark.swift).
+    @Published private(set) var benchmarking = false
+    /// The last benchmark's report, shown in an alert.
+    @Published var benchmarkReport: String?
+    /// The new-issue link for the last benchmark (Share on GitHub).
+    private(set) var benchmarkIssue: URL?
+    private var benchmarkTimer: DispatchWorkItem?
 
     let layout: Layout
     /// The launcher's environment, plus the game binary inside the bundle (make_app.sh links it
@@ -71,7 +78,67 @@ final class LauncherModel: ObservableObject {
         save()
     }
 
-    func play() {
+    var canBenchmark: Bool { canPlay && Benchmark.save(port: layout.port) != nil }
+
+    /// The game from the benchmark save, in a user folder of its own (the player's saves are not
+    /// touched; the shader cache is shared), without input, stopped after Benchmark.duration.
+    func runBenchmark() {
+        guard canBenchmark, let save = Benchmark.save(port: layout.port) else { return }
+        let fm = FileManager.default
+        let user = layout.data.appendingPathComponent("benchmark-user")
+        let savedata = user.appendingPathComponent("savedata")
+        do {
+            try fm.createDirectory(at: user, withIntermediateDirectories: true)
+            try? fm.removeItem(at: savedata)
+            try fm.copyItem(at: save, to: savedata)
+            let cache = user.appendingPathComponent("cache")
+            let shared = (env["TLG_USER_DIR"].map { URL(fileURLWithPath: $0) }
+                          ?? layout.data.appendingPathComponent("user")).appendingPathComponent("cache")
+            try? fm.createDirectory(at: shared, withIntermediateDirectories: true)
+            if (try? fm.destinationOfSymbolicLink(atPath: cache.path)) == nil {
+                try? fm.removeItem(at: cache)
+                try fm.createSymbolicLink(at: cache, withDestinationURL: shared)
+            }
+        } catch {
+            benchmarkReport = "The benchmark could not prepare its save: \(error.localizedDescription)"
+            return
+        }
+        benchmarking = true
+        play(extra: ["TLG_USER_DIR": user.path, "TLG_HOST_INPUT": "0", "TLG_FRAME_STATS": "1"])
+        guard running else { benchmarking = false; return }
+        let timer = DispatchWorkItem { [weak self] in self?.stop() }
+        benchmarkTimer = timer
+        DispatchQueue.main.asyncAfter(deadline: .now() + Benchmark.duration, execute: timer)
+    }
+
+    private func finishBenchmark() {
+        benchmarkTimer?.cancel()
+        benchmarkTimer = nil
+        benchmarking = false
+        guard let url = sessionLog, let text = try? String(contentsOf: url, encoding: .utf8),
+              let result = Benchmark.result(log: text) else {
+            benchmarkReport = "The benchmark did not reach the scene (too few frame statistics in the log). Run it again: the first run may still be compiling shaders."
+            return
+        }
+        let system = SystemInfo.current(appVersion: appVersion)
+        let report = Benchmark.report(result, system: system,
+                                      settings: ["ISS for Mac \(appVersion)"] + settings.summary)
+        benchmarkIssue = Benchmark.issueURL(result, system: system, report: report)
+        let folder = logsFolder.appendingPathComponent("Benchmarks")
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+        try? report.write(to: folder.appendingPathComponent("benchmark-\(stamp).txt"), atomically: true, encoding: .utf8)
+        benchmarkReport = report
+    }
+
+    func shareBenchmark() {
+        if let url = benchmarkIssue { NSWorkspace.shared.open(url) }
+        benchmarkReport = nil
+    }
+
+    func play() { play(extra: [:]) }
+
+    private func play(extra: [String: String]) {
         guard !running, settings.gameDir != nil else { return }
         save()
         if GameRunner.isGameRunning {
@@ -95,8 +162,10 @@ final class LauncherModel: ObservableObject {
         // The game runs from inside this bundle (Contents/MacOS/tlg-probe), so it reads this app's
         // defaults: Apple's per-app switch for the Metal Performance HUD, besides MTL_HUD_ENABLED.
         UserDefaults.standard.set(settings.metalHUD, forKey: "MetalForceHudEnabled")
-        saves.autoBackUp()
-        let plan = layout.launchPlan(settings: settings, env: env)
+        if extra.isEmpty { saves.autoBackUp() }
+        var environment = env
+        for (key, value) in extra { environment[key] = value }
+        let plan = layout.launchPlan(settings: settings, env: environment)
         do {
             let log = try SessionLogWriter(folder: logsFolder, appVersion: appVersion)
             log.note("ISS for Mac \(appVersion) on \(SystemInfo.current(appVersion: appVersion).line); "
@@ -126,6 +195,15 @@ final class LauncherModel: ObservableObject {
     }
 
     private func finished(_ status: Int32) {
+        if benchmarking {
+            gameProcess = nil
+            running = false
+            preparingShaders = false
+            stopping = false
+            finishBenchmark()
+            onExit?(status)
+            return
+        }
         let wasStopped = stopping
         gameProcess = nil
         running = false

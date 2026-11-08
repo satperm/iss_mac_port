@@ -31,6 +31,20 @@ enum RenderScale: String, CaseIterable, Identifiable {
     var label: String { self == .full ? "100%" : "\(rawValue)%" }
 }
 
+/// One frame counter at a time: the game's own FPS counter (TLG_SHOW_FPS) or Apple's Metal
+/// Performance HUD (MTL_HUD_ENABLED).
+enum FrameCounter: String, CaseIterable, Identifiable {
+    case off, game, metal
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .off: "Off"
+        case .game: "Game"
+        case .metal: "Metal HUD"
+        }
+    }
+}
+
 enum QualityPreset: String, CaseIterable, Identifiable {
     case original = "", low = "low", lowest = "office"
     var id: String { rawValue }
@@ -94,6 +108,15 @@ struct LaunchSettings: Equatable {
     var voiceLanguage = ""
     var gpuProcess = true
 
+    /// Show FPS and the Metal HUD as one choice; a file with both on reads as the Metal HUD.
+    var counter: FrameCounter {
+        get { metalHUD ? .metal : showFPS ? .game : .off }
+        set {
+            showFPS = newValue == .game
+            metalHUD = newValue == .metal
+        }
+    }
+
     private var ini = IniFile()
 
     init() {}
@@ -109,6 +132,7 @@ struct LaunchSettings: Equatable {
         pacing = value("TLG_VBLANK_HZ").flatMap(FramePacing.init(rawValue:)) ?? .smooth
         showFPS = flag("TLG_SHOW_FPS", true)
         metalHUD = flag("MTL_HUD_ENABLED", false)
+        if metalHUD { showFPS = false } // one counter at a time
         quality = value("TLG_PERF_MODE").flatMap(QualityPreset.init(rawValue:)) ?? .original
         fpsCap = value("TLG_FPS_LIMIT").flatMap(FrameRateCap.init(rawValue:)) ?? .display
         renderScale = value("TLG_RENDER_SCALE").flatMap(RenderScale.init(rawValue:)) ?? .full

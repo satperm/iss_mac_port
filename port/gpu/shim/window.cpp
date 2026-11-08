@@ -1,4 +1,7 @@
 // tlg: SDL3 window for the Vulkan swapchain (X11 or Wayland).
+#ifdef __APPLE__
+#include <CoreFoundation/CoreFoundation.h>
+#endif
 #include <algorithm>
 #include "tlg_split.h"
 #include <cstdio>
@@ -48,7 +51,14 @@ namespace {
 std::atomic<void*> g_metal_layer{nullptr};
 std::atomic<bool> g_metal_hud{[] {
     const char* env = std::getenv("MTL_HUD_ENABLED");
-    return env && *env == '1';
+    const bool on = env && *env == '1';
+    // tlg: Metal shows its Performance HUD for the process whose preferences have
+    // MetalForceHudEnabled (the launcher sets it for ISS.app, but the frames are presented by the GPU
+    // process, a process of its own). Set for this process before the Metal device exists; in
+    // memory only (no CFPreferencesAppSynchronize), so nothing stays on after the session.
+    CFPreferencesSetAppValue(CFSTR("MetalForceHudEnabled"), on ? kCFBooleanTrue : kCFBooleanFalse,
+                             kCFPreferencesCurrentApplication);
+    return on;
 }()};
 
 // CAMetalLayer.developerHUDProperties (macOS 13+): {"mode": "default"} shows the HUD, nil hides
@@ -89,6 +99,9 @@ bool MetalHudOn() {
 
 void SetMetalHud(bool on) {
     g_metal_hud.store(on, std::memory_order_relaxed);
+    if (on) {
+        TlgSettings::Get().show_fps = false; // one frame counter at a time (the HUD has FPS)
+    }
     // Directly: the window loop is itself a never-ending block on the main dispatch queue (tlggpu_init),
     // so work queued there never runs; key events and the window are handled on that thread.
     ApplyMetalHud(nullptr);
@@ -161,7 +174,11 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
         ASSERT_MSG(metal_view, "Failed to create Metal view: {}", SDL_GetError());
         window_info.render_surface = SDL_Metal_GetLayer(metal_view);
         g_metal_layer.store(window_info.render_surface, std::memory_order_release);
-        if (MetalHudOn()) {
+        static const bool hud_layer = [] {
+            const char* v = std::getenv("TLG_HUD_LAYER");
+            return !(v && *v == '0');
+        }();
+        if (MetalHudOn() && hud_layer) {
             SetMetalHud(true); // as MTL_HUD_ENABLED, through the layer F9 switches
         }
     } else
