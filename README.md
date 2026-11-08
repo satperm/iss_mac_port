@@ -193,6 +193,13 @@ welcome in [Issues](https://github.com/satperm/iss_mac_port/issues).
 
 Fixed recently:
 
+- **Smoke and fire are complete and steady, and heavy scenes run faster** (truck crash, M3 Max: 36 -> 45
+  FPS). The game runs its GPU particles as ~95 small compute jobs in a row on a compute queue, with no
+  sync between them, as the PS4 allows; they now overlap on the GPU instead of running one after
+  another (MoltenVK patch for concurrent compute encoders), and the particle system's fences report
+  when the GPU is really done, so no smoke system goes missing. On the bridge 69 -> 59 FPS (the correct
+  smoke there is more work). `TLG_UNIFIED_COMPUTE_FENCES=0` brings back the old smoke,
+  `TLG_ACB_UNORDERED=0` / `MVK_TLG_CONCURRENT_DISPATCH=0` the serial compute queue.
 - **Headlight and lamp glare no longer shows through walls** or from far away. The game asks the GPU how
   much of each light is visible; every light is now answered "hidden" through the ordered path, so the
   glare sprites stay off behind objects. Same FPS on the bridge (`TLG_OCCLUSION_MODE=4` restores the

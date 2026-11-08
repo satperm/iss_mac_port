@@ -1,0 +1,67 @@
+diff --git a/MoltenVK/MoltenVK/Commands/MVKCmdPipeline.mm b/MoltenVK/MoltenVK/Commands/MVKCmdPipeline.mm
+index 9092954..40b8b29 100644
+--- a/MoltenVK/MoltenVK/Commands/MVKCmdPipeline.mm
++++ b/MoltenVK/MoltenVK/Commands/MVKCmdPipeline.mm
+@@ -157,6 +157,9 @@ void MVKCmdPipelineBarrier<N>::encode(MVKCommandEncoder* cmdEncoder) {
+ 	}
+ #endif
+ 
++	// iss_mac_port: a barrier inside a concurrent vkCmdDispatch encoder orders the dispatches around it.
++	if (!_barriers.empty()) { cmdEncoder->tlgConcurrentDispatchBarrier(); }
++
+ 	if (!cmdEncoder->_mtlRenderEncoder && cmdEncoder->isUsingMetalArgumentBuffers() && cmdEncoder->getDevice()->hasResidencySet()) {
+ 		cmdEncoder->endCurrentMetalEncoding();
+ 
+diff --git a/MoltenVK/MoltenVK/Commands/MVKCommandBuffer.h b/MoltenVK/MoltenVK/Commands/MVKCommandBuffer.h
+index 76ca788..a05f8c2 100644
+--- a/MoltenVK/MoltenVK/Commands/MVKCommandBuffer.h
++++ b/MoltenVK/MoltenVK/Commands/MVKCommandBuffer.h
+@@ -364,6 +364,9 @@ public:
+ 	 * optionally be marked dirty. Otherwise, if the current encoder is not a compute
+ 	 * encoder, this function ends the current encoder before beginning compute encoding.
+ 	 */
++	/** iss_mac_port: a memory barrier in the current concurrent vkCmdDispatch encoder, if any. */
++	void tlgConcurrentDispatchBarrier();
++
+ 	id<MTLComputeCommandEncoder> getMTLComputeEncoder(MVKCommandUse cmdUse);
+ 
+ 	/**
+diff --git a/MoltenVK/MoltenVK/Commands/MVKCommandBuffer.mm b/MoltenVK/MoltenVK/Commands/MVKCommandBuffer.mm
+index 8c24deb..f879561 100644
+--- a/MoltenVK/MoltenVK/Commands/MVKCommandBuffer.mm
++++ b/MoltenVK/MoltenVK/Commands/MVKCommandBuffer.mm
+@@ -1071,8 +1071,21 @@ void MVKCommandEncoder::endCurrentMetalEncoding() {
+ 	encodeTimestampStageCounterSamples();
+ }
+ 
++// iss_mac_port: MVK_TLG_CONCURRENT_DISPATCH=1: vkCmdDispatch encoders run their dispatches
++// concurrently (as GCN runs the dispatches of one queue); pipeline barriers recorded inside such an
++// encoder become memory barriers (tlgConcurrentDispatchBarrier).
++bool mvkTlgConcurrentDispatch() {
++	static const bool value = [] {
++		const char* env = getenv("MVK_TLG_CONCURRENT_DISPATCH");
++		return env && *env == '1';
++	}();
++	return value;
++}
++
+ static MTLDispatchType getDispatchType(MVKCommandUse use) {
+ 	switch (use) {
++		case kMVKCommandUseDispatch:
++			return mvkTlgConcurrentDispatch() ? MTLDispatchTypeConcurrent : MTLDispatchTypeSerial;
+ 		case kMVKCommandUseAccumOcclusionQuery:
+ 			return MTLDispatchTypeConcurrent;
+ 		default:
+@@ -1097,6 +1110,12 @@ static bool shouldStartNewEncoder(MVKCommandUse prev, MVKCommandUse next) {
+ 	return wantsSeparateComputeEncoder(prev) || wantsSeparateComputeEncoder(next);
+ }
+ 
++void MVKCommandEncoder::tlgConcurrentDispatchBarrier() {
++	if (mvkTlgConcurrentDispatch() && _mtlComputeEncoder && _mtlComputeEncoderUse == kMVKCommandUseDispatch) {
++		[_mtlComputeEncoder memoryBarrierWithScope: MTLBarrierScopeBuffers | MTLBarrierScopeTextures];
++	}
++}
++
+ id<MTLComputeCommandEncoder> MVKCommandEncoder::getMTLComputeEncoder(MVKCommandUse cmdUse) {
+ 	bool needWaits = false;
+ 	if (!_mtlComputeEncoder || shouldStartNewEncoder(_mtlComputeEncoderUse, cmdUse)) {

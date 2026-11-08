@@ -635,6 +635,13 @@ private:
     bool fault_process_pending{};
     bool attachment_feedback_loop{};
     bool needs_barrier{};
+public:
+    /// tlg: TLG_ACB_UNORDERED: the next DispatchDirect/DispatchIndirect comes from a compute queue
+    /// (bit 0) and is the first after one of its sync packets (bit 1). Set by Liverpool (stage A).
+    u32 next_dispatch_flags{};
+    [[nodiscard]] static bool AcbUnordered();
+private:
+    u32 dispatch_flags{}; ///< the flags of the dispatch being recorded
     // tlg: two-stage draw pipeline (stage B state; the thread is the last member so it
     // stops first).
     static inline thread_local const AmdGpu::Regs* stage_regs = nullptr;

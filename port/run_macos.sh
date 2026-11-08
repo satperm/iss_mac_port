@@ -52,6 +52,11 @@ export MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS=${MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMI
 # which crashed ~1 start in 3-7 (AGX setTexture in MVKCmdDispatch::encode, objc_msgSend in
 # didSchedule). 2026-10-31: 0 crashes in 7 starts with it, no FPS change on the bridge.
 export MVK_CONFIG_LIVE_CHECK_ALL_RESOURCES=${MVK_CONFIG_LIVE_CHECK_ALL_RESOURCES:-1}
+# Compute encoders run their dispatches concurrently (patches/moltenvk-1.4.2-concurrent-dispatch.patch);
+# Vulkan barriers inside them become Metal memory barriers. With the game's compute queue unordered
+# between its own sync packets (TLG_ACB_UNORDERED, default on), its ~95-dispatch particle runs overlap:
+# truck crash 36 -> 47 FPS with correct smoke. An unpatched MoltenVK ignores it. 0: serial encoders.
+export MVK_TLG_CONCURRENT_DISPATCH=${MVK_TLG_CONCURRENT_DISPATCH:-1}
 
 original_game=$game
 game=$("$PYTHON" scripts/mods.py "$game" --out "$out" \

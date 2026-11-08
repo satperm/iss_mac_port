@@ -945,6 +945,7 @@ void Rasterizer::RunDrawPacket(void* context, const u8* data, u32 size) {
         self.FilterDraw();
     } else if (cs) {
         stage_cs = cs;
+        self.dispatch_flags = packet.index_offset;
         const auto* pipeline = static_cast<const ComputePipeline*>(packet.pipeline);
         if (indirect) {
             self.DispatchIndirectRecord(pipeline, indirect->args, indirect->stride);
@@ -2102,9 +2103,23 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     scheduler.KickRecording();
 }
 
+bool Rasterizer::AcbUnordered() {
+    // tlg: the dispatches between two sync packets of the game's compute queue (RELEASE_MEM,
+    // WAIT_REG_MEM, ...) are not ordered by buffer barriers, as on GCN: ISS issues ~95 particle
+    // dispatches in a row without one, and the hazard barriers serialized them (with MoltenVK's
+    // concurrent compute encoders, MVK_TLG_CONCURRENT_DISPATCH, they now overlap). TLG_ACB_UNORDERED=0:
+    // as before.
+    static const bool on = [] {
+        const char* v = std::getenv("TLG_ACB_UNORDERED");
+        return !(v && *v == '0');
+    }();
+    return on;
+}
+
 void Rasterizer::DispatchDirect() {
     RENDERER_TRACE;
     TlgStats::dispatches.fetch_add(1, std::memory_order_relaxed);
+    const u32 flags = std::exchange(next_dispatch_flags, 0u);
     // tlg: like draws, handed to the draw recording thread after the pipeline selection.
     const bool pipelined = UseDrawPipe() && !TlgToggle::Disabled(TlgToggle::PipelinedDispatch);
     if (!pipelined) {
@@ -2115,9 +2130,10 @@ void Rasterizer::DispatchDirect() {
         return;
     }
     if (pipelined) {
-        PostDraw(pipeline, nullptr, false, 0, &CsRegs());
+        PostDraw(pipeline, nullptr, false, flags, &CsRegs());
         return;
     }
+    dispatch_flags = flags;
     DispatchRecord(pipeline);
 }
 
@@ -2358,8 +2374,13 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
     }
 
     if (!BindResources(pipeline)) {
+        dispatch_flags = 0;
         return;
     }
+    if ((dispatch_flags & 2u) && AcbUnordered()) {
+        needs_barrier = true; // the game synced before this run: everything earlier is ordered
+    }
+    dispatch_flags = 0;
 
     if (needs_barrier) {
         runtime.FlushBarriers();
@@ -2415,6 +2436,7 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
 
 void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
     RENDERER_TRACE;
+    const u32 flags = std::exchange(next_dispatch_flags, 0u);
     // tlg: handed to the recording thread like direct dispatches.
     const bool pipelined = UseDrawPipe() && !TlgToggle::Disabled(TlgToggle::PipelinedIndirectDraws);
     if (!pipelined) {
@@ -2426,9 +2448,10 @@ void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
     }
     if (pipelined) {
         const IndirectDraw indirect = {address + offset, 0, size, 1};
-        PostDraw(pipeline, nullptr, false, 0, &CsRegs(), &indirect);
+        PostDraw(pipeline, nullptr, false, flags, &CsRegs(), &indirect);
         return;
     }
+    dispatch_flags = flags;
     DispatchIndirectRecord(pipeline, address + offset, size);
 }
 
@@ -2438,8 +2461,13 @@ void Rasterizer::DispatchIndirectRecord(const ComputePipeline* pipeline, VAddr a
     const u32 offset = 0;
 
     if (!BindResources(pipeline)) {
+        dispatch_flags = 0;
         return;
     }
+    if ((dispatch_flags & 2u) && AcbUnordered()) {
+        needs_barrier = true; // the game synced before this run
+    }
+    dispatch_flags = 0;
 
     const auto [buffer, base] = buffer_cache.ObtainBuffer(address + offset, size, false);
     needs_barrier |= runtime.IsBufferAccessed(buffer, base, size);
@@ -3602,7 +3630,13 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
                     // Raw storage-buffer writes can also make an aliased cached image stale.
                     texture_cache.InvalidateMemoryFromGPU(vsharp.base_address, size);
                 }
-                needs_barrier |= runtime.IsBufferAccessed(buffer, offset, size, desc.is_written);
+                // tlg: TLG_ACB_UNORDERED: a compute-queue dispatch orders its buffers only where
+                // the game syncs (the first dispatch after its sync packet), as GCN runs the
+                // dispatches of one queue without waiting for each other.
+                if ((!(dispatch_flags & 1u) || !AcbUnordered()) &&
+                    runtime.IsBufferAccessed(buffer, offset, size, desc.is_written)) {
+                    needs_barrier = true;
+                }
             }
         }
 
