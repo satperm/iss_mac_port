@@ -9,8 +9,8 @@ It is a macOS fork of [iss_pc](https://github.com/HayatoG/iss_pc), the native PC
 
 > **Status: first test version, work in progress.** The story can be played from the start with
 > GPU particles (smoke, rain, sparks). Tested on one Mac (M3 Max, 36 GB) as far as the first missions
-> in Seattle. On that Mac expect about 50-60 FPS in calm outdoor
-> scenes and 25-45 FPS in heavy ones. See
+> in Seattle. On that Mac expect about 58-60 FPS on the opening bridge, about 45 in the heaviest
+> fire-and-smoke scene (the launcher's Benchmark) and 25-30 in busy streets. See
 > [Expected performance](#expected-performance) and [Known issues](#known-issues).
 
 ## Contents
@@ -124,7 +124,7 @@ In game:
 | ⌘ , | Port menu (graphics, LOD distance, controls) |
 | ⌘ 0 | Show or hide the FPS counter |
 | ⌘ 8, F8 or the PS button | Save a screenshot to `Desktop/ISS Screenshots` |
-| ⌘ 9 | Show or hide Apple's Metal performance HUD |
+| ⌘ 9 | Show or hide Apple's Metal Performance HUD (hides the port's FPS counter) |
 
 A PlayStation or Xbox controller is recommended; keyboard and mouse also work.
 
@@ -134,10 +134,13 @@ In the launcher:
 |---|---|
 | Smoke and sparks | **Auto** (on, the default), Off (no GPU particles, fastest), All particles (exactly as on the PS4, much slower) |
 | Detail | Original (as on the PS4), Lower, Lowest (the game's own lower settings: particles, high-resolution textures, pedestrians; for slower Macs) |
+| Frame rate cap | Display (the display's refresh rate, at most 120; default), 60, 30 (steadier on slower Macs) |
+| Render scale | 100% (default) down to 50%: the game draws a smaller picture and scales it up; more FPS where the GPU is the limit, softer image |
 | Frame pacing | Smooth (even frame times, default), 60 Hz steps |
 | Window | Full screen (needed for macOS Game Mode) or windowed; fill 16:10 screens without black bars |
 | Native GPU process | On by default: runs the renderer as a native Apple Silicon process. Turn it off to run everything under Rosetta |
-| Show FPS, Metal Performance HUD | On-screen counters |
+| FPS counter | Off, Game (the port's counter), Metal HUD (Apple's Metal Performance HUD); one at a time |
+| Benchmark (button) | 90 s at the truck crash, standing still, with the settings above; shows the result, saves it in `~/Library/Logs/ISS/Benchmarks` and can open a filled-in GitHub issue to compare Macs |
 
 Hold ⌥ (Option) while opening the app to show the launcher window when it is set to start the game
 directly.
@@ -147,38 +150,30 @@ outdoor views).
 
 ## Expected performance
 
-Measured on a **MacBook Pro with M3 Max**, macOS 26, internal display, 1080p rendering, default
-settings (GPU particles on, Detail: Original), optimized build, 2026-11-02. Each row is the range
-over a 2-4 minute scripted run, after the first seconds.
+Measured on a **MacBook Pro with M3 Max**, macOS 27, 1080p rendering, default settings, release
+0.1.5 (2026-11-08). Standing still; each value is the median of 40 s after loading.
 
 | Scene | FPS |
 |---|---|
-| Opening area: bridge with rain, camera turning | 50-55, dips to about 40 |
-| Open view of the city from the bridge | 41-46 |
-| Smoke-shot tutorial (forest, drone, smoke powers) | 60-64 |
-| Burning building (heavy fire and sparks) | 29-49, mostly 35-45 |
+| Truck crash in the forest (fire, smoke, sparks; the launcher's **Benchmark**) | 45-46 (0.1.3: 36) |
+| Bridge after the car crash (rain, smoke) | 58-60 (0.1.3: 69 with broken smoke) |
+| Bridge with render scale 50% | about 72 |
+| Frame rate cap 30 | exactly 30 |
 
-With the native GPU process off (everything under Rosetta) the bridge runs at 40-45 and the open
-view at 25-27.
+Older scripted runs while moving (0.1.2, 2026-11-02): bridge with rain and the camera turning 50-55
+(dips to about 40), open city view from the bridge 41-46, burning building 29-49.
 
 What changes it:
 
-- **GPU particles Off**: noticeably faster in effect-heavy scenes, but powers show no smoke and
-  there is no rain.
-- **LOD distance 0.5x**: about +8% outdoors.
+- **Render scale** below 100%: about +11% at 67% on an M3 Max, more on Macs with smaller GPUs.
+- **Smoke and sparks: Off**: faster in effect-heavy scenes, but powers show no smoke and there is no
+  rain.
+- **LOD distance 0.5x** (port menu): about +8% outdoors.
 - **Detail: Lower / Lowest**: lighter particles, textures and crowds.
-- Resolution and upscaling do not help much: the limit is not pixel count (see
-  [Known issues](#known-issues)).
 - Memory in game: about 6-8 GB.
 
-These are scripted runs. In one play session (2026-11-03) the bridge ran at 25-30 FPS while a
-standing test there gave about 67 FPS (2026-11-04), so the frame rate depends heavily on what is
-happening; the difference is not explained yet.
-
-Other Macs have not been measured yet. The limit is mostly CPU-to-GPU round trips, so chips with
-fewer performance cores and smaller GPUs (M1, M2, base M3) will be slower than these numbers; Pro
-and Max chips of any generation should be closer to them. Reports with your Mac model and FPS are
-welcome in [Issues](https://github.com/satperm/iss_mac_port/issues).
+Other Macs have not been measured yet. Run the launcher's **Benchmark** and press "Share on GitHub"
+to add yours.
 
 ## Status
 
@@ -231,21 +226,34 @@ Fixed recently:
 
 ## Known issues
 
-- **Frame rate.** Not a steady 60 FPS; heavy scenes drop to 25-40. In scripted scenes the limit is the
-  round trip between the game's CPU code and the GPU (about 20 waits per frame), not the GPU's raw speed
-  or the resolution. The drops seen while playing on the bridge are not explained yet.
+- **Frame rate is not a steady 60.** Standing on the bridge it is 58-60 now that the smoke is correct
+  (69 before, with smoke systems missing): the game waits about 10 ms a frame for its particle
+  compute work, which here sits in the one Vulkan queue behind the frame's graphics. A separate queue
+  for the game's compute work is the planned fix (measured: Metal lets a second queue's small jobs
+  through in 0.25 ms). Busy streets with thousands of objects are limited by the CPU work per draw
+  (about 25-30 FPS where the game draws ~7,500 objects a frame). Drops seen while playing on the
+  bridge are not explained yet.
+- **No lens glare at all.** To stop headlight and lamp glare showing through walls, every light is
+  reported hidden, so the glare sprites never draw, also where the light is in plain view
+  (`TLG_OCCLUSION_MODE=4`: counted queries, glare back, but through walls too).
+- **No temporal upscaling.** FSR 3 / MetalFX flicker and ghost here: the game's jitter and camera motion
+  are not wired to the upscaler yet (the game-side hooks exist but are off). The render scale is a
+  plain resize.
+- **The port menu's frame rate limit has no effect** with Smooth frame pacing (the default); use the
+  launcher's Frame rate cap.
 - **Not checked against PS4 yet:** bright points on the black D.U.P. walls in Seattle and hard-edged
   black boxes behind some HUD icons. They may be the game's own look. The glitchy columns before
   the tunnel to Seattle are the game's own effect, the PS4 version has them too.
-- **Only one Mac tested.** The downloadable app has not yet been run on another Mac. The PS button
-  screenshot is unconfirmed.
+- **Only one Mac tested** (M3 Max). The PS button screenshot is unconfirmed.
 - The controller keeps reaching the game while another app is in front.
 - Cutscenes and movies cannot be skipped so far.
-- **Shaders the first-start list misses** still compile during play, with short stutters.
+- **Shaders the first-start list misses** still compile during play, with short stutters. The first
+  Benchmark after an update can be lower for the same reason: run it twice.
 - **Memory**: 6-8 GB in game; on 16 GB Macs close other large apps.
 - Some HUD elements (for example the current objective text) may be missing at times.
-- MoltenVK, the Vulkan-on-Metal layer the port uses, is deprecated by Khronos (KosmicKrisp is its
-  successor); the port keeps a patched MoltenVK 1.4.2 for now.
+- MoltenVK, the Vulkan-on-Metal layer the port uses, is deprecated by Khronos; the port keeps a patched
+  MoltenVK 1.4.2. Its successor KosmicKrisp (Mesa 26.2.5, native) reaches gameplay here but needs about
+  twice the GPU time (bridge 36 vs 69 FPS), so it is not used.
 
 Please report problems in [Issues](https://github.com/satperm/iss_mac_port/issues) with your Mac
 model, macOS version, the scene and the session log (see below). No game files, please.
@@ -254,14 +262,16 @@ model, macOS version, the scene and the session log (see below). No game files, 
 
 Near term:
 
-1. **Frame rate** on the bridge and in other scenes while playing.
-2. **Particle performance**: fewer render-pass breaks around particle draws.
-3. **HUD**: find the missing objective text.
+1. **A separate queue for the game's compute work**: the bridge back toward 69 FPS with correct smoke.
+2. **CPU work per draw** in busy streets (profile where the game draws ~7,500 objects a frame).
+3. **Automatic updates** in the launcher (as bloodborne_mac_port), keyboard and mouse remapping.
+4. **HUD**: find the missing objective text.
 
-Toward 60 FPS:
+Later:
 
-4. **KosmicKrisp**, Khronos' successor to MoltenVK, now that the GPU side is native.
-5. A native Metal renderer, only if profiling shows the Vulkan layer is still the bottleneck.
+5. **Temporal upscaling** (FSR 3, MetalFX) through the game's own jitter and camera (hooks from iss_pc),
+   useful for slower Macs and for sharper images above 1080p.
+6. A native Metal renderer, only if profiling shows the Vulkan layer is still the bottleneck.
 
 ## Troubleshooting and logs
 
