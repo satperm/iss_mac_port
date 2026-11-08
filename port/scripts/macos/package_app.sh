@@ -160,8 +160,10 @@ for file in "$contents"/Frameworks/* "$contents"/MacOS/tlg*; do codesign --force
 codesign --force --sign - "$app" >/dev/null
 codesign --verify --deep --strict "$app" || { echo "The signature does not verify" >&2; exit 1; }
 
-# No game data may ship: this repository is public and so are its releases.
-if find "$app" \( -name 'eboot.bin' -o -name '*.xpps' -o -name 'shader-jobs.bin' -o -name '*.spv' -o -name 'icon0.png' -o -name 'savedata' \) | grep .; then
+# No game data may ship: this repository is public and so are its releases. The one save allowed is the
+# benchmark's (an autosave at the truck crash, without the game's icon).
+if find "$app" \( -name 'eboot.bin' -o -name '*.xpps' -o -name 'shader-jobs.bin' -o -name '*.spv' -o -name 'icon0.png' \) | grep . ||
+   find "$app" -name 'savedata' ! -path "$port/benchmark/savedata" | grep .; then
     echo "Game data in the bundle" >&2; exit 1
 fi
 
