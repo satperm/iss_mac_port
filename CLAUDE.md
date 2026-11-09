@@ -754,3 +754,14 @@ Instruments (Shader Timeline option) for per-shader cost.
   Next per-draw hot spots (truck, 6 s, samples of ~6000 per thread): command processor CollectRingBindings 703,
   ApplyGraphicsRegisterPacket ~340; DrawRec BindResources 779, BindTextures 225, BarrierTracker::InsertNode 191,
   MVKCommandBuffer::reset 164, memmove 243; VkRecorder mostly spins.
+- 2026-11-09 late (after PR #3): fresh Time Profiler at the truck: DrawRec is now the busier stage (command
+  processor waits in DrawPipe::Drain ~20%). DrawRec: SubmitExecution 12% (vkBeginCommandBuffer ->
+  MVKCommandBuffer::reset 10%), almost all from the game's graphics fences (RunEventWriteEos -> DeferUnifiedFence ->
+  Flush, ~24 a frame); TextureCache::RetireReadbacks memmove 5.5%; BindResources 23%; BarrierTracker 8%.
+  VkRecorder: PushChanged 25% (MoltenVK MVKCmdPushDescriptorSet allocates per call), the rest spin. MoltenVK encode
+  on its dispatch queue ~36% of a core. Measured, no clear gain: PendingWriteOverlaps reading DrawPipe::Consumed()
+  once (46.8 vs 47.3, kept as cleanup); TLG_GFX_FENCE_BATCH=8 (fences leave with the next submission / when stage B
+  idles; default 0 = off): truck 47.3 -> 48.3, bridge 66.1 -> 65.6; =32: truck 47.5, bridge 64.8.
+  TLG_SUBMIT_DRAWS=128 with it: nothing. Day's standing numbers: bridge 59.8 -> 66.1, truck 45.2 -> 47.3.
+  Lesson: a session restart kills background A/B scripts; keep results in a file (they were) and never leave the
+  tree stashed for longer than a build.

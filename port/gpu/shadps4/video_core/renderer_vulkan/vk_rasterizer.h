@@ -681,6 +681,8 @@ private:
     std::deque<AcbFence> acb_fences;
     std::vector<vk::Event> acb_free_events;
     u32 acb_fences_since_flush{0};
+    u64 gfx_fence_tick{0};        ///< TLG_GFX_FENCE_BATCH: the submission the unflushed fences are in
+    u32 gfx_fences_unflushed{0};  ///< and how many
     std::jthread acb_fence_thread;
     void AcbFenceThread(std::stop_token stop);
     void AcbDeferFence(Common::UniqueFunction<void>&& write);

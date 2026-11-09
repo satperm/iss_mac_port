@@ -120,14 +120,15 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
     }
     // tlg: this thread joins the texture binding helper before it changes image state.
     runtime.SetImageAccessHook(&JoinBindHelper, this);
+    if (draw_pipe) {
+        draw_pipe->SetIdleHandler(&Rasterizer::AcbIdle, this);
+    }
     if (instance.GetComputeQueue()) {
         acb_scheduler = std::make_unique<Scheduler>(instance, instance.GetComputeQueue(),
                                                     instance.GetComputeQueueFamilyIndex());
         scheduler.SetCompanion(acb_scheduler.get());
         acb_fence_thread = std::jthread(std::bind_front(&Rasterizer::AcbFenceThread, this));
-        if (draw_pipe) {
-            draw_pipe->SetIdleHandler(&Rasterizer::AcbIdle, this);
-        }
+
         std::printf("GPU: the game's compute queue runs on a queue of its own (TLG_ACB_QUEUE=1)\n");
     }
     scheduler.SetSubmitCallback([this](Vulkan::SubmitInfo& info) {
@@ -600,10 +601,9 @@ bool Rasterizer::PendingWriteOverlaps(VAddr address, u64 size) {
         return false;
     }
     // Now and then drop entries whose writes the recording thread has done: the bounds shrink.
+    const u64 done = draw_pipe->Consumed();
     if ((++pending_checks & 63) == 0) {
-        std::erase_if(pending_writes, [&](const PendingWrite& write) {
-            return draw_pipe->Reached(write.position);
-        });
+        std::erase_if(pending_writes, [&](const PendingWrite& write) { return done >= write.position; });
         pending_min = ~VAddr{0};
         pending_max = 0;
         for (const auto& write : pending_writes) {
@@ -613,7 +613,7 @@ bool Rasterizer::PendingWriteOverlaps(VAddr address, u64 size) {
     }
     const VAddr end = address + size;
     for (const auto& write : pending_writes) {
-        if (address < write.end && write.begin < end && !draw_pipe->Reached(write.position)) {
+        if (address < write.end && write.begin < end && done < write.position) {
             return true;
         }
     }
@@ -2476,7 +2476,13 @@ void Rasterizer::AcbDeferFence(Common::UniqueFunction<void>&& write) {
 
 void Rasterizer::AcbIdle(void* context) {
     auto* self = static_cast<Rasterizer*>(context);
-    if (self->acb_fences_since_flush == 0 && self->acb_copies.empty()) {
+    // TLG_GFX_FENCE_BATCH: graphics fences still in the open submission go out now that nothing
+    // more is being recorded (the game may be waiting for one of them).
+    if (self->gfx_fences_unflushed && self->gfx_fence_tick == self->scheduler.CurrentTick()) {
+        self->gfx_fences_unflushed = 0;
+        self->scheduler.Flush();
+    }
+    if (!self->acb_scheduler || (self->acb_fences_since_flush == 0 && self->acb_copies.empty())) {
         return;
     }
     std::scoped_lock lock{self->acb_scheduler->CompanionMutex()};
@@ -5547,7 +5553,23 @@ bool Rasterizer::DeferUnifiedFence(Common::UniqueFunction<void>&& write) {
         AcbDeferFence(std::move(write));
     } else {
         scheduler.DeferPriorityOperation(std::move(write));
-        scheduler.Flush();
+        // tlg: TLG_GFX_FENCE_BATCH=N (0, the default: a submission per fence): the game's ~24
+        // graphics fences a frame each ended a submission (a command buffer reset on this thread
+        // and a GPU hand-over each). With N, a fence leaves with the next submission: when this
+        // thread runs out of packets (AcbIdle), after N fences, or with the piled-up draws.
+        static const u32 batch = [] {
+            const char* v = std::getenv("TLG_GFX_FENCE_BATCH");
+            return v && *v ? u32(std::atoi(v)) : 0u;
+        }();
+        const u64 tick = scheduler.CurrentTick();
+        if (tick != gfx_fence_tick) {
+            gfx_fence_tick = tick;
+            gfx_fences_unflushed = 0;
+        }
+        if (batch == 0 || !DrawPipe::OnStageB() || ++gfx_fences_unflushed >= batch) {
+            gfx_fences_unflushed = 0;
+            scheduler.Flush();
+        }
     }
     VideoCore::Unified::Add(VideoCore::Unified::FencesDeferred);
     VideoCore::Unified::MaybeReport(static_cast<u64>(
