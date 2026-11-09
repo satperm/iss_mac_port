@@ -138,6 +138,11 @@ public:
     [[nodiscard]] u64 Head() const noexcept {
         return head;
     }
+    /// Stage B's position: read once for many comparisons (stage B writes it constantly, so each
+    /// read is a cache miss between cores).
+    [[nodiscard]] u64 Consumed() const noexcept {
+        return consumed.load(std::memory_order_acquire);
+    }
     [[nodiscard]] bool Reached(u64 position) const noexcept {
         return consumed.load(std::memory_order_acquire) >= position;
     }

@@ -15,18 +15,22 @@ Tools: `scripts/macos/agent_run.sh <truck|bridge> <label> <s> [VAR=v ...]` (one 
 WAIT_REG_MEM met by a compute fence): truck 45.0 -> 43.9, bridge 64.0 -> 64.6 (3 x 60 s each).
 Dropped; diff kept at ~/iss_mac_port/port/out/experiments/main-wait-sync.diff. Do not retry.
 
-## 2. Fewer main-queue command buffers (2 h)
+## 2. CPU per draw in tlggpu-host (the critical path; 3-4 h)
 
-~20 submissions a frame at the truck; each costs ~0.5 ms of GPU idle (Metal System Trace: gaps between
-command buffers). Find what flushes (Scheduler::Flush callers, TLG_QUEUE_STATS=1, TLG_PASS_STATS=1),
-merge where nothing waits on the CPU, behind a switch. Trace: `xcrun xctrace record --template
-'Metal System Trace' --all-processes --time-limit 6s` while a run is going (never --attach to tlg-probe).
-
-## 3. CPU per draw in busy streets (2 h)
-
-Save: `~/iss_mac_port/port/out/save-backups/seattle-run-20261103` (copy, never the original;
-agent_run.sh takes a user dir with savedata/). `sample tlggpu-host 10` (arm64 process: safe; never
-sample or attach to tlg-probe). Look for per-draw hot spots in the GPU thread and stage B.
+The game keeps one frame at the GPU (CLAUDE.md, 2026-11-09 night), so every microsecond per draw in the command
+processor and draw recording threads is frame time. Method: `xctrace record --template 'Time Profiler'
+--all-processes --time-limit 6s` during `agent_run.sh truck`, export `time-profile`, aggregate per thread
+(parsers: thread/process nest in the row, frames sit directly in `tagged-backtrace`). Measure with two saved
+library builds alternated between runs and the `us/draw` frame stat; a +1 FPS difference needs >= 3 runs each on
+a quiet Mac (check `ps -Ao pcpu,comm -r`).
+Done: dirty-block walk (truck 43.1 -> 46.8). Tried, no clear gain: PendingWriteOverlaps, TLG_GFX_FENCE_BATCH,
+TLG_SUBMIT_DRAWS, TLG_IDLE_FLUSH, graphics event fences, sync-point waits. Candidates, in order:
+1. MVKCommandBuffer::reset inside vkBeginCommandBuffer on DrawRec (10% of it): begin the next command buffer on
+   another thread, or keep a pool of begun ones.
+2. MoltenVK MVKCmdPushDescriptorSet (setContent + clearDescriptorWrites allocate per call; 25% of VkRecorder).
+3. TextureCache::RetireReadbacks copies on DrawRec (5.5%): off the recording thread, in order with ResolveReadbacks.
+4. BindResources / BindTextures / BarrierTracker::InsertNode per draw.
+Busy streets: save `~/iss_mac_port/port/out/save-backups/seattle-run-20261103` (standing 46.5 FPS with 0.1.6).
 
 ## 4. Launcher automatic updates (fallback when runs are noisy, 2-3 h, no game runs)
 
