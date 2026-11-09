@@ -120,8 +120,8 @@ dispatch runs), `TLG_QUEUE_STATS=1`, `TLG_THREAD_PROFILE_MS=5` (where game threa
 
 ## Priorities
 
-1. Graphics waits only at the game's own sync points, not for all compute recorded before each submission
-   (truck trace: ~0.5 s of 6.5 s GPU idle at compute -> graphics).
+1. Fewer main-queue command buffers (~20 a frame, ~0.5 ms GPU idle each). Tried, no gain: graphics
+   waiting for the compute queue only at the game's sync points (truck 45.0 -> 43.9, bridge 64.0 -> 64.6).
 2. CPU work per draw in busy streets (~7,500 draws a frame, 25-30 FPS): profile `tlggpu-host`
    (arm64, safe to sample) with a save there.
 3. Launcher: automatic updates (port bloodborne_mac_port's `Updater.swift` / `Update.swift`), key

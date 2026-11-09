@@ -7,6 +7,7 @@
 # Never hangs: waits (bounded) for an earlier game to exit, the run itself is bounded by diag_run.sh's
 # timeout, and this script gives up after <seconds> + 180 s whatever happens. Prints the median FPS of
 # the last 40 s, crashes, compute-queue and fence stats. SHOT_SECONDS / PAD_SCRIPT pass through.
+# Do not edit a script while a run of it is going: bash reads it as it runs (a summary was lost so).
 # bridge = out/bridge-fresh (a local copy of a save on the bridge; not in git).
 set -uo pipefail
 cd -- "$(dirname -- "$0")/../.."
