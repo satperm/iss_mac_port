@@ -146,6 +146,11 @@ void PushChanged(vk::CommandBuffer cmdbuf, vk::PipelineBindPoint bind_point, vk:
 
 void Pipeline::BindResources(DescriptorWrites& set_writes, u32 count,
                              const Shader::PushData& push_data) const {
+    BindResources(scheduler, set_writes, count, push_data);
+}
+
+void Pipeline::BindResources(Scheduler& scheduler, DescriptorWrites& set_writes, u32 count,
+                             const Shader::PushData& push_data) const {
     const auto bind_point =
         IsCompute() ? vk::PipelineBindPoint::eCompute : vk::PipelineBindPoint::eGraphics;
     const auto stage_flags = IsCompute() ? vk::ShaderStageFlagBits::eCompute : AllGraphicsStageBits;

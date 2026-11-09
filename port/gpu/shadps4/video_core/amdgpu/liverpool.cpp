@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <map>
+#include <string>
 #include <utility>
 #include <pthread.h>
 #ifdef __APPLE__
@@ -37,7 +39,62 @@
 #include "video_core/renderer_vulkan/vk_gpu_profiler.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 
+namespace Vulkan { extern bool g_fence_kind_compute; }
 namespace AmdGpu {
+
+// tlg: TLG_GFX_UNORDERED=1 (experiment): compute dispatches of the graphics queue that follow each
+// other with only register packets between them take no buffer hazard barriers (as the compute queue,
+// Rasterizer::AcbUnordered); any other packet (a draw, an event, a wait, a copy) starts a new run.
+// TLG_GFX_RUNS=1: how long those runs are, every 5 s.
+static bool GfxUnordered() {
+    static const bool on = [] {
+        const char* v = std::getenv("TLG_GFX_UNORDERED");
+        return v && *v == '1';
+    }();
+    return on;
+}
+static bool gfx_sync_pending = true;
+static void GfxRunPacket(bool dispatch) {
+    static const bool log = [] {
+        const char* v = std::getenv("TLG_GFX_RUNS");
+        return v && *v == '1';
+    }();
+    static u32 run = 0;
+    static u64 dispatches = 0, runs = 0, hist[6] = {};
+    static auto last = std::chrono::steady_clock::now();
+    if (dispatch) {
+        ++run;
+        ++dispatches;
+    } else if (run) {
+        ++runs;
+        hist[run == 1 ? 0 : run == 2 ? 1 : run <= 4 ? 2 : run <= 8 ? 3 : run <= 16 ? 4 : 5]++;
+        run = 0;
+    }
+    if (!log) {
+        return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last > std::chrono::seconds(5)) {
+        last = now;
+        std::printf("GFX dispatch runs (5 s): %llu dispatches in %llu runs; lengths 1:%llu 2:%llu "
+                    "3-4:%llu 5-8:%llu 9-16:%llu 17+:%llu\n",
+                    (unsigned long long)dispatches, (unsigned long long)runs,
+                    (unsigned long long)hist[0], (unsigned long long)hist[1],
+                    (unsigned long long)hist[2], (unsigned long long)hist[3],
+                    (unsigned long long)hist[4], (unsigned long long)hist[5]);
+        dispatches = runs = 0;
+        std::memset(hist, 0, sizeof(hist));
+    }
+}
+static u32 GfxDispatchFlags() {
+    GfxRunPacket(true);
+    if (!GfxUnordered()) {
+        return 0;
+    }
+    const u32 flags = 1u | (gfx_sync_pending ? 2u : 0u);
+    gfx_sync_pending = false;
+    return flags;
+}
 
 static const char* dcb_task_name{"DCB_TASK"};
 static const char* ccb_task_name{"CCB_TASK"};
@@ -442,6 +499,8 @@ void RunComputeReleaseMem(Vulkan::Rasterizer& rasterizer, const u8* data) {
         return !(env && *env == '0');
     }();
     const auto* release_mem = reinterpret_cast<const PM4CmdReleaseMem*>(task.packet);
+    Vulkan::g_fence_kind_compute = true;
+    struct ResetKind { ~ResetKind() { Vulkan::g_fence_kind_compute = false; } } reset_kind;
     if (defer_compute && release_mem->data_sel.Value() != DataSelect::GdsMemStore &&
         rasterizer.DeferUnifiedFence([task] {
             reinterpret_cast<const PM4CmdReleaseMem*>(task.packet)->SignalFence(
@@ -466,6 +525,42 @@ struct OcclusionDumpTask {
     VAddr address;
     u32 num_pairs;
 };
+
+// tlg: TLG_ACB_QUEUE: the compute queue's next work runs after what the main scheduler has so far.
+void RunAcbAfterMainWork(Vulkan::Rasterizer& rasterizer, const u8*) {
+    rasterizer.AcbAfterMainWork();
+}
+
+// tlg: a compute queue's DMA: GDS fills and GDS-to-memory copies on its own queue when it has one.
+void RunAcbDmaData(Vulkan::Rasterizer& rasterizer, const u8* data) {
+    const auto* dma_data = reinterpret_cast<const PM4DmaData*>(data);
+    if (dma_data->src_sel == DmaDataSrc::Data && dma_data->dst_sel == DmaDataDst::Gds &&
+        rasterizer.AcbFillGds(dma_data->dst_addr_lo, dma_data->NumBytes(), dma_data->data)) {
+        return;
+    }
+    if (dma_data->src_sel == DmaDataSrc::Gds &&
+        (dma_data->dst_sel == DmaDataDst::Memory || dma_data->dst_sel == DmaDataDst::MemoryUsingL2) &&
+        rasterizer.AcbCopyGds(dma_data->DstAddress<VAddr>(), dma_data->src_addr_lo, dma_data->NumBytes())) {
+        return;
+    }
+    if ((dma_data->src_sel == DmaDataSrc::Memory || dma_data->src_sel == DmaDataSrc::MemoryUsingL2) &&
+        (dma_data->dst_sel == DmaDataDst::Memory || dma_data->dst_sel == DmaDataDst::MemoryUsingL2) &&
+        rasterizer.AcbCopyMemory(dma_data->DstAddress<VAddr>(), dma_data->SrcAddress<VAddr>(),
+                                 dma_data->NumBytes())) {
+        return;
+    }
+    static const bool log = std::getenv("TLG_ACB_PACKETS") != nullptr;
+    if (log) {
+        static std::atomic<u64> count{0};
+        if ((count.fetch_add(1) & 127) == 0) {
+            std::printf("ACB DMA on the main queue (every 128th): src %u dst %u, %u bytes\n",
+                        u32(dma_data->src_sel), u32(dma_data->dst_sel), dma_data->NumBytes());
+        }
+    }
+    rasterizer.AcbFlushCopies();
+    RunDmaData(rasterizer, data);
+    rasterizer.AcbAfterMainWork();
+}
 
 void RunOcclusionDump(Vulkan::Rasterizer& rasterizer, const u8* data) {
     OcclusionDumpTask task;
@@ -578,7 +673,7 @@ bool Liverpool::KnownOcclusionValue(VAddr address, u32& value) const {
     return false;
 }
 
-bool Liverpool::PendingFenceValue(VAddr address, u32& value) {
+bool Liverpool::PendingFenceValue(VAddr address, u32& value, bool* from_compute) {
     for (auto it = pending_fences.rbegin(); it != pending_fences.rend(); ++it) {
         if (rasterizer->DrawPipeReached(it->position)) {
             break; // written already: memory holds it (or a later write)
@@ -586,6 +681,9 @@ bool Liverpool::PendingFenceValue(VAddr address, u32& value) {
         if (address >= it->address && address + sizeof(u32) <= it->address + it->num_bytes) {
             u64 data = it->data;
             value = static_cast<u32>(data >> ((address - it->address) * 8));
+            if (from_compute) {
+                *from_compute = it->from_compute;
+            }
             return true;
         }
     }
@@ -980,6 +1078,24 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
             if (Vulkan::FrameRecord::Active()) [[unlikely]] {
                 Vulkan::FrameRecord::Packet(-1, header, &regs);
             }
+            // tlg: TLG_GFX_UNORDERED: only register packets keep a run of dispatches going.
+            switch (opcode) {
+            case PM4ItOpcode::DispatchDirect:
+            case PM4ItOpcode::DispatchIndirect:
+            case PM4ItOpcode::SetShReg:
+            case PM4ItOpcode::SetContextReg:
+            case PM4ItOpcode::SetUconfigReg:
+            case PM4ItOpcode::SetConfigReg:
+            case PM4ItOpcode::ContextControl:
+            case PM4ItOpcode::IndexType:
+            case PM4ItOpcode::Nop:
+            case PM4ItOpcode::IndirectBuffer:
+                break;
+            default:
+                gfx_sync_pending = true;
+                GfxRunPacket(false);
+                break;
+            }
             switch (opcode) {
             case PM4ItOpcode::Nop: {
                 const auto* nop = reinterpret_cast<const PM4CmdNop*>(header);
@@ -1298,7 +1414,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 const auto cmd_address = reinterpret_cast<const void*>(header);
                 rasterizer->ScopeMarker("gfx:{}:DispatchDirect", fmt::make_format_args(cmd_address),
                                         [&] {
-                                            rasterizer->next_dispatch_flags = 0;
+                                            rasterizer->next_dispatch_flags = GfxDispatchFlags();
                                             rasterizer->DispatchDirect();
                                         });
                 break;
@@ -1320,7 +1436,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 rasterizer->ScopeMarker(
                     "gfx:{}:DispatchIndirect", fmt::make_format_args(cmd_address),
                     [&] {
-                        rasterizer->next_dispatch_flags = 0;
+                        rasterizer->next_dispatch_flags = GfxDispatchFlags();
                         rasterizer->DispatchIndirect(indirect_args_addr, offset, size);
                     });
                 break;
@@ -1689,6 +1805,30 @@ static u32 AcbDispatchFlags() {
     return flags;
 }
 
+// tlg: TLG_ACB_PACKETS=1: what the compute queues do besides dispatches, every 5 s.
+static void AcbPacket(const char* what) {
+    static const bool on = [] {
+        const char* v = std::getenv("TLG_ACB_PACKETS");
+        return v && *v == '1';
+    }();
+    if (!on) {
+        return;
+    }
+    static std::map<std::string, u64> counts;
+    static auto last = std::chrono::steady_clock::now();
+    ++counts[what];
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last > std::chrono::seconds(5)) {
+        last = now;
+        std::printf("ACB packets (5 s):");
+        for (const auto& [k, v] : counts) {
+            std::printf(" %s=%llu", k.c_str(), (unsigned long long)v);
+        }
+        std::printf("\n");
+        counts.clear();
+    }
+}
+
 template <bool is_indirect>
 Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
     FIBER_ENTER(acb_task_name[vqid]);
@@ -1820,6 +1960,7 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
             if (dma_data->dst_addr_lo == 0x3022C || !rasterizer) {
                 break;
             }
+            AcbPacket(fmt::format("dma[src{},dst{}]", u32(dma_data->src_sel), u32(dma_data->dst_sel)).c_str());
             ASSERT(dma_data->command.das == 0);
             if (pipelined) {
                 const bool to_memory = dma_data->dst_sel == DmaDataDst::Memory ||
@@ -1837,7 +1978,7 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
                     break;
                 }
                 // In order with the draws and dispatches (on the draw recording thread).
-                if (rasterizer->RunInOrder(&RunDmaData, dma_data, sizeof(PM4DmaData),
+                if (rasterizer->RunInOrder(&RunAcbDmaData, dma_data, sizeof(PM4DmaData),
                                            TlgToggle::PipelinedMemoryWrites) &&
                     to_memory) {
                     rasterizer->NotePendingGpuWrite(dst_addr, dma_data->NumBytes());
@@ -1886,6 +2027,7 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
         }
         case PM4ItOpcode::AcquireMem: {
             acb_sync_pending = true;
+            AcbPacket("acquire_mem");
             break;
         }
         case PM4ItOpcode::Rewind: {
@@ -1979,6 +2121,7 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
         }
         case PM4ItOpcode::WriteData: {
             acb_sync_pending = true;
+            AcbPacket("write_data");
             const auto* write_data = reinterpret_cast<const PM4CmdWriteData*>(header);
             ASSERT(write_data->dst_sel.Value() == 2 || write_data->dst_sel.Value() == 5);
             ASSERT(!write_data->wr_one_addr.Value());
@@ -2003,6 +2146,7 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
         }
         case PM4ItOpcode::MemSemaphore: {
             acb_sync_pending = true;
+            AcbPacket("mem_semaphore");
             const auto* mem_semaphore = reinterpret_cast<const PM4CmdMemSemaphore*>(header);
             if (mem_semaphore->IsSignaling()) {
                 mem_semaphore->Signal();
@@ -2020,12 +2164,20 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
             ASSERT(wait_reg_mem->engine.Value() == PM4CmdWaitRegMem::Engine::Me);
             // tlg: a fence handed to the draw recording thread counts as written here too, as on
             // the graphics queue: compute work is recorded on the same in-order queue.
+            bool wait_from_compute = false;
             if (u32 value; AcbFenceWaits() && pipelined &&
                            wait_reg_mem->mem_space.Value() == PM4CmdWaitRegMem::MemSpace::Memory &&
-                           PendingFenceValue(wait_reg_mem->Address<VAddr>(), value) &&
+                           PendingFenceValue(wait_reg_mem->Address<VAddr>(), value, &wait_from_compute) &&
                            wait_reg_mem->TestValue(value)) {
+                AcbPacket(wait_from_compute ? "wait_met_by_compute_fence" : "wait_met_by_graphics_fence");
+                // A graphics fence in stream order: with its own queue, this queue must wait for
+                // the graphics work before it.
+                if (!wait_from_compute) {
+                    rasterizer->RunInOrder(&RunAcbAfterMainWork, &wait_from_compute, 1);
+                }
                 break;
             }
+            AcbPacket(wait_reg_mem->Test(regs.reg_array) ? "wait_met_now" : "wait_had_to_wait");
             while (!wait_reg_mem->Test(regs.reg_array)) {
                 // tlg: the value may come from a fence the recording thread has yet to write.
                 if (pipelined && !rasterizer->DrawPipeIdle()) {
@@ -2038,6 +2190,9 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
         }
         case PM4ItOpcode::ReleaseMem: {
             acb_sync_pending = true;
+            AcbPacket(fmt::format("release_mem[data{},int{}]",
+                                  u32(reinterpret_cast<const PM4CmdReleaseMem*>(header)->data_sel.Value()),
+                                  u32(reinterpret_cast<const PM4CmdReleaseMem*>(header)->int_sel.Value())).c_str());
             if (pipelined) {
                 ComputeReleaseMem task;
                 std::memcpy(task.packet, header, sizeof(task.packet));
@@ -2049,7 +2204,7 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
                                         release->data_sel.Value() == DataSelect::Data64)) {
                     const u32 bytes = release->data_sel.Value() == DataSelect::Data64 ? 8 : 4;
                     pending_fences.push_back({release->Address<VAddr>(), release->DataQWord(),
-                                              bytes, rasterizer->DrawPipeHead()});
+                                              bytes, rasterizer->DrawPipeHead(), true});
                 }
                 break;
             }
@@ -2075,6 +2230,7 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
         }
         case PM4ItOpcode::EventWrite: {
             acb_sync_pending = true;
+            AcbPacket("event_write");
             // const auto* event = reinterpret_cast<const PM4CmdEventWrite*>(header);
             break;
         }

@@ -687,6 +687,32 @@ class Scheduler {
 public:
     /// `threaded_recording`: Vulkan commands passed to Record() are recorded by a worker thread.
     explicit Scheduler(const Instance& instance, bool threaded_recording = false);
+    /// tlg: TLG_ACB_QUEUE: a scheduler of its own queue: its submissions run in order among
+    /// themselves (each waits for the previous one) and take no global submit lock.
+    Scheduler(const Instance& instance, vk::Queue queue, u32 queue_family);
+
+    /// tlg: every submission of this scheduler first submits the companion's recorded work and
+    /// waits for it on the GPU: what is recorded here after the companion's work sees its results.
+    void SetCompanion(Scheduler* other) noexcept {
+        companion = other;
+    }
+    /// Companion side: guards recording against the owner's submissions.
+    [[nodiscard]] std::recursive_mutex& CompanionMutex() noexcept {
+        return companion_mutex;
+    }
+    /// tlg: commands recorded so far (TLG_ACB_QUEUE: did a binding record something here?).
+    [[nodiscard]] u64 RecordCount() const noexcept {
+        return record_count;
+    }
+    /// Companion side: there is recorded work to submit.
+    void MarkCompanionWork() noexcept {
+        companion_work = true;
+    }
+    /// The next submission waits for `tick` of `semaphore` too.
+    void WaitNextSubmit(vk::Semaphore semaphore, u64 tick) noexcept {
+        next_wait_semaphore = semaphore;
+        next_wait_tick = tick;
+    }
     ~Scheduler();
 
     /// Sends the current execution context to the GPU
@@ -772,6 +798,7 @@ public:
     /// everything it uses (capture by value): it may run later on the recording thread.
     template <typename Func>
     void Record(Func&& func) {
+        ++record_count;
         CheckOwner(__builtin_return_address(0));
         if (!recording_threaded || direct_mode) {
             func(current_cmdbuf);
@@ -998,6 +1025,15 @@ private:
 
 private:
     const Instance& instance;
+    u64 record_count{0};
+    vk::Queue submit_queue;
+    bool own_queue{false};
+    Scheduler* companion{nullptr};
+    u64 companion_waited{0};
+    std::recursive_mutex companion_mutex;
+    bool companion_work{false};
+    vk::Semaphore next_wait_semaphore{};
+    u64 next_wait_tick{0};
     Semaphore work_semaphore;
     CommandPool command_pool;
     DynamicState dynamic_state;

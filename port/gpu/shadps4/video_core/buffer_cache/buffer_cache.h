@@ -150,6 +150,15 @@ public:
         return addr >= unified_base && addr + size <= unified_end;
     }
     /// tlg: the range is imported (EnableUnified succeeded).
+    /// tlg: TLG_ACB_QUEUE: the same guest memory as a buffer without Metal hazard tracking, for
+    /// the compute queue (null when there is none). The graphics queue keeps the tracked one.
+    [[nodiscard]] vk::Buffer UnifiedAlias() const noexcept {
+        return unified_alias;
+    }
+    /// The tracked buffer's handle: bindings of it become the alias on the compute queue.
+    [[nodiscard]] vk::Buffer UnifiedHandle() const noexcept {
+        return unified_buffer ? unified_buffer->Handle() : vk::Buffer{};
+    }
     [[nodiscard]] bool UnifiedActive() const noexcept {
         return unified_end != 0;
     }
@@ -404,6 +413,8 @@ private:
     VAddr unified_end{};
     bool unified_failed{};
     vk::DeviceMemory unified_memory{};
+    vk::DeviceMemory unified_alias_memory{};
+    vk::Buffer unified_alias{};
     std::unique_ptr<Buffer> unified_buffer;
     /// GPU tick of the last recorded write of each 64 KiB chunk.
     std::unique_ptr<std::atomic<u64>[]> unified_chunk_tick;

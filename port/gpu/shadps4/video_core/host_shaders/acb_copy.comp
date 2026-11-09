@@ -1,0 +1,19 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// tlg: a compute queue's memory-to-memory DMA on its own Vulkan queue (TLG_ACB_QUEUE), as a dispatch:
+// the particle chains copy small counters ~190 times a frame, and a blit would end the compute
+// encoder each time. Consecutive copies share one dispatch, in order.
+#version 450
+layout(local_size_x = 1) in;
+layout(std430, binding = 0) buffer Memory { uint words[]; };
+layout(push_constant) uniform Constants {
+    uint num_copies;
+    uvec4 copies[32]; // source, destination (dwords from the start of the arena), count, unused
+};
+void main() {
+    for (uint c = 0; c < num_copies; ++c) {
+        const uint src = copies[c].x, dst = copies[c].y, count = copies[c].z;
+        for (uint i = 0; i < count; ++i) {
+            words[dst + i] = words[src + i];
+        }
+    }
+}

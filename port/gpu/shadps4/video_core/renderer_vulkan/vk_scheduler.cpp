@@ -43,8 +43,17 @@ std::atomic<u32> g_tlg_recorder_cpu_tid{0};
 /// Time the recording thread spent spinning for the next chunk before it slept.
 std::atomic<u64> g_tlg_recorder_spin_ns{0};
 
+Scheduler::Scheduler(const Instance& instance, vk::Queue queue, u32 queue_family)
+    : instance{instance}, submit_queue{queue}, own_queue{true}, work_semaphore{instance},
+      command_pool{instance, &work_semaphore, queue_family} {
+    AllocateWorkerCommandBuffers();
+    priority_pending_ops_thread =
+        std::jthread(std::bind_front(&Scheduler::PriorityPendingOpsThread, this));
+}
+
 Scheduler::Scheduler(const Instance& instance, bool threaded_recording)
-    : instance{instance}, work_semaphore{instance}, command_pool{instance, &work_semaphore} {
+    : instance{instance}, submit_queue{instance.GetGraphicsQueue()}, work_semaphore{instance},
+      command_pool{instance, &work_semaphore, instance.GetGraphicsQueueFamilyIndex()} {
     // tlg: TLG_VK_RECORD_THREAD=0 records on the calling thread.
     const char* env = std::getenv("TLG_VK_RECORD_THREAD");
     if (threaded_recording && !(env && env[0] == '0')) {
@@ -727,13 +736,40 @@ void Scheduler::AllocateWorkerCommandBuffers() {
 }
 
 void Scheduler::SubmitExecution(SubmitInfo& info) {
+    // tlg: TLG_ACB_QUEUE: the companion queue's recorded work first; this submission waits for it.
+    if (companion) {
+        std::scoped_lock companion_lock{companion->companion_mutex};
+        if (companion->companion_work) {
+            companion->Flush();
+        }
+        const u64 done = companion->CurrentTick() - 1;
+        if (done > companion_waited) {
+            companion_waited = done;
+            info.AddWait(companion->work_semaphore.Handle(), done);
+        }
+    }
     // tlg: TLG_SPLIT_SUBMIT_LOCK=1 serializes only this scheduler's submissions (its record
     // chunks, command buffer and tick) and takes the queue lock just for the queue calls, so
     // a present on another thread no longer waits out this scheduler's recorder drain and
     // host copies below.
     const bool split = SplitSubmitLock();
-    std::unique_lock lk{split ? execution_mutex : submit_mutex};
+    std::unique_lock lk{split || own_queue ? execution_mutex : submit_mutex};
     const u64 signal_value = work_semaphore.NextTick();
+    if (own_queue) {
+        companion_work = false;
+        static const bool self_wait = [] {
+            // The encoders are chained in MoltenVK (TLG_ACB_CHAIN), unless that is off.
+            const char* chain = std::getenv("TLG_ACB_CHAIN");
+            return chain && *chain == '0';
+        }();
+        if (self_wait) {
+            info.AddWait(work_semaphore.Handle(), signal_value - 1);
+        }
+        if (next_wait_semaphore) {
+            info.AddWait(next_wait_semaphore, next_wait_tick);
+            next_wait_semaphore = vk::Semaphore{};
+        }
+    }
     work_since_submit.store(0, std::memory_order_relaxed);
     tess_indirect_since_submit.store(0, std::memory_order_relaxed);
 
@@ -786,10 +822,12 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
         .pSignalSemaphores = info.signal_semas.data(),
     };
 
-    ImGui::Core::TextureManager::Submit();
+    if (!own_queue) {
+        ImGui::Core::TextureManager::Submit();
+    }
     const auto submit_result = [&] {
-        const auto queue_lock = LockQueueInSubmit();
-        return instance.GetGraphicsQueue().submit(submit_info, info.fence);
+        const auto queue_lock = own_queue ? std::unique_lock<std::mutex>{} : LockQueueInSubmit();
+        return submit_queue.submit(submit_info, info.fence);
     }();
     ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
 

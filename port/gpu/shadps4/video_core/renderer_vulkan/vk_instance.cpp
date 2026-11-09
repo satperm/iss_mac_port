@@ -5,6 +5,7 @@
 #include <sys/sysctl.h>
 #endif
 #include <algorithm>
+#include <string>
 #include <string_view>
 #include <cstdio>
 #include <cstdlib>
@@ -549,11 +550,32 @@ bool Instance::CreateDevice() {
     }
 
     static constexpr std::array queue_priorities = {1.0f};
-    const vk::DeviceQueueCreateInfo queue_info = {
+    // tlg: TLG_ACB_QUEUE=1: a second queue (another family: MoltenVK has one queue per family) for
+    // the game's compute queues.
+    std::array<vk::DeviceQueueCreateInfo, 2> queue_infos = {{{
         .queueFamilyIndex = queue_family_index,
         .queueCount = static_cast<u32>(queue_priorities.size()),
         .pQueuePriorities = queue_priorities.data(),
-    };
+    }}};
+    u32 num_queue_infos = 1;
+    if (const char* acb_queue = std::getenv("TLG_ACB_QUEUE"); acb_queue && *acb_queue == '1') {
+        std::printf("GPU: TLG_ACB_QUEUE: %zu queue families, graphics family %u\n",
+                    family_properties.size(), queue_family_index);
+        for (std::size_t i = 0; i < family_properties.size(); i++) {
+            if (static_cast<u32>(i) != queue_family_index &&
+                (family_properties[i].queueFlags & vk::QueueFlagBits::eCompute)) {
+                compute_queue_family_index = static_cast<u32>(i);
+                queue_infos[1] = queue_infos[0];
+                queue_infos[1].queueFamilyIndex = compute_queue_family_index;
+                num_queue_infos = 2;
+                // Its encoders run one after another (they use the untracked alias of guest memory).
+                if (const char* chain = std::getenv("TLG_ACB_CHAIN"); !chain || *chain != '0') {
+                    setenv("MVK_TLG_CHAIN_QUEUE_FAMILY", std::to_string(i).c_str(), 1);
+                }
+                break;
+            }
+        }
+    }
 
     const auto vk11_features = feature_chain.get<vk::PhysicalDeviceVulkan11Features>();
     vk12_features = feature_chain.get<vk::PhysicalDeviceVulkan12Features>();
@@ -572,8 +594,8 @@ bool Instance::CreateDevice() {
     }
     vk::StructureChain device_chain = {
         vk::DeviceCreateInfo{
-            .queueCreateInfoCount = 1u,
-            .pQueueCreateInfos = &queue_info,
+            .queueCreateInfoCount = num_queue_infos,
+            .pQueueCreateInfos = queue_infos.data(),
             .enabledExtensionCount = static_cast<u32>(enabled_extensions.size()),
             .ppEnabledExtensionNames = enabled_extensions.data(),
         },
@@ -828,6 +850,9 @@ bool Instance::CreateDevice() {
     }
 
     graphics_queue = device->getQueue(queue_family_index, 0);
+    if (num_queue_infos == 2) {
+        compute_queue = device->getQueue(compute_queue_family_index, 0);
+    }
     present_queue = device->getQueue(queue_family_index, 0);
 
     if (calibrated_timestamps) {

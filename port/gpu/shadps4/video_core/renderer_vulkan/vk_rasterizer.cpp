@@ -44,6 +44,8 @@
 #include "video_core/buffer_cache/unified_memory.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
+#include "video_core/host_shaders/acb_copy_comp.h"
+#include "video_core/renderer_vulkan/vk_shader_util.h"
 #include "video_core/renderer_vulkan/vk_gpu_profiler.h"
 #include "tlg_threads.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
@@ -118,13 +120,30 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
     }
     // tlg: this thread joins the texture binding helper before it changes image state.
     runtime.SetImageAccessHook(&JoinBindHelper, this);
+    if (instance.GetComputeQueue()) {
+        acb_scheduler = std::make_unique<Scheduler>(instance, instance.GetComputeQueue(),
+                                                    instance.GetComputeQueueFamilyIndex());
+        scheduler.SetCompanion(acb_scheduler.get());
+        acb_fence_thread = std::jthread(std::bind_front(&Rasterizer::AcbFenceThread, this));
+        if (draw_pipe) {
+            draw_pipe->SetIdleHandler(&Rasterizer::AcbIdle, this);
+        }
+        std::printf("GPU: the game's compute queue runs on a queue of its own (TLG_ACB_QUEUE=1)\n");
+    }
     scheduler.SetSubmitCallback([this](Vulkan::SubmitInfo& info) {
         runtime.FlushBarriers();
         buffer_cache.SubmitPendingArenaBinds(info);
     });
 }
 
-Rasterizer::~Rasterizer() = default;
+Rasterizer::~Rasterizer() {
+    scheduler.SetCompanion(nullptr);
+    if (acb_fence_thread.joinable()) {
+        acb_fence_thread.request_stop();
+        acb_fence_cv.notify_all();
+        acb_fence_thread.join();
+    }
+}
 
 inline const AmdGpu::Regs& Rasterizer::Regs() const {
     return stage_regs ? *stage_regs : liverpool->regs;
@@ -2292,6 +2311,333 @@ DispatchTiming& Timing() {
 }
 } // namespace
 
+Scheduler* Rasterizer::AcbTarget(const Shader::Info& cs, u32 flags, u64 main_records) {
+    if (!acb_scheduler || !(flags & 1u)) {
+        return nullptr;
+    }
+    static std::atomic<u64> routed{0}, kept{0}, main_waits{0};
+    static const bool stats = [] {
+        const char* v = std::getenv("TLG_ACB_PACKETS");
+        return v && *v == '1';
+    }();
+    if (stats) [[unlikely]] {
+        static auto last = std::chrono::steady_clock::now();
+        const auto now = std::chrono::steady_clock::now();
+        if (now - last > std::chrono::seconds(5)) {
+            last = now;
+            std::printf("ACB queue (5 s): %llu dispatches there, %llu on the main queue, %llu waits for main\n",
+                        (unsigned long long)routed.exchange(0), (unsigned long long)kept.exchange(0),
+                        (unsigned long long)main_waits.exchange(0));
+        }
+    }
+    static const bool images_there = [] {
+        const char* v = std::getenv("TLG_ACB_IMAGES");
+        return !v || *v != '0';
+    }();
+    const bool eligible = buffer_cache.UnifiedAlias() && (images_there || bound_images.empty()) && !cs.uses_dma &&
+                          !FrameCapture::Active() && !FrameRecord::IsRecording() &&
+                          !Scheduler::FullBarriers();
+    if (!eligible) {
+        kept.fetch_add(1, std::memory_order_relaxed);
+        {
+            std::scoped_lock lock{acb_scheduler->CompanionMutex()};
+            AcbFlushCopies();
+        }
+        acb_needs_main = true;
+        if (stats) [[unlikely]] {
+            static std::set<u64> seen;
+            if (seen.insert(cs.pgm_hash).second) {
+                std::printf("ACB queue: cs %016llx stays on the main queue: images %zu dma %d\n",
+                            (unsigned long long)cs.pgm_hash, bound_images.size(), int(cs.uses_dma));
+            }
+        }
+        return nullptr;
+    }
+    routed.fetch_add(1, std::memory_order_relaxed);
+    std::scoped_lock lock{acb_scheduler->CompanionMutex()};
+    AcbFlushCopies();
+    // A binding that recorded on the main scheduler (an upload) must run first.
+    if (acb_needs_main || scheduler.RecordCount() != main_records) {
+        main_waits.fetch_add(1, std::memory_order_relaxed);
+        if (stats) [[unlikely]] {
+            static std::atomic<u64> by_flag{0}, by_records{0};
+            (acb_needs_main ? by_flag : by_records).fetch_add(1, std::memory_order_relaxed);
+            if (((by_flag + by_records) & 255) == 0) {
+                std::printf("ACB queue: main waits: flag %llu, recorded in binding %llu\n",
+                            (unsigned long long)by_flag.load(), (unsigned long long)by_records.load());
+            }
+        }
+        AcbWaitMain();
+    }
+    return acb_scheduler.get();
+}
+
+bool Rasterizer::AcbFillGds(u32 offset, u32 num_bytes, u32 value) {
+    if (!acb_scheduler || !buffer_cache.UnifiedAlias()) {
+        return false;
+    }
+    std::scoped_lock lock{acb_scheduler->CompanionMutex()};
+    AcbFlushCopies();
+    if (acb_needs_main) {
+        AcbWaitMain();
+    }
+    const vk::Buffer gds = buffer_cache.GetGdsBuffer()->Handle();
+    acb_scheduler->Record([=](vk::CommandBuffer cmdbuf) {
+        cmdbuf.fillBuffer(gds, offset, num_bytes, value);
+    });
+    // The next dispatches, in another encoder of the same queue: ordered by submission.
+    acb_scheduler->Flush();
+    return true;
+}
+
+bool Rasterizer::AcbCopyGds(VAddr dst, u32 gds_offset, u32 num_bytes) {
+    if (!acb_scheduler || !buffer_cache.UnifiedAlias() || !buffer_cache.IsUnified(dst, num_bytes)) {
+        return false;
+    }
+    std::scoped_lock lock{acb_scheduler->CompanionMutex()};
+    AcbFlushCopies();
+    if (acb_needs_main) {
+        AcbWaitMain();
+    }
+    texture_cache.InvalidateMemoryFromGPU(dst, num_bytes);
+    VideoCore::written_binding_source = {"acb gds copy", 0};
+    const auto [buffer, offset] = buffer_cache.ObtainBuffer(dst, num_bytes, true);
+    const vk::Buffer gds = buffer_cache.GetGdsBuffer()->Handle();
+    const vk::Buffer alias = buffer_cache.UnifiedAlias();
+    const u64 dst_offset = offset;
+    // The dispatches that count, then the copy, then the dispatches that read it: submission order.
+    acb_scheduler->Flush();
+    acb_scheduler->Record([=](vk::CommandBuffer cmdbuf) {
+        const vk::BufferCopy region{.srcOffset = gds_offset, .dstOffset = dst_offset, .size = num_bytes};
+        cmdbuf.copyBuffer(gds, alias, region);
+    });
+    acb_scheduler->Flush();
+    return true;
+}
+
+void Rasterizer::AcbFenceThread(std::stop_token stop) {
+    Common::SetCurrentThreadName("tlg:AcbFences");
+    const vk::Device device = instance.GetDevice();
+    u32 spins = 0;
+    while (!stop.stop_requested()) {
+        AcbFence fence;
+        {
+            std::unique_lock lock{acb_fence_mutex};
+            acb_fence_cv.wait(lock, stop, [this] { return !acb_fences.empty(); });
+            if (stop.stop_requested()) {
+                return;
+            }
+            // The front stays queued until done: the recording side only appends.
+            if (device.getEventStatus(acb_fences.front().event) != vk::Result::eEventSet) {
+                lock.unlock();
+                if (++spins < 64) {
+                    std::this_thread::yield();
+                } else {
+                    std::this_thread::sleep_for(std::chrono::microseconds(20));
+                }
+                continue;
+            }
+            fence = std::move(acb_fences.front());
+            acb_fences.pop_front();
+        }
+        spins = 0;
+        fence.write();
+        (void)device.resetEvent(fence.event);
+        std::scoped_lock lock{acb_fence_mutex};
+        acb_free_events.push_back(fence.event);
+    }
+}
+
+void Rasterizer::AcbDeferFence(Common::UniqueFunction<void>&& write) {
+    AcbFlushCopies();
+    const vk::Device device = instance.GetDevice();
+    vk::Event event{};
+    {
+        std::scoped_lock lock{acb_fence_mutex};
+        if (!acb_free_events.empty()) {
+            event = acb_free_events.back();
+            acb_free_events.pop_back();
+        }
+    }
+    if (!event) {
+        const auto [result, created] = device.createEvent(vk::EventCreateInfo{});
+        ASSERT_MSG(result == vk::Result::eSuccess, "createEvent: {}", vk::to_string(result));
+        event = created;
+    }
+    acb_scheduler->Record([event](vk::CommandBuffer cmdbuf) {
+        cmdbuf.setEvent(event, vk::PipelineStageFlagBits::eAllCommands);
+    });
+    acb_scheduler->MarkCompanionWork();
+    {
+        std::scoped_lock lock{acb_fence_mutex};
+        acb_fences.push_back({event, std::move(write)});
+    }
+    acb_fence_cv.notify_one();
+    // Stage B flushes when it runs out of packets (AcbIdle); under a steady stream of packets, every few
+    // fences. TLG_ACB_FLUSH_FENCES (default 8), 1: a command buffer per fence.
+    static const u32 flush_fences = [] {
+        const char* v = std::getenv("TLG_ACB_FLUSH_FENCES");
+        return v && *v ? u32(std::atoi(v)) : 8u;
+    }();
+    if (++acb_fences_since_flush >= flush_fences || !DrawPipe::OnStageB()) {
+        acb_fences_since_flush = 0;
+        acb_scheduler->Flush();
+    }
+}
+
+void Rasterizer::AcbIdle(void* context) {
+    auto* self = static_cast<Rasterizer*>(context);
+    if (self->acb_fences_since_flush == 0 && self->acb_copies.empty()) {
+        return;
+    }
+    std::scoped_lock lock{self->acb_scheduler->CompanionMutex()};
+    self->AcbFlushCopies();
+    self->acb_fences_since_flush = 0;
+    self->acb_scheduler->Flush();
+}
+
+bool Rasterizer::AcbCopyMemory(VAddr dst, VAddr src, u32 num_bytes) {
+    if (!acb_scheduler || !buffer_cache.UnifiedAlias() || !buffer_cache.IsUnified(dst, num_bytes) ||
+        !buffer_cache.IsUnified(src, num_bytes) || ((dst | src | num_bytes) & 3) != 0 || num_bytes == 0) {
+        return false;
+    }
+    // As CopyBuffer: neither side was written by the GPU, so the copy needs no GPU work at all.
+    if (!buffer_cache.IsRegionGpuModified(dst, num_bytes) &&
+        !buffer_cache.IsRegionGpuModified(src, num_bytes) &&
+        !texture_cache.FindImageFromRange(src, num_bytes)) {
+        if (TlgSplit::Host()) {
+            InvalidateMemory(dst, num_bytes);
+        }
+        std::memcpy(std::bit_cast<void*>(dst), std::bit_cast<void*>(src), num_bytes);
+        return true;
+    }
+    const vk::Device device = instance.GetDevice();
+    if (!acb_copy_pipeline) {
+        const std::array<vk::DescriptorSetLayoutBinding, 1> bindings = {{
+            {.binding = 0,
+             .descriptorType = vk::DescriptorType::eStorageBuffer,
+             .descriptorCount = 1,
+             .stageFlags = vk::ShaderStageFlagBits::eCompute},
+        }};
+        acb_copy_desc_layout = Check(device.createDescriptorSetLayoutUnique({
+            .flags = vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR,
+            .bindingCount = static_cast<u32>(bindings.size()),
+            .pBindings = bindings.data(),
+        }));
+        const vk::PushConstantRange range{.stageFlags = vk::ShaderStageFlagBits::eCompute,
+                                          .offset = 0,
+                                          .size = 16 + 32 * sizeof(AcbCopy)};
+        acb_copy_layout = Check(device.createPipelineLayoutUnique({
+            .setLayoutCount = 1,
+            .pSetLayouts = &*acb_copy_desc_layout,
+            .pushConstantRangeCount = 1,
+            .pPushConstantRanges = &range,
+        }));
+        const auto module = CompileSPV(ACB_COPY_COMP, device);
+        acb_copy_pipeline = Check(device.createComputePipelineUnique(
+            {}, vk::ComputePipelineCreateInfo{
+                    .stage = {.stage = vk::ShaderStageFlagBits::eCompute,
+                              .module = module,
+                              .pName = "main"},
+                    .layout = *acb_copy_layout,
+                }));
+        device.destroyShaderModule(module);
+    }
+    std::scoped_lock lock{acb_scheduler->CompanionMutex()};
+    if (acb_needs_main) {
+        AcbWaitMain();
+    }
+    texture_cache.InvalidateMemoryFromGPU(dst, num_bytes);
+    VideoCore::written_binding_source = {"acb copy", 0};
+    const auto [dst_buffer, dst_at] = buffer_cache.ObtainBuffer(dst, num_bytes, true);
+    const auto [src_buffer, src_at] = buffer_cache.ObtainBuffer(src, num_bytes, false);
+    if (((dst_at + num_bytes) >> 34) != 0 || ((src_at + num_bytes) >> 34) != 0) {
+        return false; // beyond what a 32-bit dword index reaches
+    }
+    acb_copies.push_back({u32(src_at / 4), u32(dst_at / 4), num_bytes / 4, 0});
+    if (acb_copies.size() == acb_copies.capacity()) {
+        AcbFlushCopies();
+    }
+    return true;
+}
+
+void Rasterizer::AcbFlushCopies() {
+    if (acb_copies.empty()) {
+        return;
+    }
+    std::scoped_lock lock{acb_scheduler->CompanionMutex()};
+    static std::atomic<u64> batches{0}, copies{0};
+    static const bool stats = std::getenv("TLG_ACB_PACKETS") != nullptr;
+    copies.fetch_add(acb_copies.size(), std::memory_order_relaxed);
+    if (stats && (batches.fetch_add(1, std::memory_order_relaxed) & 8191) == 8191) [[unlikely]] {
+        std::printf("ACB copies: %llu in %llu dispatches\n", (unsigned long long)copies.load(),
+                    (unsigned long long)batches.load());
+    }
+    struct Constants {
+        u32 num_copies;
+        u32 pad[3];
+        std::array<AcbCopy, 32> copies;
+    } constants{};
+    constants.num_copies = u32(acb_copies.size());
+    std::copy(acb_copies.begin(), acb_copies.end(), constants.copies.begin());
+    acb_copies.clear();
+    const vk::Buffer alias = buffer_cache.UnifiedAlias();
+    const vk::Pipeline pipeline = *acb_copy_pipeline;
+    const vk::PipelineLayout layout = *acb_copy_layout;
+    acb_scheduler->Record([=](vk::CommandBuffer cmdbuf) {
+        const vk::MemoryBarrier2 mb{
+            .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+            .srcAccessMask = vk::AccessFlagBits2::eShaderWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+            .dstAccessMask = vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite,
+        };
+        cmdbuf.pipelineBarrier2(vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &mb});
+        const vk::DescriptorBufferInfo info{alias, 0, VK_WHOLE_SIZE};
+        const vk::WriteDescriptorSet write{.dstBinding = 0,
+                                           .descriptorCount = 1,
+                                           .descriptorType = vk::DescriptorType::eStorageBuffer,
+                                           .pBufferInfo = &info};
+        cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline);
+        cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute, layout, 0, write);
+        cmdbuf.pushConstants(layout, vk::ShaderStageFlagBits::eCompute, 0,
+                             u32(16 + constants.num_copies * sizeof(AcbCopy)), &constants);
+        cmdbuf.dispatch(1, 1, 1);
+        cmdbuf.pipelineBarrier2(vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &mb});
+    });
+    acb_scheduler->MarkCompanionWork();
+}
+
+void Rasterizer::AcbWaitMain() {
+    acb_needs_main = false;
+    scheduler.Flush();
+    acb_scheduler->WaitNextSubmit(scheduler.GetWorkSemaphore()->Handle(), scheduler.CurrentTick() - 1);
+}
+
+void Rasterizer::AcbBind(Scheduler& acb, const ComputePipeline* pipeline, bool barrier) {
+    needs_barrier = false;
+    if (barrier) {
+        acb.Record([](vk::CommandBuffer cmdbuf) {
+            const vk::MemoryBarrier2 mb{
+                .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+                .srcAccessMask = vk::AccessFlagBits2::eShaderWrite,
+                .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader |
+                                vk::PipelineStageFlagBits2::eDrawIndirect,
+                .dstAccessMask = vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite |
+                                 vk::AccessFlagBits2::eIndirectCommandRead,
+            };
+            cmdbuf.pipelineBarrier2(vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &mb});
+        });
+    }
+    const vk::Buffer tracked = buffer_cache.UnifiedHandle();
+    const vk::Buffer alias = buffer_cache.UnifiedAlias();
+    for (auto& info : buffer_infos) {
+        if (info.buffer == tracked) {
+            info.buffer = alias;
+        }
+    }
+    pipeline->BindResources(acb, set_writes, set_write_index, push_data);
+}
+
 void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
     const bool timed = Timing().Begin();
     if (timed) {
@@ -2370,11 +2716,57 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
         if (FrameRecord::Open()) [[unlikely]] {
             FrameRecord::Append(" hle");
         }
+        if (dispatch_flags & 1u) {
+            AcbAfterMainWork();
+        }
+        dispatch_flags = 0;
         return;
     }
 
+    const u64 main_records = scheduler.RecordCount();
     if (!BindResources(pipeline)) {
         dispatch_flags = 0;
+        return;
+    }
+    // tlg: TLG_ACB_PACKETS=1: compute-queue dispatches that bind images, every 5 s.
+    static const bool acb_images = [] {
+        const char* v = std::getenv("TLG_ACB_PACKETS");
+        return v && *v == '1';
+    }();
+    if (acb_images && (dispatch_flags & 1u)) [[unlikely]] {
+        static u64 total = 0, with_images = 0, with_gds = 0;
+        static auto last = std::chrono::steady_clock::now();
+        ++total;
+        with_images += !bound_images.empty();
+        for (const auto& b : cs.buffers) {
+            if (b.buffer_type == Shader::BufferType::GdsBuffer) {
+                ++with_gds;
+                break;
+            }
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (now - last > std::chrono::seconds(5)) {
+            last = now;
+            std::printf("ACB dispatches (5 s): %llu, with images %llu, with GDS %llu\n",
+                        (unsigned long long)total, (unsigned long long)with_images,
+                        (unsigned long long)with_gds);
+            total = with_images = with_gds = 0;
+        }
+    }
+    if (Scheduler* acb = AcbTarget(cs, dispatch_flags, main_records)) {
+        std::scoped_lock acb_lock{acb->CompanionMutex()};
+        AcbBind(*acb, pipeline, (dispatch_flags & 2u) != 0);
+        dispatch_flags = 0;
+        const auto acb_bind = ComputeBind(pipeline);
+        const u32 x = cs_program.dim_x, y = cs_program.dim_y, z = cs_program.dim_z;
+        LogWork("dispatch cs", cs.pgm_hash, x, y, z);
+        acb->Record([=](vk::CommandBuffer cmdbuf) {
+            acb_bind(cmdbuf);
+            cmdbuf.dispatch(x, y, z);
+        });
+        acb->MarkCompanionWork();
+        DebugState.IncDispatch();
+        ResetBindings(true);
         return;
     }
     if ((dispatch_flags & 2u) && AcbUnordered()) {
@@ -2460,8 +2852,33 @@ void Rasterizer::DispatchIndirectRecord(const ComputePipeline* pipeline, VAddr a
     scheduler.PopPendingOperations();
     const u32 offset = 0;
 
+    const u64 main_records = scheduler.RecordCount();
     if (!BindResources(pipeline)) {
         dispatch_flags = 0;
+        return;
+    }
+    if (Scheduler* acb = AcbTarget(pipeline->GetStage(Shader::SwStage::Compute), dispatch_flags, main_records)) {
+        const auto [args_buffer, args_base] = buffer_cache.ObtainBuffer(address + offset, size, false);
+        if (scheduler.RecordCount() != main_records) {
+            AcbWaitMain();
+        }
+        std::scoped_lock acb_lock{acb->CompanionMutex()};
+        // The arguments come from earlier dispatches: ordered with a barrier if any wrote them.
+        AcbBind(*acb, pipeline, (dispatch_flags & 2u) != 0 ||
+                                    runtime.IsBufferAccessed(args_buffer, args_base, size));
+        dispatch_flags = 0;
+        const auto acb_bind = ComputeBind(pipeline);
+        const vk::Buffer args_handle = args_buffer->Handle() == buffer_cache.UnifiedHandle()
+                                           ? buffer_cache.UnifiedAlias()
+                                           : args_buffer->Handle();
+        const u64 offset_in_args = args_base;
+        acb->Record([=](vk::CommandBuffer cmdbuf) {
+            acb_bind(cmdbuf);
+            cmdbuf.dispatchIndirect(args_handle, offset_in_args);
+        });
+        acb->MarkCompanionWork();
+        DebugState.IncDispatch();
+        ResetBindings(true);
         return;
     }
     if ((dispatch_flags & 2u) && AcbUnordered()) {
@@ -5061,10 +5478,23 @@ bool Rasterizer::DeferredFenceValue(VAddr address, u32& value) {
     return false;
 }
 
+bool g_fence_kind_compute = false;
+
 bool Rasterizer::DeferUnifiedFence(Common::UniqueFunction<void>&& write) {
     if (!buffer_cache.UnifiedActive()) {
         return false;
     }
+    // tlg: TLG_ACB_QUEUE: a compute queue's fence is written when that queue's work is done.
+    Scheduler* fence_scheduler = &scheduler;
+    std::unique_lock<std::recursive_mutex> acb_lock;
+    if (g_fence_kind_compute && acb_scheduler && buffer_cache.UnifiedAlias()) {
+        fence_scheduler = acb_scheduler.get();
+        acb_lock = std::unique_lock{acb_scheduler->CompanionMutex()};
+        if (acb_needs_main) {
+            AcbWaitMain();
+        }
+    }
+    Scheduler& scheduler = *fence_scheduler;
     // Every fence, not only those in the range: labels stay in order (a later fence written
     // first lets the guest free memory an earlier one still writes into).
     scheduler.Record([](vk::CommandBuffer cmdbuf) {
@@ -5079,8 +5509,57 @@ bool Rasterizer::DeferUnifiedFence(Common::UniqueFunction<void>&& write) {
             .pMemoryBarriers = &barrier,
         });
     });
-    scheduler.DeferPriorityOperation(std::move(write));
-    scheduler.Flush();
+    // tlg: TLG_FENCE_LATENCY=1 (diagnostic): how long a deferred fence waits from here (its
+    // submission) until the GPU is done and it is written, and how many earlier submissions were
+    // still unfinished on the GPU then; every 5 s.
+    static const bool latency_log = [] {
+        const char* v = std::getenv("TLG_FENCE_LATENCY");
+        return v && *v == '1';
+    }();
+    if (latency_log) [[unlikely]] {
+        u32 pending = 0;
+        for (u64 t = scheduler.CurrentTick(); t > 1 && pending < 32 && !scheduler.IsFree(t - 1); --t) {
+            ++pending;
+        }
+        const auto t0 = std::chrono::steady_clock::now();
+        const int kind = g_fence_kind_compute ? 1 : 0;
+        write = [inner = std::move(write), t0, pending, kind]() mutable {
+            inner();
+            static std::mutex ms[2];
+            static std::vector<float> lats[2];
+            static std::vector<u32> pends[2];
+            static std::chrono::steady_clock::time_point lasts[2] = {std::chrono::steady_clock::now(),
+                                                                     std::chrono::steady_clock::now()};
+            auto& m = ms[kind];
+            auto& lat = lats[kind];
+            auto& pend = pends[kind];
+            auto& last = lasts[kind];
+            const auto now = std::chrono::steady_clock::now();
+            std::scoped_lock lock{m};
+            lat.push_back(std::chrono::duration<float, std::milli>(now - t0).count());
+            pend.push_back(pending);
+            if (now - last > std::chrono::seconds(5) && !lat.empty()) {
+                last = now;
+                auto l = lat;
+                std::sort(l.begin(), l.end());
+                double pavg = 0;
+                for (u32 p : pend) pavg += p;
+                pavg /= pend.size();
+                std::printf("Fence latency %s (5 s): %zu fences, median %.2f ms, p90 %.2f ms, max %.2f ms; "
+                            "unfinished submissions before them: %.1f on average\n",
+                            kind ? "compute" : "graphics", l.size(), l[l.size() / 2],
+                            l[l.size() * 9 / 10], l.back(), pavg);
+                lat.clear();
+                pend.clear();
+            }
+        };
+    }
+    if (fence_scheduler != &this->scheduler) {
+        AcbDeferFence(std::move(write));
+    } else {
+        scheduler.DeferPriorityOperation(std::move(write));
+        scheduler.Flush();
+    }
     VideoCore::Unified::Add(VideoCore::Unified::FencesDeferred);
     VideoCore::Unified::MaybeReport(static_cast<u64>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(

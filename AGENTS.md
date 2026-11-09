@@ -100,9 +100,12 @@ dispatch runs), `TLG_QUEUE_STATS=1`, `TLG_THREAD_PROFILE_MS=5` (where game threa
   (`patches/moltenvk-1.4.2-concurrent-dispatch.patch`, `MVK_TLG_CONCURRENT_DISPATCH=1`).
   Truck 36 -> 45 FPS with correct smoke (`TLG_UNIFIED_COMPUTE_FENCES`, default on).
 - Two Metal queues do not run compute concurrently, but a small job on a second queue overtakes work
-  queued on the first (0.25 ms past 130 ms). Bridge compute fences wait ~10 ms behind graphics in
-  the one queue (`TLG_FENCE_LATENCY=1`): **a separate queue for the game's compute work is the next
-  big frame-rate step.**
+  queued on the first. `TLG_ACB_QUEUE=1` (default on in `run_macos.sh`; `=0`: one queue) puts the game's compute queue on
+  a second `VkQueue`: bridge 59.8 -> 65.3 FPS, truck unchanged, compute fence latency 9.6 -> 2.4 ms
+  (`TLG_FENCE_LATENCY=1`). It needs all of: an untracked alias of guest memory, fences as polled
+  `VkEvent`s, compute-shader memory copies (`acb_copy.comp`), images on that queue too, and an
+  `MTLFence` chain between its encoders (`patches/moltenvk-1.4.2-compute-queue.patch`). Dropping any
+  of them loses the gain (numbers in CLAUDE.md); making the whole arena untracked costs FPS.
 - Software buffer bounds checks in compute shaders are required (without them: garbage loops, 2x
   slower). MoltenVK costs ~2 us per dispatch without argument buffers.
 - Occlusion queries are answered "hidden" (mode 5): no glare through walls, no glare at all.
@@ -117,7 +120,8 @@ dispatch runs), `TLG_QUEUE_STATS=1`, `TLG_THREAD_PROFILE_MS=5` (where game threa
 
 ## Priorities
 
-1. Separate queue for the game's compute queue (bridge back toward 69 FPS with correct smoke).
+1. Graphics waits only at the game's own sync points, not for all compute recorded before each submission
+   (truck trace: ~0.5 s of 6.5 s GPU idle at compute -> graphics).
 2. CPU work per draw in busy streets (~7,500 draws a frame, 25-30 FPS): profile `tlggpu-host`
    (arm64, safe to sample) with a save there.
 3. Launcher: automatic updates (port bloodborne_mac_port's `Updater.swift` / `Update.swift`), key

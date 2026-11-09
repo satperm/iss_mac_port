@@ -88,6 +88,9 @@ public:
     using DescriptorWrites = std::vector<vk::WriteDescriptorSet>;
     /// tlg: `count` of `set_writes` are this draw's writes; the vector may hold more (the pool in
     /// vk_rasterizer.cpp keeps its storage between draws, SetWritePool).
+    /// tlg: into another scheduler's command buffer (TLG_ACB_QUEUE).
+    void BindResources(Scheduler& scheduler, DescriptorWrites& set_writes, u32 count,
+                       const Shader::PushData& push_data) const;
     void BindResources(DescriptorWrites& set_writes, u32 count,
                        const Shader::PushData& push_data) const;
 
