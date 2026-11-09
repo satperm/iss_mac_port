@@ -429,6 +429,114 @@ static void profile_report(void) {
     memset(profile_keys, 0, PROFILE_KEYS * sizeof(*profile_keys));
     profile_samples = 0;
 }
+/* TLG_WAIT_PROBE=1 (diagnostic, with TLG_THREAD_PROFILE_MS): the game's wait for a command buffer
+ * context (guest 0x1695e0: while (labels[ctx->idx] < ctx->target) usleep(50); labels at guest
+ * [0xE17E80], ctx in rbx, r15 = &labels): which contexts it waits for and how far the label lags
+ * the target, every 10 s. Only while the loop or its usleep (guest 0x53b2b0) runs and r15 checks out. */
+#define WAIT_PROBE_SLOTS 64
+static struct { uint64_t ctx; int32_t idx; uint64_t samples; int64_t lag_sum; } wait_probe[WAIT_PROBE_SLOTS];
+static uint64_t wait_probe_total, wait_probe_hits;
+static struct { uint64_t key, samples; } wait_callers[WAIT_PROBE_SLOTS];
+static void wait_probe_sample(const x86_thread_state64_t *st) {
+    static int on = -1;
+    if (on < 0) { const char *e = getenv("TLG_WAIT_PROBE"); on = e && *e == '1'; }
+    if (!on || !image_base) return;
+    ++wait_probe_total;
+    const uint64_t rip = st->__rip - image_base;
+    const int in_loop = rip >= 0x169610 && rip < 0x16962a;
+    const int in_sleep = rip >= 0x53b2b0 && rip < 0x53b400;
+    if (!in_loop && !in_sleep) return;
+    const int labels_wait = st->__r15 == image_base + 0xE17E80;
+    /* Reads that fail instead of faulting. Inside usleep (push rbp; mov rbp,rsp; push rbx) the
+     * caller's rbx = ctx is at [rbp-8] and the return address at [rbp+8] must be guest 0x16961a. */
+    uint32_t pair[2]; uint64_t labels = 0; uint32_t label = 0; vm_size_t got = 0;
+    uint64_t ctx = st->__rbx;
+    if (in_sleep) {
+        uint64_t frame[3];
+        if (vm_read_overwrite(mach_task_self(), st->__rbp - 8, sizeof(frame), (vm_address_t)frame, &got) !=
+            KERN_SUCCESS)
+            return;
+        /* Where usleep returns to, and the caller's caller (walking one more frame). */
+        uint64_t up[2] = {0, 0};
+        (void)vm_read_overwrite(mach_task_self(), frame[1], sizeof(up), (vm_address_t)up, &got);
+        const uint64_t key = ((frame[2] - image_base) << 32) | ((up[1] - image_base) & 0xffffffffu);
+        for (int k = 0; k < WAIT_PROBE_SLOTS; ++k) {
+            if (wait_callers[k].samples == 0 || wait_callers[k].key == key) {
+                wait_callers[k].key = key; ++wait_callers[k].samples;
+                break;
+            }
+        }
+        /* guest 0x1f2700: while ((s64)labels[[r12+0x124]] < [r12+0x130]) usleep(50); r13 = &labels. */
+        if (frame[2] == image_base + 0x1f270a && st->__r13 == image_base + 0xE17E80) {
+            const uint64_t c2 = st->__r12;
+            int32_t i2 = 0; int64_t t2 = 0, l2 = 0; uint64_t lb = 0;
+            if (vm_read_overwrite(mach_task_self(), c2 + 0x124, 4, (vm_address_t)&i2, &got) == KERN_SUCCESS &&
+                vm_read_overwrite(mach_task_self(), c2 + 0x130, 8, (vm_address_t)&t2, &got) == KERN_SUCCESS &&
+                i2 >= 0 && i2 < 4096 &&
+                vm_read_overwrite(mach_task_self(), image_base + 0xE17E80, 8, (vm_address_t)&lb, &got) == KERN_SUCCESS &&
+                vm_read_overwrite(mach_task_self(), lb + (uint64_t)i2 * 8, 8, (vm_address_t)&l2, &got) == KERN_SUCCESS &&
+                l2 < t2) {
+                ++wait_probe_hits;
+                for (int k = 0; k < WAIT_PROBE_SLOTS; ++k) {
+                    if (wait_probe[k].samples == 0 || (wait_probe[k].ctx == (c2 | 1) && wait_probe[k].idx == i2)) {
+                        wait_probe[k].ctx = c2 | 1; wait_probe[k].idx = i2; ++wait_probe[k].samples;
+                        wait_probe[k].lag_sum += t2 - l2;
+                        break;
+                    }
+                }
+            }
+            return;
+        }
+        if (!labels_wait || frame[2] != image_base + 0x16961a) return;
+        ctx = frame[0];
+    }
+    if (!labels_wait || ctx < 0x100000) return;
+    if (vm_read_overwrite(mach_task_self(), ctx + 0x1B88, sizeof(pair), (vm_address_t)pair, &got) != KERN_SUCCESS ||
+        got != sizeof(pair))
+        return;
+    const uint32_t target = pair[0];
+    const int32_t idx = (int32_t)pair[1];
+    if (idx < 0 || idx > 4096) return;
+    if (vm_read_overwrite(mach_task_self(), image_base + 0xE17E80, sizeof(labels), (vm_address_t)&labels, &got) !=
+            KERN_SUCCESS ||
+        vm_read_overwrite(mach_task_self(), labels + (uint64_t)idx * 8, sizeof(label), (vm_address_t)&label, &got) !=
+            KERN_SUCCESS)
+        return;
+    if (label >= target) return; /* not (or no longer) waiting */
+    ++wait_probe_hits;
+    for (int k = 0; k < WAIT_PROBE_SLOTS; ++k) {
+        if (wait_probe[k].samples == 0 || (wait_probe[k].ctx == ctx && wait_probe[k].idx == idx)) {
+            wait_probe[k].ctx = ctx; wait_probe[k].idx = idx; ++wait_probe[k].samples;
+            wait_probe[k].lag_sum += (int64_t)target - (int64_t)label;
+            return;
+        }
+    }
+}
+static void wait_probe_report(void) {
+    if (!wait_probe_total) return;
+    uint64_t lb = 0; int64_t l0 = 0, l1 = 0, l2 = 0; vm_size_t got = 0;
+    if (image_base && vm_read_overwrite(mach_task_self(), image_base + 0xE17E80, 8, (vm_address_t)&lb, &got) == KERN_SUCCESS) {
+        (void)vm_read_overwrite(mach_task_self(), lb, 8, (vm_address_t)&l0, &got);
+        (void)vm_read_overwrite(mach_task_self(), lb + 8, 8, (vm_address_t)&l1, &got);
+        (void)vm_read_overwrite(mach_task_self(), lb + 16, 8, (vm_address_t)&l2, &got);
+    }
+    printf("Wait probe (10 s): %llu of %llu thread samples in the context wait; labels now %lld %lld %lld\n",
+           (unsigned long long)wait_probe_hits, (unsigned long long)wait_probe_total, (long long)l0, (long long)l1,
+           (long long)l2);
+    for (int k = 0; k < WAIT_PROBE_SLOTS && wait_probe[k].samples; ++k)
+        printf("  ctx %#llx idx %d: %llu samples, label behind target by %.1f on average\n",
+               (unsigned long long)wait_probe[k].ctx, wait_probe[k].idx, (unsigned long long)wait_probe[k].samples,
+               (double)wait_probe[k].lag_sum / (double)wait_probe[k].samples);
+    for (int k = 0; k < WAIT_PROBE_SLOTS && wait_callers[k].samples; ++k)
+        if (wait_callers[k].samples * 50 >= wait_probe_total / 20)
+            printf("  usleep from guest+%#llx < guest+%#llx: %llu samples\n",
+                   (unsigned long long)(wait_callers[k].key >> 32), (unsigned long long)(wait_callers[k].key & 0xffffffffu),
+                   (unsigned long long)wait_callers[k].samples);
+    memset(wait_callers, 0, sizeof(wait_callers));
+    fflush(stdout);
+    memset(wait_probe, 0, sizeof(wait_probe));
+    wait_probe_total = wait_probe_hits = 0;
+}
 static void *profiler(void *argument) {
     const unsigned period = (unsigned)(uintptr_t)argument;
     pthread_setname_np("tlg:profile");
@@ -456,6 +564,7 @@ static void *profiler(void *argument) {
                     c->rip = (uintptr_t)state.__rip;
                     c->frames = walk_frames((uintptr_t)state.__rbp, c->chain, MAX_FRAMES);
                     c->captured = 1;
+                    wait_probe_sample(&state);
                 }
                 thread_resume(list[i]);
                 pthread_t thread = pthread_from_mach_thread_np(list[i]);
@@ -498,6 +607,7 @@ static void *profiler(void *argument) {
         const uint64_t now = runtime_wait_now_ms();
         if (now - last_report >= 10000) {
             profile_report();
+            wait_probe_report();
             last_report = now;
         }
     }
