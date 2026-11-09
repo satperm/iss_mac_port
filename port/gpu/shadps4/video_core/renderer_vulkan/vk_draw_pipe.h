@@ -150,6 +150,12 @@ public:
     /// spent running packets, ring-full waits and their cycles.
     u64 packets = 0, drains = 0, drain_cycles = 0, ring_waits = 0, ring_wait_cycles = 0;
     std::atomic<u64> busy_cycles{0};
+    /// tlg: called on stage B when it has run out of packets, before it spins or sleeps.
+    void SetIdleHandler(void (*handler)(void*), void* context) noexcept {
+        idle_context = context;
+        idle_handler = handler;
+    }
+
     /// tlg: stage B spinning for a packet before it sleeps (counted on the recording thread,
     /// read by the statistics; not part of busy_cycles, which is only the packet bodies).
     std::atomic<u64> spin_cycles{0};
@@ -250,6 +256,9 @@ private:
         }
     }
 
+    void (*idle_handler)(void*) = nullptr;
+    void* idle_context = nullptr;
+
     void Run(std::stop_token stop) {
         Common::SetCurrentThreadName("tlg:DrawRec");
         on_stage_b = true;
@@ -268,6 +277,12 @@ private:
             // Packets follow each other within microseconds while a frame is decoded: spin,
             // and sleep only after a longer pause (between frames).
             u64 available = published.load(std::memory_order_acquire);
+            if (available == at) {
+                if (idle_handler) {
+                    idle_handler(idle_context);
+                    available = published.load(std::memory_order_acquire);
+                }
+            }
             if (available == at) {
                 // With few cores (Steam Deck: 8 threads) a long spin takes time from the
                 // game's own threads; TLG_PHYS_CORES=1 counts physical cores instead of SMT

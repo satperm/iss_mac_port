@@ -78,10 +78,11 @@ struct Liverpool {
         u64 data;
         u32 num_bytes;
         u64 position;
+        bool from_compute = false; ///< a compute queue's label (TLG_ACB_QUEUE)
     };
     std::deque<PendingFence> pending_fences;
     void NotePendingFences(const auto& event);
-    bool PendingFenceValue(VAddr address, u32& value);
+    bool PendingFenceValue(VAddr address, u32& value, bool* from_compute = nullptr);
     void NotePendingWrite(const struct PM4CmdWriteData& write_data, u32 num_bytes);
     /// tlg: TLG_OCCLUSION_MODE=4: results of the latest guest occlusion queries (end dumps).
     /// Counted or not, every high half holds the valid bit and every begin counter 0: a

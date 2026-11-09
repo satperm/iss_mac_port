@@ -1076,6 +1076,30 @@ bool BufferCache::EnableUnified() {
         .size = num_blocks * sizeof(vk::DeviceAddress),
     };
     if (dma_tables) runtime.CopyBuffer(staging.buffer, bda_pagetable_buffer.get(), std::span{&copy, 1});
+    // tlg: TLG_ACB_QUEUE=1: a second MTLBuffer over the same memory, untracked (MoltenVK patch
+    // moltenvk-1.4.2-compute-queue.patch, marker structure below): the compute queue's work then
+    // does not wait for graphics encoders using the tracked buffer. Its order with the graphics
+    // queue comes from timeline semaphores.
+    if (instance.GetComputeQueue()) {
+        struct UntrackedMarker {
+            VkStructureType sType;
+            const void* pNext;
+        };
+        const UntrackedMarker marker{static_cast<VkStructureType>(0x49535301), &allocate_flags};
+        vk::ImportMemoryHostPointerInfoEXT alias_import = import_info;
+        alias_import.pNext = &marker;
+        vk::MemoryAllocateInfo alias_alloc = alloc_info;
+        alias_alloc.pNext = &alias_import;
+        vk::Buffer alias{};
+        if (device.createBuffer(&buffer_ci, nullptr, &alias) == vk::Result::eSuccess &&
+            device.allocateMemory(&alias_alloc, nullptr, &unified_alias_memory) == vk::Result::eSuccess &&
+            device.bindBufferMemory(alias, unified_alias_memory, 0) == vk::Result::eSuccess) {
+            unified_alias = alias;
+            std::printf("Unified memory: untracked alias for the compute queue\n");
+        } else {
+            std::printf("Unified memory: no alias for the compute queue\n");
+        }
+    }
     unified_base = base;
     unified_end = base + size;
     std::printf("Unified memory on: guest 0x%llx size 0x%llx host %p memory type %u (bits 0x%x)\n",

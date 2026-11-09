@@ -1,0 +1,115 @@
+diff --git a/MoltenVK/MoltenVK/Commands/MVKCommandBuffer.mm b/MoltenVK/MoltenVK/Commands/MVKCommandBuffer.mm
+index f879561..29e998a 100644
+--- a/MoltenVK/MoltenVK/Commands/MVKCommandBuffer.mm
++++ b/MoltenVK/MoltenVK/Commands/MVKCommandBuffer.mm
+@@ -1056,10 +1056,28 @@ void MVKCommandEncoder::endMetalRenderEncoding() {
+     _occlusionQueryState.endMetalRenderPass(this);
+ }
+ 
++// iss_mac_port: MVK_TLG_CHAIN_QUEUE_FAMILY=<family>: every compute and blit encoder of that family's
++// queue waits for the one before it, across command buffers, through one MTLFence. Its resources are
++// untracked, so nothing else orders the encoders, and a shared event per command buffer costs ~0.4 ms.
++static id<MTLCommandQueue> gTlgChainQueue = nil;
++static id<MTLFence> gTlgChainFence = nil;
++
++void mvkTlgSetChainQueue(id<MTLDevice> device, id<MTLCommandQueue> queue) {
++	gTlgChainFence = [device newFence];	// retained
++	gTlgChainQueue = queue;
++}
++
++static inline id<MTLFence> tlgChainFence(id<MTLCommandBuffer> mtlCmdBuff) {
++	return gTlgChainQueue && mtlCmdBuff.commandQueue == gTlgChainQueue ? gTlgChainFence : nil;
++}
++
+ void MVKCommandEncoder::endCurrentMetalEncoding() {
+ 	endMetalRenderEncoding();
+ 	encodeBarrierUpdates();
+ 
++	id<MTLFence> tlgChain = (_mtlComputeEncoder || _mtlBlitEncoder) ? tlgChainFence(_mtlCmdBuffer) : nil;
++	if (_mtlComputeEncoder && tlgChain) { [_mtlComputeEncoder updateFence: tlgChain]; }
++	if (_mtlBlitEncoder && tlgChain) { [_mtlBlitEncoder updateFence: tlgChain]; }
+ 	if (_mtlComputeEncoder && _cmdBuffer->_hasStageCounterTimestampCommand) { [_mtlComputeEncoder updateFence: getStageCountersMTLFence()]; }
+ 	endMetalEncoding(_mtlComputeEncoder);
+ 	_mtlComputeEncoderUse = kMVKCommandUseNone;
+@@ -1123,6 +1141,7 @@ id<MTLComputeCommandEncoder> MVKCommandEncoder::getMTLComputeEncoder(MVKCommandU
+ 		endCurrentMetalEncoding();
+ 		_mtlComputeEncoder = [_mtlCmdBuffer computeCommandEncoderWithDispatchType:getDispatchType(cmdUse)];
+ 		retainIfImmediatelyEncoding(_mtlComputeEncoder);
++		if (id<MTLFence> chain = tlgChainFence(_mtlCmdBuffer)) { [_mtlComputeEncoder waitForFence: chain]; }
+ 		beginMetalComputeEncoding(cmdUse);
+ 	}
+ 	if (_mtlComputeEncoderUse != cmdUse) {
+@@ -1143,6 +1162,7 @@ id<MTLBlitCommandEncoder> MVKCommandEncoder::getMTLBlitEncoder(MVKCommandUse cmd
+ 		endCurrentMetalEncoding();
+ 		_mtlBlitEncoder = [_mtlCmdBuffer blitCommandEncoder];
+ 		retainIfImmediatelyEncoding(_mtlBlitEncoder);
++		if (id<MTLFence> chain = tlgChainFence(_mtlCmdBuffer)) { [_mtlBlitEncoder waitForFence: chain]; }
+ 	}
+     if (_mtlBlitEncoderUse != cmdUse) {
+ 		needWaits = true;
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm b/MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm
+index 9772757..75efff4 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm
+@@ -2212,7 +2212,9 @@ MVKArrayRef<MVKQueueFamily*> MVKPhysicalDevice::getQueueFamilies() {
+ 
+ 		// Single queue semaphore requires using a single queue for everything
+ 		// So don't allow anyone to have more than one
+-		if (_vkSemaphoreStyle != MVKSemaphoreStyleSingleQueue) {
++		// iss_mac_port: TLG_ACB_QUEUE=1: more queues for timeline-semaphore users, whatever the binary style.
++		const char* tlgAcbQueue = getenv("TLG_ACB_QUEUE");
++		if (_vkSemaphoreStyle != MVKSemaphoreStyleSingleQueue || (tlgAcbQueue && *tlgAcbQueue == '1')) {
+ 			// Dedicated graphics queue family...or another general-purpose queue family.
+ 			if (specialize) { qfProps.queueFlags = (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_TRANSFER_BIT); }
+ 			_queueFamilies.push_back(new MVKQueueFamily(this, qfIdx++, &qfProps));
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKDeviceMemory.h b/MoltenVK/MoltenVK/GPUObjects/MVKDeviceMemory.h
+index b349d6e..39abe3a 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKDeviceMemory.h
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKDeviceMemory.h
+@@ -185,6 +185,7 @@ protected:
+ 	MTLCPUCacheMode _mtlCPUCacheMode;
+ 	bool _isDedicated = false;
+ 	bool _isHostMemImported = false;
++	bool _tlgUntrackedImport = false;
+ 	VkExternalMemoryHandleTypeFlags _externalMemoryHandleType = 0u;
+ };
+ 
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKDeviceMemory.mm b/MoltenVK/MoltenVK/GPUObjects/MVKDeviceMemory.mm
+index e6e7786..01a8595 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKDeviceMemory.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKDeviceMemory.mm
+@@ -255,6 +255,7 @@ bool MVKDeviceMemory::ensureMTLBuffer() {
+ 		[buf makeAliasable];
+ 	} else if (_pHostMemory) {
+ 		auto rezOpts = getMTLResourceOptions();
++		if (_tlgUntrackedImport) { rezOpts |= MTLResourceHazardTrackingModeUntracked; }
+ 		if (_isHostMemImported) {
+ 			buf = [getMTLDevice() newBufferWithBytesNoCopy: _pHostMemory length: memLen options: rezOpts deallocator: nil];	// retained
+ 		} else {
+@@ -326,6 +327,9 @@ MVKDeviceMemory::MVKDeviceMemory(MVKDevice* device,
+ 				_isDedicated = dedicatedImage || dedicatedBuffer;
+ 				break;
+ 			}
++			case (VkStructureType)0x49535301: // iss_mac_port: this import has no automatic hazard tracking
++				_tlgUntrackedImport = true;
++				break;
+ 			case VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT: {
+ 				auto* pMemHostPtrInfo = (VkImportMemoryHostPointerInfoEXT*)next;
+ 				if (mvkIsAnyFlagEnabled(_vkMemPropFlags, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm b/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm
+index dec4b45..1e73c6b 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm
+@@ -329,6 +329,12 @@ void MVKQueue::initExecQueue() {
+ void MVKQueue::initMTLCommandQueue() {
+ 	_mtlQueue = _queueFamily->getMTLCommandQueue(_index);	// not retained (cached in queue family)
+ 	_device->addResidencySet(_mtlQueue);
++	if (const char* tlgChain = getenv("MVK_TLG_CHAIN_QUEUE_FAMILY")) {
++		if (*tlgChain && (uint32_t)atoi(tlgChain) == _queueFamily->getIndex()) {
++			extern void mvkTlgSetChainQueue(id<MTLDevice> device, id<MTLCommandQueue> queue);
++			mvkTlgSetChainQueue(getMTLDevice(), _mtlQueue);
++		}
++	}
+ 
+ 	_submissionCaptureScope = new MVKGPUCaptureScope(this);
+ 	if (_queueFamily->getIndex() == getMVKConfig().defaultGPUCaptureScopeQueueFamilyIndex &&

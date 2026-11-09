@@ -94,6 +94,14 @@ public:
         return graphics_queue;
     }
 
+    /// tlg: TLG_ACB_QUEUE: a queue of another family for the game's compute queues (null: none).
+    vk::Queue GetComputeQueue() const {
+        return compute_queue;
+    }
+    u32 GetComputeQueueFamilyIndex() const {
+        return compute_queue_family_index;
+    }
+
     vk::Queue GetPresentQueue() const {
         return present_queue;
     }
@@ -616,6 +624,8 @@ private:
     VmaAllocator allocator{};
     vk::Queue present_queue;
     vk::Queue graphics_queue;
+    vk::Queue compute_queue;
+    u32 compute_queue_family_index{0};
     std::vector<vk::PhysicalDevice> physical_devices;
     std::vector<std::string> available_extensions;
     std::unordered_map<vk::Format, vk::FormatProperties3> format_properties;

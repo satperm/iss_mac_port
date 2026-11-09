@@ -2,6 +2,11 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+#include <thread>
+#include <vector>
 
 #include <deque>
 
@@ -640,8 +645,52 @@ public:
     /// (bit 0) and is the first after one of its sync packets (bit 1). Set by Liverpool (stage A).
     u32 next_dispatch_flags{};
     [[nodiscard]] static bool AcbUnordered();
+    /// tlg: TLG_ACB_QUEUE=1: the game's compute queue dispatches run on a queue of their own, ahead of
+    /// queued graphics (bridge: compute fences waited ~10 ms behind ~30 graphics submissions).
+    /// Stage B: work of the compute queue went to the main scheduler (DMA, a dispatch that cannot
+    /// move): later compute-queue work waits for it.
+    void AcbAfterMainWork() noexcept {
+        acb_needs_main = acb_scheduler != nullptr;
+    }
+    /// Stage B: a compute queue's GDS fill / GDS-to-memory copy on its own queue (no wait for the
+    /// main one). False when it cannot run there.
+    bool AcbFillGds(u32 offset, u32 num_bytes, u32 value);
+    bool AcbCopyGds(VAddr dst, u32 gds_offset, u32 num_bytes);
+    bool AcbCopyMemory(VAddr dst, VAddr src, u32 num_bytes);
+    void AcbFlushCopies();
 private:
     u32 dispatch_flags{}; ///< the flags of the dispatch being recorded
+    std::unique_ptr<Scheduler> acb_scheduler;
+    bool acb_needs_main{false};
+    /// tlg: compute fences signalled inside a command buffer: a VkEvent per fence, whose
+    /// MTLSharedEvent the CPU sees (with the data written before it) while the buffer still runs;
+    /// a thread then writes the label. Fewer command buffers: each costs the GPU ~0.5 ms.
+    struct AcbFence {
+        vk::Event event;
+        Common::UniqueFunction<void> write;
+    };
+    struct AcbCopy {
+        u32 src, dst, count, pad;
+    };
+    boost::container::static_vector<AcbCopy, 32> acb_copies;
+    vk::UniqueDescriptorSetLayout acb_copy_desc_layout;
+    vk::UniquePipelineLayout acb_copy_layout;
+    vk::UniquePipeline acb_copy_pipeline;
+    std::mutex acb_fence_mutex;
+    std::condition_variable_any acb_fence_cv;
+    std::deque<AcbFence> acb_fences;
+    std::vector<vk::Event> acb_free_events;
+    u32 acb_fences_since_flush{0};
+    std::jthread acb_fence_thread;
+    void AcbFenceThread(std::stop_token stop);
+    void AcbDeferFence(Common::UniqueFunction<void>&& write);
+    static void AcbIdle(void* rasterizer);
+    /// The scheduler a compute-queue dispatch records into, or null for the main one.
+    Scheduler* AcbTarget(const Shader::Info& cs, u32 flags, u64 main_records);
+    /// The compute queue's next submission waits for what the main scheduler recorded so far.
+    void AcbWaitMain();
+    /// Records a dispatch's bindings into the compute queue's command buffer.
+    void AcbBind(Scheduler& acb, const ComputePipeline* pipeline, bool barrier);
     // tlg: two-stage draw pipeline (stage B state; the thread is the last member so it
     // stops first).
     static inline thread_local const AmdGpu::Regs* stage_regs = nullptr;

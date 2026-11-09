@@ -728,3 +728,17 @@ Instruments (Shader Timeline option) for per-shader cost.
   queue (ACB) records into a second Scheduler/VkQueue (MoltenVK queue family 1), cross-queue sync with timeline
   semaphores at the game's own WAIT_REG_MEM / RELEASE_MEM / EVENT_WRITE_EOP points; shared buffer/texture caches need
   barrier/ownership handling. Days of work; expected: bridge back toward ~69 with correct smoke.
+- 2026-11-09 SECOND COMPUTE QUEUE WORKS (branch agent/compute-queue, TLG_ACB_QUEUE=1, default off until the owner has
+  played it): bridge 59.8 -> 65.3 FPS, truck 45.3 -> 45.2 (M3 Max, AC, fps_ab 3x60 s), compute fence latency on the
+  bridge 9.6 -> 2.4 ms, footprint unchanged. What it took, in the order the regressions fell:
+  (1) second Scheduler on a second VkQueue, MoltenVK exposes more families when TLG_ACB_QUEUE=1 (patch compute-queue);
+  (2) guest memory imported twice: tracked MTLBuffer for main, untracked alias for the second queue, otherwise Metal
+  hazard tracking makes the second queue wait for the first (making the whole arena untracked instead costs FPS: truck
+  45 -> 41, bridge 59 -> 53); (3) fences as VkEvents polled by a thread (encodeSignalEvent is seen mid command buffer,
+  writes are visible by then; command buffer completion costs ~0.5 ms each); (4) the compute queue's memory DMA as a
+  batched compute dispatch (acb_copy.comp): 190 copies a frame, each used to fall back to main and stall the chain;
+  (5) the five compute shaders with images on the second queue too (TLG_ACB_IMAGES, default on with the queue):
+  bridge 55.8 -> 65.2; they were 780 waits for main per 5 s; (6) an MTLFence chain between the second queue's encoders
+  (MVK_TLG_CHAIN_QUEUE_FAMILY, set by vk_instance; TLG_ACB_CHAIN=0: a semaphore per command buffer instead): the semaphore
+  cost ~0.44 ms GPU idle per command buffer: truck 44.2 -> 45.5. Untracked encoders need the chain for order: do not
+  remove it for FPS. Metal System Trace of idle gaps: /tmp scripts, classify any-busy gaps by (queue, channel, same cb).
