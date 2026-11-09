@@ -9,13 +9,11 @@ Tools: `scripts/macos/agent_run.sh <truck|bridge> <label> <s> [VAR=v ...]` (one 
 `fps_ab.sh -n 3 -s 60 [-u out/bridge-fresh] a "..." b "..."` (A/B, ~7 min per variant pair at 60 s),
 `wait_game.sh`. Long jobs in the background; never an unbounded wait.
 
-## 1. Graphics waits only at the game's sync points (branch agent/main-wait, 1 h)
+## 1. (done 2026-11-09, no gain) Graphics waiting only at the game's sync points
 
-`TLG_ACB_MAIN_WAIT=sync|all`: the main queue's submissions wait for the compute queue only after a
-graphics WAIT_REG_MEM met by a compute fence (liverpool.cpp RunGfxWaitsCompute), not before every
-submission. Truck trace: ~0.5 s of 6.5 s GPU idle at compute -> graphics. A/B truck and bridge; if
-sync is faster, check smoke flicker numerically (SHOT_SECONDS=1 at the truck, compare against `all`)
-and leave the default flip for the owner's eye check.
+`TLG_ACB_MAIN_WAIT=sync` (graphics submissions wait for the compute queue only after a graphics
+WAIT_REG_MEM met by a compute fence): truck 45.0 -> 43.9, bridge 64.0 -> 64.6 (3 x 60 s each).
+Dropped; diff kept at ~/iss_mac_port/port/out/experiments/main-wait-sync.diff. Do not retry.
 
 ## 2. Fewer main-queue command buffers (2 h)
 
