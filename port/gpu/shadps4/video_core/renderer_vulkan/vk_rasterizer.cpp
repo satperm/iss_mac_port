@@ -2482,6 +2482,23 @@ void Rasterizer::AcbIdle(void* context) {
         self->gfx_fences_unflushed = 0;
         self->scheduler.Flush();
     }
+    // TLG_IDLE_FLUSH=N (0, the default: off): with nothing more to record, the main queue's work
+    // goes to the GPU once N draws/dispatches wait; TLG_IDLE_FLUSH_PASS=0: only outside a render
+    // pass. The GPU otherwise idles until 64 draws or a fence end the submission.
+    static const u32 idle_flush = [] {
+        const char* v = std::getenv("TLG_IDLE_FLUSH");
+        return v && *v ? u32(std::atoi(v)) : 0u;
+    }();
+    static const bool idle_in_pass = [] {
+        const char* v = std::getenv("TLG_IDLE_FLUSH_PASS");
+        return !v || *v != '0';
+    }();
+    if (idle_flush && self->scheduler.WorkSinceSubmit() >= idle_flush &&
+        (idle_in_pass || !self->scheduler.IsRendering()) &&
+        Pipeline::deferred_binds.load(std::memory_order_relaxed) == 0 && !FrameRecord::IsRecording() &&
+        !FrameCapture::Active()) {
+        self->scheduler.Flush();
+    }
     if (!self->acb_scheduler || (self->acb_fences_since_flush == 0 && self->acb_copies.empty())) {
         return;
     }

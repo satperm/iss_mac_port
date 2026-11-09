@@ -11,5 +11,7 @@ Small stand-alone programs and trace parsers behind the findings in AGENTS.md / 
 | `mq4.mm` | Two `MTLBuffer`s over the same memory, tracked for the main queue and an untracked alias for the second: a tiny job passes 60 ms of work in 2.8 ms, data correct. | same, `mq4.mm` |
 | `mq5.mm`, `mq5b.mm` | The CPU does not see GPU writes in the middle of a command buffer, not even at an encoder boundary. | same |
 | `mq5c.mm` | `encodeSignalEvent` in the middle of a command buffer is seen at once (0.86 ms against 11.5 ms) and the data is visible by then: how `TLG_ACB_QUEUE` signals fences. | same, `mq5c.mm` |
+| `time_profile.py` | CPU samples of `tlggpu-host` per thread and function (leaves, inclusive, `--callers`) from a Time Profiler trace | `scripts/macos/host_profile.sh <scene> <label>` records, exports and runs it |
+| `trace_idle.py` | Why the GPU idles: gaps classed as starved (next command buffer committed during the gap) or held back, from a Metal System Trace | `python3 trace_idle.py x.xml` (export as for `trace_busy.py`) |
 | `trace_busy.py` | GPU busy % per channel (vertex / fragment / compute) from a Metal System Trace | `xcrun xctrace export --input x.trace --xpath '/trace-toc/run[@number="1"]/data/table[@schema="metal-gpu-intervals"]' > gpu.xml; python3 trace_busy.py` (reads `gpu.xml`) |
 | `trace_compute.py` | GPU time per compute shader: needs a MoltenVK built with the split-dispatch diagnostic (each dispatch its own labelled encoder; described in CLAUDE.md, not in `patches/`) and `TLG_DRAW_LABELS=1` | `python3 trace_compute.py gpu.xml` |
