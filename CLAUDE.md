@@ -728,8 +728,8 @@ Instruments (Shader Timeline option) for per-shader cost.
   queue (ACB) records into a second Scheduler/VkQueue (MoltenVK queue family 1), cross-queue sync with timeline
   semaphores at the game's own WAIT_REG_MEM / RELEASE_MEM / EVENT_WRITE_EOP points; shared buffer/texture caches need
   barrier/ownership handling. Days of work; expected: bridge back toward ~69 with correct smoke.
-- 2026-11-09 SECOND COMPUTE QUEUE WORKS (branch agent/compute-queue, TLG_ACB_QUEUE=1, default off until the owner has
-  played it): bridge 59.8 -> 65.3 FPS, truck 45.3 -> 45.2 (M3 Max, AC, fps_ab 3x60 s), compute fence latency on the
+- 2026-11-09 SECOND COMPUTE QUEUE WORKS (branch agent/compute-queue, TLG_ACB_QUEUE=1, default on in run_macos.sh after the
+  owner checked smoke at the truck by eye, 2026-11-09): bridge 59.8 -> 65.3 FPS, truck 45.3 -> 45.2 (M3 Max, AC, fps_ab 3x60 s), compute fence latency on the
   bridge 9.6 -> 2.4 ms, footprint unchanged. What it took, in the order the regressions fell:
   (1) second Scheduler on a second VkQueue, MoltenVK exposes more families when TLG_ACB_QUEUE=1 (patch compute-queue);
   (2) guest memory imported twice: tracked MTLBuffer for main, untracked alias for the second queue, otherwise Metal

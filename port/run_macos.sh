@@ -57,6 +57,10 @@ export MVK_CONFIG_LIVE_CHECK_ALL_RESOURCES=${MVK_CONFIG_LIVE_CHECK_ALL_RESOURCES
 # between its own sync packets (TLG_ACB_UNORDERED, default on), its ~95-dispatch particle runs overlap:
 # truck crash 36 -> 47 FPS with correct smoke. An unpatched MoltenVK ignores it. 0: serial encoders.
 export MVK_TLG_CONCURRENT_DISPATCH=${MVK_TLG_CONCURRENT_DISPATCH:-1}
+# The game's compute queue on a second Vulkan/Metal queue (patches/moltenvk-1.4.2-compute-queue.patch,
+# which reads the same variable): its fences no longer wait behind graphics. Bridge 59.8 -> 65.3 FPS
+# standing, 49.2 -> 52.9 turning the camera; truck unchanged. 0: one queue, as in 0.1.5.
+export TLG_ACB_QUEUE=${TLG_ACB_QUEUE:-1}
 
 original_game=$game
 game=$("$PYTHON" scripts/mods.py "$game" --out "$out" \
