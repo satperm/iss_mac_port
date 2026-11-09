@@ -742,3 +742,15 @@ Instruments (Shader Timeline option) for per-shader cost.
   (MVK_TLG_CHAIN_QUEUE_FAMILY, set by vk_instance; TLG_ACB_CHAIN=0: a semaphore per command buffer instead): the semaphore
   cost ~0.44 ms GPU idle per command buffer: truck 44.2 -> 45.5. Untracked encoders need the chain for order: do not
   remove it for FPS. Metal System Trace of idle gaps: /tmp scripts, classify any-busy gaps by (queue, channel, same cb).
+- 2026-11-09 night: WHY THE FRAME IS SERIAL. The game keeps one frame at the GPU: before submitting frame N its main
+  thread waits (guest 0x1f2700 called from 0x196cb1: while ((s64)labels[[r12+0x124]] < [r12+0x130]) usleep(50);
+  labels at guest [0xE17E80]) for label 0, a frame counter (+1 a frame), to reach N-1: lag always 1.0
+  (TLG_WAIT_PROBE=1 with TLG_THREAD_PROFILE_MS=2, runtime_freeze.c). A second, rarer wait (guest 0x1695e0, ctx
+  idx 2, lag ~3.5) is ~20% of it. guest usleep (0x53b2b0) is an rdtsc busy spin. So each frame = game submits ->
+  our command processor + draw recording turn ~4,800 draws into Metal (2-2.5 us a draw) -> GPU; the GPU idles
+  between chunks. CPU cost per draw in tlggpu-host therefore is frame time: Time Profiler with
+  `xctrace record --template 'Time Profiler' --all-processes` (`sample` cannot read the host's threads) found
+  PostDraw testing 1664 dirty bits per draw (libc++ has no bitset _Find_next): word walk = truck 43.1 -> 46.8.
+  Next per-draw hot spots (truck, 6 s, samples of ~6000 per thread): command processor CollectRingBindings 703,
+  ApplyGraphicsRegisterPacket ~340; DrawRec BindResources 779, BindTextures 225, BarrierTracker::InsertNode 191,
+  MVKCommandBuffer::reset 164, memmove 243; VkRecorder mostly spins.

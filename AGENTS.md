@@ -120,6 +120,11 @@ dispatch runs), `TLG_QUEUE_STATS=1`, `TLG_THREAD_PROFILE_MS=5` (where game threa
 
 ## Priorities
 
+0. **CPU cost per draw in `tlggpu-host` is frame time**: the game keeps one frame at the GPU and waits for it
+   before submitting the next (CLAUDE.md, 2026-11-09 night), so the command processor and draw recording
+   threads are on the critical path. Profile with `xctrace record --template 'Time Profiler'
+   --all-processes` during a run; measure with alternating library builds and the `us/draw` frame stat.
+
 1. Fewer main-queue command buffers (~20 a frame, ~0.5 ms GPU idle each). Tried, no gain: graphics
    waiting for the compute queue only at the game's sync points (truck 45.0 -> 43.9, bridge 64.0 -> 64.6).
 2. CPU work per draw in busy streets (~7,500 draws a frame, 25-30 FPS): profile `tlggpu-host`
