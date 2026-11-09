@@ -128,6 +128,17 @@ dispatch runs), `TLG_QUEUE_STATS=1`, `TLG_THREAD_PROFILE_MS=5` (where game threa
    remapping, mods window.
 4. Missing HUD objective text; skipping cutscenes.
 
+## Working unattended (hours without anyone at the Mac)
+
+- Every wait has a deadline. Wait for the game with `scripts/macos/wait_game.sh <max s>` (exact
+  process names); never `pgrep -f tlg-probe` in a loop: it matches the loop's own shell and never ends.
+- One run with a summary: `scripts/macos/agent_run.sh <truck|bridge> <label> <seconds> [VAR=value ...]`;
+  A/B: `fps_ab.sh`. Both are bounded by `timeout`. Run anything longer than ~8 minutes in the
+  background and wait for its completion notice; never end a turn waiting on an unbounded command.
+- `out/bridge-fresh` (a save on the bridge) is local, not in git; copy any save before use.
+- Pushes and PRs into this repository are fine when the plan says so; releases (tags) and anything
+  in other people's repositories wait for the owner.
+
 ## Working together
 
 - Pick an open issue or a priority above and say so in the issue (or open one) before starting, so

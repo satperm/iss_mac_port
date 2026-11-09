@@ -26,7 +26,7 @@ done
 shift $((OPTIND - 1))
 (( $# >= 2 && $# % 2 == 0 )) || { sed -n 3,9p "$0"; exit 2; }
 [[ -n ${TLG_GAME_DIR:-} ]] || { echo "Set TLG_GAME_DIR to the game folder." >&2; exit 2; }
-pgrep -f tlg-probe >/dev/null && { echo "The game is running: close it first." >&2; exit 1; }
+bash scripts/macos/wait_game.sh 300 || { echo "The game is running: close it first." >&2; exit 1; }
 
 # The benchmark save plus a shader cache kept between runs (out/fps-ab-cache).
 user=out/fps-ab-user cache=out/fps-ab-cache
@@ -41,7 +41,8 @@ one() { # label, settings -> prints the median FPS
     local label=$1 settings=$2 dir
     prepare
     # shellcheck disable=SC2086 # the settings are separate words on purpose
-    SHOT_SECONDS=0 bash scripts/macos/diag_run.sh "ab-$label" "$secs" TLG_USER_DIR="$PWD/$user" \
+    bash scripts/macos/wait_game.sh 120 >/dev/null
+    SHOT_SECONDS=0 timeout $((secs + 180)) bash scripts/macos/diag_run.sh "ab-$label" "$secs" TLG_USER_DIR="$PWD/$user" \
         TLG_HOST_INPUT=0 $settings >/dev/null 2>&1
     dir=$(ls -td out/diag/*-ab-"$label" | head -1)
     grep -a 'Frame stats:' "$dir/game.log" | awk -F'Frame stats: ' '{split($2,a," "); print a[1]}' |
