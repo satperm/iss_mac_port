@@ -9,7 +9,7 @@ It is a macOS fork of [iss_pc](https://github.com/HayatoG/iss_pc), the native PC
 
 > **Status: first test version, work in progress.** The story can be played from the start with
 > GPU particles (smoke, rain, sparks). Tested on one Mac (M3 Max, 36 GB) as far as the first missions
-> in Seattle. On that Mac expect about 58-60 FPS on the opening bridge, about 45 in the heaviest
+> in Seattle. On that Mac expect about 65 FPS on the opening bridge, about 45 in the heaviest
 > fire-and-smoke scene (the launcher's Benchmark) and 25-30 in busy streets. See
 > [Expected performance](#expected-performance) and [Known issues](#known-issues).
 
@@ -151,12 +151,13 @@ outdoor views).
 ## Expected performance
 
 Measured on a **MacBook Pro with M3 Max**, macOS 27, 1080p rendering, default settings, release
-0.1.5 (2026-11-08). Standing still; each value is the median of 40 s after loading.
+0.1.6 (2026-11-09). Each value is the median of 40 s after loading.
 
 | Scene | FPS |
 |---|---|
-| Truck crash in the forest (fire, smoke, sparks; the launcher's **Benchmark**) | 45-46 (0.1.3: 36) |
-| Bridge after the car crash (rain, smoke) | 58-60 (0.1.3: 69 with broken smoke) |
+| Truck crash in the forest (fire, smoke, sparks; the launcher's **Benchmark**), standing | 45 (0.1.5: 45, 0.1.3: 36) |
+| Bridge after the car crash (rain, smoke), standing | 65 (0.1.5: 60) |
+| Bridge, camera turning at a constant speed | 53 (0.1.5: 49) |
 | Bridge with render scale 50% | about 72 |
 | Frame rate cap 30 | exactly 30 |
 
@@ -188,6 +189,9 @@ to add yours.
 
 Fixed recently:
 
+- **The game's particle work runs on its own GPU queue** (0.1.6): its results no longer wait behind
+  the frame's graphics (about 10 ms -> 2.4 ms on the bridge). Bridge 60 -> 65 FPS standing, 49 -> 53
+  turning the camera; the truck crash stays at 45. `TLG_ACB_QUEUE=0` turns it off (as 0.1.5).
 - **Benchmark in the launcher**: 90 s at the truck crash (fire, smoke, sparks), standing still, with your
   settings; your saves are not touched. The result is shown, saved in `~/Library/Logs/ISS/Benchmarks`,
   and "Share on GitHub" opens a filled-in issue (label `benchmark`) to compare Macs.
@@ -226,11 +230,8 @@ Fixed recently:
 
 ## Known issues
 
-- **Frame rate is not a steady 60.** Standing on the bridge it is 58-60 now that the smoke is correct
-  (69 before, with smoke systems missing): the game waits about 10 ms a frame for its particle
-  compute work, which here sits in the one Vulkan queue behind the frame's graphics. A separate queue
-  for the game's compute work is the planned fix (measured: Metal lets a second queue's small jobs
-  through in 0.25 ms). Busy streets with thousands of objects are limited by the CPU work per draw
+- **Frame rate is not a steady 60 everywhere.** The bridge is about 65 standing and 50-55 while moving;
+  the truck crash 45. Busy streets with thousands of objects are limited by the CPU work per draw
   (about 25-30 FPS where the game draws ~7,500 objects a frame). Drops seen while playing on the
   bridge are not explained yet.
 - **No lens glare at all.** To stop headlight and lamp glare showing through walls, every light is
@@ -262,8 +263,8 @@ model, macOS version, the scene and the session log (see below). No game files, 
 
 Near term:
 
-1. **A separate queue for the game's compute work**: the bridge back toward 69 FPS with correct smoke.
-2. **CPU work per draw** in busy streets (profile where the game draws ~7,500 objects a frame).
+1. **CPU work per draw** in busy streets (profile where the game draws ~7,500 objects a frame).
+2. **Fewer GPU submissions a frame** (each leaves the GPU idle for a moment).
 3. **Automatic updates** in the launcher (as bloodborne_mac_port), keyboard and mouse remapping.
 4. **HUD**: find the missing objective text.
 
