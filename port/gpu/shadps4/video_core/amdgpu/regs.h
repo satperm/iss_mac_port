@@ -199,7 +199,42 @@ union Regs {
 struct RegDirty {
     static constexpr u32 BlockWords = 32;
     static constexpr u32 NumBlocks = Regs::NumRegs / BlockWords;
-    std::bitset<NumBlocks> blocks;
+    /// A bitset with word access: walking its set bits skips empty words (std::bitset on libc++ has no
+    /// _Find_next, and testing all 1664 bits per draw cost the GPU thread ~1 us a draw on macOS).
+    struct Bits {
+        static constexpr u32 NumWords = (NumBlocks + 63) / 64;
+        std::array<u64, NumWords> words{};
+        void set(size_t i) noexcept {
+            words[i >> 6] |= u64{1} << (i & 63);
+        }
+        [[nodiscard]] bool test(size_t i) const noexcept {
+            return (words[i >> 6] >> (i & 63)) & 1;
+        }
+        void reset() noexcept {
+            words.fill(0);
+        }
+        [[nodiscard]] bool any() const noexcept {
+            for (const u64 w : words) {
+                if (w) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        [[nodiscard]] static constexpr size_t size() noexcept {
+            return NumBlocks;
+        }
+        /// Calls f(index) for each set bit, in order.
+        template <typename F>
+        void ForEach(F&& f) const {
+            for (u32 i = 0; i < NumWords; ++i) {
+                for (u64 w = words[i]; w; w &= w - 1) {
+                    f(i * 64 + u32(__builtin_ctzll(w)));
+                }
+            }
+        }
+    };
+    Bits blocks;
     bool reset = false; ///< ClearState: defaults, then only the blocks marked after it
 
     void Mark(u32 word, u32 count) {
@@ -232,13 +267,11 @@ struct RegDelta {
         reset = dirty.reset;
         blocks.clear();
         words.clear();
-        for (u32 block = 0; block < RegDirty::NumBlocks; ++block) {
-            if (dirty.blocks.test(block)) {
-                blocks.push_back(u16(block));
-                const u32* src = regs.reg_array.data() + block * RegDirty::BlockWords;
-                words.insert(words.end(), src, src + RegDirty::BlockWords);
-            }
-        }
+        dirty.blocks.ForEach([&](u32 block) {
+            blocks.push_back(u16(block));
+            const u32* src = regs.reg_array.data() + block * RegDirty::BlockWords;
+            words.insert(words.end(), src, src + RegDirty::BlockWords);
+        });
     }
     void Apply(Regs& regs) const {
         if (reset) {

@@ -692,20 +692,7 @@ void Rasterizer::PostDraw(const Pipeline* pipeline, const PreparedDraw* used_pre
     }
     std::array<u16, AmdGpu::RegDirty::NumBlocks> blocks;
     u32 num_blocks = 0;
-#ifdef __GLIBCXX__
-    for (size_t block = dirty.blocks._Find_first(); block < dirty.blocks.size();
-         block = dirty.blocks._Find_next(block)) {
-        blocks[num_blocks++] = static_cast<u16>(block);
-    }
-#else
-    if (dirty.blocks.any()) {
-        for (size_t block = 0; block < dirty.blocks.size(); ++block) {
-            if (dirty.blocks.test(block)) {
-                blocks[num_blocks++] = static_cast<u16>(block);
-            }
-        }
-    }
-#endif
+    dirty.blocks.ForEach([&](u32 block) { blocks[num_blocks++] = static_cast<u16>(block); });
     const auto stages =
         pipeline ? pipeline->GetStages() : std::span<const Shader::Info* const>{};
     // Constants: copied here into the ring, the recording thread only binds them.
@@ -1367,7 +1354,9 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
         scheduler.EndRendering();
         scheduler.Finish();
     }
-    const auto draw_timed_start = std::chrono::steady_clock::now();
+    // Read the clock only when timing (TLG_DRAW_TIMING): a clock read per draw is ~2% of the recording thread.
+    const auto draw_timed_start =
+        draw_timed ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     if (DrawPipe::OnStageB()) {
         FrameCapture::Poll();
         scheduler.PopPendingOperations();
@@ -2644,7 +2633,7 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
         scheduler.EndRendering();
         scheduler.Finish();
     }
-    const auto timed_start = std::chrono::steady_clock::now();
+    const auto timed_start = timed ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     FrameCapture::Poll();
     gbuffer_draw = false;
 
