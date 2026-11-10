@@ -29,24 +29,16 @@ Build with LTO (`cd port && bash build_macos.sh`, ~5 min), then `bash scripts/ma
 Sanity: `bash scripts/macos/agent_run.sh truck sanity 70` must give 46-48 FPS on the M3 Max. Far lower
 with nothing else running: the display may be off or the Mac on battery; fix that before measuring.
 
-## 1. Morning re-measure on the quiet Mac (1.5 h)
+## 1. The GPU clocking down (with the owner, 10 min; then alone)
 
-Yesterday's evening numbers were taken with Chrome and VS Code busy. One build, switches only:
-
-```sh
-cd ~/iss-rel/port
-for scene in truck bridge $HOME/iss_mac_port/port/out/save-backups/seattle-run-20261103; do
-  bash scripts/macos/lib_ab.sh run -n 5 -s 60 $scene head head:TLG_GFX_FENCE_BATCH=8 \
-      head:TLG_IDLE_FLUSH=16,TLG_IDLE_FLUSH_PASS=0 head:TLG_GFX_FENCE_BATCH=8,TLG_IDLE_FLUSH=16,TLG_IDLE_FLUSH_PASS=0
-  cp out/ab/last.txt out/ab/morning-$(basename $scene).txt
-done
-```
-
-(`bridge` = `out/bridge-fresh`. ~30 min a scene; run each scene as one background command and wait for
-its completion notice.) Evening numbers to compare: FENCE_BATCH=8 truck 47.3 -> 48.3, bridge 66.1 -> 65.6;
-IDLE_FLUSH=1 outside passes truck 43.8 -> 42.9, bridge 61.7 -> 64.2 (noisy). Apply the default rule above;
-put the three tables into CLAUDE.md and the PR either way. `TLG_ACB_MAIN_WAIT=sync` and graphics event
-fences are settled (no gain): do not repeat them.
+Released in 0.1.8: fence batching, span cache, MoltenVK descriptor storage (truck 49, bridge 68 on the M3 Max).
+Open: in harness runs (window behind the owner's apps) the GPU drops from P13 to P1 of 15 and stays there
+(49 -> 28 FPS in Seattle, ~1 run in 3; `tools/gpu_probes/gpu_pstate.c`). The local ISS.app now runs its
+processes from inside the bundle (Game Mode). With the owner: full screen from `~/iss-rel/ISS.app`, 5 minutes in
+Seattle, `gpu_pstate 600 > file` running: does it stay at P13? If it still drops: look for what keeps the clock
+up (window in front in the harness: SDL_RaiseWindow / activation; a queue or process GPU priority).
+Until this is settled, do not trust Seattle A/B numbers, and check any slow run with gpu_pstate.
+Every agent turn can simply end (it did for 8 h on 2026-11-10): leave results in files, the owner says "continue".
 
 ## 2. CPU per draw in tlggpu-host: the critical path (4-5 h)
 
@@ -80,6 +72,14 @@ performance core from DrawRec? Try parking sooner behind a switch.
 Save `~/iss_mac_port/port/out/save-backups/seattle-run-20261103` (agent_run.sh takes the folder; 46.5 FPS
 standing with 0.1.6). Profile there with host_profile.sh: with ~2x the draws the same per-draw costs weigh
 more; note what differs from the truck.
+
+## 3b. Slower Macs: 30 FPS as on the PS4 (owner's second goal)
+
+First data: M1 Pro 16 GB, 21.2 FPS at the truck with defaults (issue #5; asked for runs at 67% and 50% render
+scale). In order: (1) choose the performance preset automatically on first start from the Mac model and memory
+(launcher; hw.model / hw.memsize / hw.perflevel0.physicalcpu), (2) check frame pacing at the 30 FPS cap
+(even frame times, not just the average), (3) particles at half resolution (changes the picture: default off,
+owner's eyes), (4) later: temporal upscaling (MetalFX) from 720p.
 
 ## 4. Fallback without game runs: launcher automatic updates (2-3 h)
 
