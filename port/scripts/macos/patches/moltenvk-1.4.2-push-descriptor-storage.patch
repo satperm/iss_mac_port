@@ -1,0 +1,81 @@
+diff --git a/MoltenVK/MoltenVK/Commands/MVKCmdPipeline.h b/MoltenVK/MoltenVK/Commands/MVKCmdPipeline.h
+--- a/MoltenVK/MoltenVK/Commands/MVKCmdPipeline.h
++++ b/MoltenVK/MoltenVK/Commands/MVKCmdPipeline.h
+@@ -18,6 +18,8 @@
+ 
+ #pragma once
+ 
++#include <vector>
++
+ #include "MVKCommand.h"
+ #include "MVKMTLResourceBindings.h"
+ #include "MVKSync.h"
+@@ -273,6 +275,11 @@
+ 	void clearDescriptorWrites();
+ 
+ 	MVKSmallVector<VkWriteDescriptorSet, 1> _descriptorWrites;
++	// iss_mac_port: the writes' image/buffer/view arrays live in these vectors, which keep their
++	// storage when the pooled command is reused, instead of a new[]/delete[] pair per write per push.
++	std::vector<VkDescriptorImageInfo> _tlgImageInfos;
++	std::vector<VkDescriptorBufferInfo> _tlgBufferInfos;
++	std::vector<VkBufferView> _tlgTexelBufferViews;
+ 	MVKPipelineLayout* _pipelineLayout = nullptr;
+ 	VkPipelineBindPoint _pipelineBindPoint;
+ 	uint32_t _set;
+diff --git a/MoltenVK/MoltenVK/Commands/MVKCmdPipeline.mm b/MoltenVK/MoltenVK/Commands/MVKCmdPipeline.mm
+--- a/MoltenVK/MoltenVK/Commands/MVKCmdPipeline.mm
++++ b/MoltenVK/MoltenVK/Commands/MVKCmdPipeline.mm
+@@ -401,24 +401,39 @@
+ 	// Add the descriptor writes
+ 	clearDescriptorWrites();	// Clear for reuse
+ 	_descriptorWrites.reserve(descriptorWriteCount);
++	// iss_mac_port: size the three arrays first (they must not move once pointers into them are taken).
++	size_t tlgImages = 0, tlgBuffers = 0, tlgViews = 0;
++	for (uint32_t dwIdx = 0; dwIdx < descriptorWriteCount; dwIdx++) {
++		const VkWriteDescriptorSet& w = pDescriptorWrites[dwIdx];
++		if (w.pImageInfo) { tlgImages += w.descriptorCount; }
++		if (w.pBufferInfo) { tlgBuffers += w.descriptorCount; }
++		if (w.pTexelBufferView) { tlgViews += w.descriptorCount; }
++	}
++	_tlgImageInfos.resize(tlgImages);
++	_tlgBufferInfos.resize(tlgBuffers);
++	_tlgTexelBufferViews.resize(tlgViews);
++	tlgImages = tlgBuffers = tlgViews = 0;
+ 	for (uint32_t dwIdx = 0; dwIdx < descriptorWriteCount; dwIdx++) {
+ 		_descriptorWrites.push_back(pDescriptorWrites[dwIdx]);
+ 		VkWriteDescriptorSet& descWrite = _descriptorWrites.back();
+ 		// Make a copy of the associated data.
+ 		if (descWrite.pImageInfo) {
+-			auto* pNewImageInfo = new VkDescriptorImageInfo[descWrite.descriptorCount];
++			auto* pNewImageInfo = _tlgImageInfos.data() + tlgImages;
+ 			std::copy_n(descWrite.pImageInfo, descWrite.descriptorCount, pNewImageInfo);
+ 			descWrite.pImageInfo = pNewImageInfo;
++			tlgImages += descWrite.descriptorCount;
+ 		}
+ 		if (descWrite.pBufferInfo) {
+-			auto* pNewBufferInfo = new VkDescriptorBufferInfo[descWrite.descriptorCount];
++			auto* pNewBufferInfo = _tlgBufferInfos.data() + tlgBuffers;
+ 			std::copy_n(descWrite.pBufferInfo, descWrite.descriptorCount, pNewBufferInfo);
+ 			descWrite.pBufferInfo = pNewBufferInfo;
++			tlgBuffers += descWrite.descriptorCount;
+ 		}
+ 		if (descWrite.pTexelBufferView) {
+-			auto* pNewTexelBufferView = new VkBufferView[descWrite.descriptorCount];
++			auto* pNewTexelBufferView = _tlgTexelBufferViews.data() + tlgViews;
+ 			std::copy_n(descWrite.pTexelBufferView, descWrite.descriptorCount, pNewTexelBufferView);
+ 			descWrite.pTexelBufferView = pNewTexelBufferView;
++			tlgViews += descWrite.descriptorCount;
+ 		}
+ 		const VkWriteDescriptorSetInlineUniformBlock* pInlineUniformBlock = nullptr;
+ 		for (const auto* next = (VkBaseInStructure*)descWrite.pNext; next; next = next->pNext) {
+@@ -452,9 +467,7 @@
+ 
+ void MVKCmdPushDescriptorSet::clearDescriptorWrites() {
+ 	for (VkWriteDescriptorSet &descWrite : _descriptorWrites) {
+-		if (descWrite.pImageInfo) { delete[] descWrite.pImageInfo; }
+-		if (descWrite.pBufferInfo) { delete[] descWrite.pBufferInfo; }
+-		if (descWrite.pTexelBufferView) { delete[] descWrite.pTexelBufferView; }
++		// iss_mac_port: the image/buffer/view arrays are in the _tlg vectors (kept for reuse).
+ 
+ 		const VkWriteDescriptorSetInlineUniformBlock* pInlineUniformBlock = nullptr;
+ 		for (const auto* next = (VkBaseInStructure*)descWrite.pNext; next; next = next->pNext) {

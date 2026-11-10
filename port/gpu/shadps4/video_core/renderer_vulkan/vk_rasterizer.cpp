@@ -1082,6 +1082,21 @@ namespace {
 // arguments as the CPU
 // sees them (the GPU may write them later), to find work that keeps the GPU busy until the
 // watchdog (Metal "GPU Hang").
+/// tlg: TLG_TIMING_AFTER_S=N (diagnostic): TLG_DRAW_TIMING / TLG_DISPATCH_TIMING start only N seconds
+/// after the first draw, so a state that only appears untimed (Seattle: FPS halves when someone walks
+/// past) is timed once it is there.
+bool TimingAllowed() {
+    static const int after = [] {
+        const char* env = std::getenv("TLG_TIMING_AFTER_S");
+        return env && *env ? std::atoi(env) : 0;
+    }();
+    if (after <= 0) {
+        return true;
+    }
+    static const auto start = std::chrono::steady_clock::now();
+    return std::chrono::steady_clock::now() - start >= std::chrono::seconds(after);
+}
+
 u64 DispatchLogThreshold() {
     static const u64 threshold = [] {
         const char* env = std::getenv("TLG_DISPATCH_LOG");
@@ -1282,7 +1297,7 @@ struct DrawTiming {
             return false;
         }
         if (left == 0) {
-            if (std::chrono::steady_clock::now() < next) {
+            if (!TimingAllowed() || std::chrono::steady_clock::now() < next) {
                 return false;
             }
             left = 3000;
@@ -1540,6 +1555,24 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     const u32 first_instance = instance_offset;
     LogWork(is_indexed ? "indexed draw vs" : "draw vs", vs_info.pgm_hash, num_indices,
             num_instances, 1);
+    // tlg: TLG_NEW_SHADERS=1 (diagnostic): the first draw of each vertex/pixel shader pair, with the
+    // time since the first one: what joins the scene when the frame rate changes (people walking past).
+    static const bool new_shaders = [] {
+        const char* env = std::getenv("TLG_NEW_SHADERS");
+        return env && *env == '1';
+    }();
+    if (new_shaders) [[unlikely]] {
+        static std::set<std::pair<u64, u64>> seen;
+        static const auto start = std::chrono::steady_clock::now();
+        const auto* ps_stage = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
+        const u64 ps_hash = ps_stage ? ps_stage->pgm_hash : 0;
+        if (seen.emplace(vs_info.pgm_hash, ps_hash).second) {
+            std::printf("New shaders at %.1f s: vs %016llx ps %016llx, %u indices x %u instances\n",
+                        std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count(),
+                        (unsigned long long)vs_info.pgm_hash, (unsigned long long)ps_hash, num_indices,
+                        num_instances);
+        }
+    }
     // tlg: TLG_DRAW_UD_LOG=<hex vs hash>: the vertex stage's user data of that shader's first 20
     // draws (loop bounds and buffer descriptors of a draw that hangs the GPU).
     static const u64 ud_log = [] {
@@ -2267,7 +2300,7 @@ struct DispatchTiming {
             return false;
         }
         if (left == 0) {
-            if (std::chrono::steady_clock::now() < next) {
+            if (!TimingAllowed() || std::chrono::steady_clock::now() < next) {
                 return false;
             }
             left = 800;
@@ -2709,6 +2742,43 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
                                     other.is_written ? "written" : "read");
                     }
                 }
+            }
+        }
+    }
+    // tlg: TLG_CS_DUMP=<hex hash> (diagnostic): every 256th dispatch of that compute shader: its user
+    // data, and each buffer with its first 24 dwords when it is read-only and mapped (constants such
+    // as counts: what changes when the same dispatch gets slower).
+    static const u64 cs_dump = [] {
+        const char* env = std::getenv("TLG_CS_DUMP");
+        return env && *env ? std::strtoull(env, nullptr, 16) : 0ull;
+    }();
+    if (cs_dump && cs.pgm_hash == cs_dump) [[unlikely]] {
+        static u64 dumps = 0;
+        if ((dumps++ & 255) == 0) {
+            std::printf("CS dump %016llx #%llu: %ux%ux%u; user data:", (unsigned long long)cs.pgm_hash,
+                        (unsigned long long)dumps, cs_program.dim_x, cs_program.dim_y, cs_program.dim_z);
+            for (size_t i = 0; i < cs.user_data.size() && i < 16; ++i) {
+                std::printf(" %08x", cs.user_data[i]);
+            }
+            std::printf("\n");
+            u32 index = 0;
+            for (const auto& desc : cs.buffers) {
+                if (desc.IsSpecial()) {
+                    ++index;
+                    continue;
+                }
+                const auto sharp = desc.GetSharp(cs);
+                const VAddr base = sharp.base_address;
+                const u64 size = sharp.GetSize();
+                std::printf("CS dump   buffer %u %#llx + %#llx stride %u %s:", index++, (unsigned long long)base,
+                            (unsigned long long)size, u32(sharp.GetStride()), desc.is_written ? "written" : "read");
+                if (!desc.is_written && base && size >= 4 && IsMapped(base, std::min<u64>(size, 96))) {
+                    const u32* words = std::bit_cast<const u32*>(base);
+                    for (u64 i = 0; i < std::min<u64>(size / 4, 24); ++i) {
+                        std::printf(" %08x", words[i]);
+                    }
+                }
+                std::printf("\n");
             }
         }
     }

@@ -388,6 +388,32 @@ static int reserve_guest_range(void) {
     return ENOMEM;
 }
 
+/* macOS clocks the GPU down for apps it does not count as busy in the foreground: with the game
+ * window behind another app the GPU went from performance state 13 to 1 (of 15) within seconds and
+ * stayed there at 95% load: 49 -> 28 FPS (tools/gpu_probes/gpu_pstate.c). The process says what it is
+ * doing: user-initiated, latency-critical work (also ends App Nap and timer coalescing for it).
+ * TLG_HOST_ACTIVITY=1 (diagnostic, default off): measured in Seattle with the window in the background,
+ * the drop came in 3 of 5 runs with it and 2 of 5 without. Through the Objective-C runtime: plain C here. */
+static void begin_game_activity(void) {
+    const char *on = getenv("TLG_HOST_ACTIVITY"); /* default off: it did not keep the GPU clocked up */
+    if (!(on && *on == '1')) return;
+    void *(*send)(void *, void *) = (void *(*)(void *, void *))dlsym(RTLD_DEFAULT, "objc_msgSend");
+    void *(*get_class)(const char *) = (void *(*)(const char *))dlsym(RTLD_DEFAULT, "objc_getClass");
+    void *(*selector)(const char *) = (void *(*)(const char *))dlsym(RTLD_DEFAULT, "sel_registerName");
+    if (!send || !get_class || !selector) return;
+    void *info_class = get_class("NSProcessInfo");
+    if (!info_class) return;
+    void *info = send(info_class, selector("processInfo"));
+    /* NSActivityUserInitiated (0x00FFFFFF, includes idle system sleep disabled) | NSActivityLatencyCritical. */
+    const uint64_t options = 0x00FFFFFFull | 0xFF00000000ull;
+    void *token = ((void *(*)(void *, void *, uint64_t, CFStringRef))send)(
+        info, selector("beginActivityWithOptions:reason:"), options, CFSTR("rendering the game"));
+    if (token) {
+        send(token, selector("retain")); /* held for the life of the process */
+        say("activity: user-initiated, latency-critical (TLG_HOST_ACTIVITY=1)");
+    }
+}
+
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
     /* stdout is the launcher's pipe (shared with tlg-probe): if the launcher goes away, say()
@@ -401,6 +427,7 @@ int main(int argc, char **argv) {
     /* A signal ends the host as a signal, not as SDL's polite quit event (exit status 0). */
     setenv("SDL_NO_SIGNAL_HANDLERS", "1", 1);
     say("pid %d, %s, page %d bytes", (int)getpid(), translated() ? "TRANSLATED (Rosetta)" : "native arm64", getpagesize());
+    begin_game_activity();
     /* The guest range first, before anything (Metal, the window server) maps memory there. The
      * kernel hole below 0x7000000000 is the same in arm64 processes. */
     /* TLGGPU_TEST_BLOCK_RANGE=1 (testing) occupies the start of the range, as seen on an M2 Max. */
