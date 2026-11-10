@@ -166,6 +166,13 @@ struct LauncherView: View {
         HStack(alignment: .top, spacing: 0) {
             Form {
                 Section("Quality") {
+                    Picker("Preset", selection: $model.settings.preset) {
+                        ForEach(PerformancePreset.allCases) { Text($0.label).tag(PerformancePreset?.some($0)) }
+                        if model.settings.preset == nil { Text("Custom").tag(PerformancePreset?.none) }
+                    }
+                    .pickerStyle(.segmented)
+                    Text("Sets the four choices below together. Slower Mac (for example M1 or M2 with 16 GB): lower detail, 30 FPS, 67% render scale. Slowest: lowest detail, 30 FPS, 50%, no smoke and sparks.")
+                        .font(.caption).foregroundStyle(.secondary)
                     Picker("Detail", selection: $model.settings.quality) {
                         ForEach(QualityPreset.allCases) { Text($0.label).tag($0) }
                     }

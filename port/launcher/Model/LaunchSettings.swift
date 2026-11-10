@@ -92,6 +92,37 @@ enum GameLanguage {
     ]
 }
 
+/// One choice that sets detail, frame rate cap, render scale and GPU particles together. Slower Macs
+/// (fewer GPU cores, 4 performance cores) are limited by the GPU first: fewer pixels and a 30 FPS cap
+/// give a steady picture. Nothing is measured on such Macs yet: the values are a starting point.
+enum PerformancePreset: String, CaseIterable, Identifiable {
+    case standard, slower, slowest
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .standard: "Default"
+        case .slower: "Slower Mac"
+        case .slowest: "Slowest"
+        }
+    }
+    var quality: QualityPreset {
+        switch self {
+        case .standard: .original
+        case .slower: .low
+        case .slowest: .lowest
+        }
+    }
+    var fpsCap: FrameRateCap { self == .standard ? .display : .fps30 }
+    var renderScale: RenderScale {
+        switch self {
+        case .standard: .full
+        case .slower: .p67
+        case .slowest: .p50
+        }
+    }
+    var particles: ParticleMode { self == .slowest ? .off : .auto }
+}
+
 struct LaunchSettings: Equatable {
     var gameDir: URL?
     var showLauncher = true
@@ -114,6 +145,22 @@ struct LaunchSettings: Equatable {
         set {
             showFPS = newValue == .game
             metalHUD = newValue == .metal
+        }
+    }
+
+    /// The preset the four settings match, nil when they were changed one by one ("Custom").
+    var preset: PerformancePreset? {
+        get {
+            PerformancePreset.allCases.first {
+                $0.quality == quality && $0.fpsCap == fpsCap && $0.renderScale == renderScale && $0.particles == particles
+            }
+        }
+        set {
+            guard let p = newValue else { return }
+            quality = p.quality
+            fpsCap = p.fpsCap
+            renderScale = p.renderScale
+            particles = p.particles
         }
     }
 
