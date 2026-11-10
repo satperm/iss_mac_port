@@ -100,6 +100,8 @@ if [[ ${1:-} != --test-only ]]; then
         "${host_cc[@]}" host/guest_reservation.s -Wl,-segaddr,__GUESTRSV,0x7000000000 \
             -Wl,-segprot,__GUESTRSV,---,--- -o out/tlggpu-host-macos27
         echo "Built $PWD/out/tlggpu-host and out/tlggpu-host-macos27 (arm64)"
+        # A local ISS.app runs copies of these from inside its bundle (Game Mode): keep them current.
+        bash scripts/macos/refresh_app.sh || true
     fi
     # TLG_RENDERER_V2=1: also renderer v2 (gpu_v2/README.md) and its probe, out/tlg-probe-v2
     # (TLG_PROBE=out/tlg-probe-v2 run_macos.sh runs it).

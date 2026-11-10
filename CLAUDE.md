@@ -792,3 +792,16 @@ Instruments (Shader Timeline option) for per-shader cost.
   full-screen pass (ps 93efbd54, skipping it changes nothing), geometry (+3.6% indices), per-draw timing.
   New diagnostics: TLG_NEW_SHADERS=1, TLG_TIMING_AFTER_S=N, TLG_CS_DUMP=<hash>, TLG_HOST_ACTIVITY (host asserts
   NSActivityUserInitiated|LatencyCritical). First M1 Pro benchmark (issue #5): 21.2 FPS at the truck, defaults.
+- 2026-11-10 late: MoltenVK patch push-descriptor-storage (MVKCmdPushDescriptorSet keeps its image/buffer/view
+  arrays in vectors reused with the pooled command instead of new[]/delete[] per write): 6 alternated pairs, all
+  faster: truck 47.3 -> 48.6, bridge 66.0 -> 67.6 (owner was using the Mac: absolute numbers low, pairs consistent).
+  LOCAL ISS.app NEVER GOT GAME MODE FOR THE GPU PROCESS: make_app.sh linked tlg-probe into out/ and tlg-probe
+  resolves the link, so tlggpu-host ran from out/, an anonymous process outside the bundle (bloodborne_mac_port
+  found the same, MACOS_BACKLOG 2026-10-26). Now refresh_app.sh copies the three executables into the bundle
+  (make_app.sh and after every build_macos.sh). Release apps always had them inside. TO VERIFY with the owner:
+  full screen from the app, gpu_pstate running: does the GPU stay clocked up? Harness runs keep the window in
+  the background, so the P13 -> P1 drop can hit any long harness run: check with gpu_pstate when a run looks slow.
+  Upstream check 2026-11-10: iss_pc developer has nothing new for us since the fork point except pad work
+  (30c3f7a) and the temporal upscaler (needs the renderer side here); shadPS4: #5572 submit every N draws (we
+  have it), #5591 PopPendingOperations fast path (we have it), #5571 one wait for all pending image downloads and
+  #5599 refresh images stored after a GPU-written image (worth reading), mbcnt generalisation #5669/#5689.

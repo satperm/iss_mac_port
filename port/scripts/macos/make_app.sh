@@ -4,9 +4,11 @@
 # (port/launcher, scripts/macos/build_launcher.sh): settings in port/launch.conf, the game through
 # port/run_macos.sh, session logs in ~/Library/Logs/ISS. It never checks for updates.
 #
-# The game process runs from inside the bundle (a link to out/tlg-probe) and the bundle is a game
-# (LSApplicationCategoryType, LSSupportsGameMode), so macOS Game Mode gives it CPU and GPU
-# priority in full screen. The icon is made from the game's own sce_sys/icon0.png, so the app is
+# The game and GPU processes run from inside the bundle (copies of out/tlg-probe and
+# out/tlggpu-host*, refreshed by build_macos.sh) and the bundle is a game (LSApplicationCategoryType,
+# LSSupportsGameMode), so macOS Game Mode gives them CPU and GPU priority in full screen. A link into
+# out/ does not count: macOS then sees an anonymous process outside the bundle, without Game Mode,
+# and may clock the GPU down under it (49 -> 28 FPS in Seattle; tools/gpu_probes/gpu_pstate.c). The icon is made from the game's own sce_sys/icon0.png, so the app is
 # built locally and never committed (ISS.app is in .gitignore).
 #
 # usage: bash port/scripts/macos/make_app.sh   (again after moving the repository)
@@ -42,7 +44,7 @@ cat > "$app/Contents/Info.plist" <<EOF
 </plist>
 EOF
 cp port/out/launcher/ISS "$app/Contents/MacOS/ISS"
-ln -s "$repo/port/out/tlg-probe" "$app/Contents/MacOS/tlg-probe"
+bash port/scripts/macos/refresh_app.sh "$app"
 # Icon from the game's own artwork.
 game=$([[ -f $conf ]] && (set -a; source "$conf"; printf '%s' "${TLG_GAME_DIR:-}") || true)
 if [[ -n $game && -f $game/sce_sys/icon0.png ]]; then
