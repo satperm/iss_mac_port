@@ -9,7 +9,7 @@ It is a macOS fork of [iss_pc](https://github.com/HayatoG/iss_pc), the native PC
 
 > **Status: first test version, work in progress.** The story can be played from the start with
 > GPU particles (smoke, rain, sparks). Tested on one Mac (M3 Max, 36 GB) as far as the first missions
-> in Seattle. On that Mac expect about 65 FPS on the opening bridge, about 47 in the heaviest
+> in Seattle. On that Mac expect about 68 FPS on the opening bridge, about 49 in the heaviest
 > fire-and-smoke scene (the launcher's Benchmark) and 25-30 in busy streets. See
 > [Expected performance](#expected-performance) and [Known issues](#known-issues).
 
@@ -151,12 +151,12 @@ outdoor views).
 ## Expected performance
 
 Measured on a **MacBook Pro with M3 Max**, macOS 27, 1080p rendering, default settings, release
-0.1.7 (2026-11-09). Each value is the median of 40 s after loading.
+0.1.8 (2026-11-10). Each value is the median of 40 s after loading.
 
 | Scene | FPS |
 |---|---|
-| Truck crash in the forest (fire, smoke, sparks; the launcher's **Benchmark**), standing | 47 (0.1.6: 43-45, 0.1.3: 36) |
-| Bridge after the car crash (rain, smoke), standing | 65 (0.1.5: 60) |
+| Truck crash in the forest (fire, smoke, sparks; the launcher's **Benchmark**), standing | 49 (0.1.7: 47, 0.1.3: 36) |
+| Bridge after the car crash (rain, smoke), standing | 68 (0.1.7: 66, 0.1.5: 60) |
 | Bridge, camera turning at a constant speed | 53 (0.1.5: 49) |
 | Bridge with render scale 50% | about 72 |
 | Frame rate cap 30 | exactly 30 |
@@ -189,6 +189,12 @@ to add yours.
 
 Fixed recently:
 
+- **More CPU work per draw removed** (0.1.8): the game's graphics fences leave in batches, the renderer
+  checks mapped memory without a lock, and the patched MoltenVK reuses its descriptor storage. Truck
+  crash 47 -> 49 FPS, bridge 66 -> 68 (M3 Max), same picture.
+- **Launcher: performance preset** (Advanced > Quality): Default, Slower Mac (lower detail, 30 FPS, 67%
+  render scale), Slowest (lowest detail, 30 FPS, 50%, no smoke and sparks). A starting point for
+  M1/M2-class Macs: an M1 Pro measured 21 FPS at the truck crash with the defaults.
 - **Less CPU work per draw** (0.1.7): the game keeps one frame at the GPU and waits for it before sending
   the next, so the time the port spends translating each draw is frame time. One per-draw loop over
   1,664 register flags is gone: truck crash 43 -> 47 FPS (M3 Max), same picture.
@@ -233,10 +239,13 @@ Fixed recently:
 
 ## Known issues
 
-- **Frame rate is not a steady 60 everywhere.** The bridge is about 65 standing and 50-55 while moving;
-  the truck crash 47. Busy streets with thousands of objects are limited by the CPU work per draw
+- **Frame rate is not a steady 60 everywhere.** The bridge is about 68 standing and 50-55 while moving;
+  the truck crash 49. Busy streets with thousands of objects are limited by the CPU work per draw
   (about 25-30 FPS where the game draws ~7,500 objects a frame). Drops seen while playing on the
   bridge are not explained yet.
+- **The frame rate can halve while the game is not the front app** (seen 49 -> 28 FPS): macOS clocks the
+  GPU down for a window behind another app and does not clock it back up. Play in full screen from
+  the app (Game Mode); `port/tools/gpu_probes/gpu_pstate.c` shows the GPU's performance state.
 - **No lens glare at all.** To stop headlight and lamp glare showing through walls, every light is
   reported hidden, so the glare sprites never draw, also where the light is in plain view
   (`TLG_OCCLUSION_MODE=4`: counted queries, glare back, but through walls too).
