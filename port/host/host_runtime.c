@@ -26,6 +26,13 @@ static View *views;
 static size_t view_count, view_capacity;
 static uint64_t events_applied, failures, view_bytes;
 static pthread_rwlock_t table_lock = PTHREAD_RWLOCK_INITIALIZER;
+/* The renderer asks "is this range mapped" for every buffer of every draw (runtime_memory_clamp,
+ * host_view_covered), almost always inside the span it asked about last. Each thread remembers that
+ * span (contiguous views) and the table's generation: a hit needs no lock. The writer bumps the
+ * generation under the write lock before it changes anything; a reader that saw the old value
+ * answers as if it had run just before that change. */
+static uint64_t table_generation = 1; /* read and written with __atomic builtins only */
+static _Thread_local struct { uint64_t generation, start, end; } span_cache;
 static mach_port_t entry = MACH_PORT_NULL;
 static uint64_t entry_size;
 
@@ -71,6 +78,22 @@ static void drop(uint64_t start, uint64_t end) {
     memmove(views + i, views + i + n, (view_count - i - n) * sizeof *views);
     view_count -= n;
 }
+static inline int span_hit(uint64_t start, uint64_t end) {
+    static int on = -1; /* TLG_HOST_SPAN_CACHE=0: always ask under the lock, as before */
+    if (on < 0) { const char *e = getenv("TLG_HOST_SPAN_CACHE"); on = !(e && *e == '0'); }
+    return on && span_cache.generation == __atomic_load_n(&table_generation, __ATOMIC_ACQUIRE) &&
+           start >= span_cache.start && end <= span_cache.end && start <= end;
+}
+/* Under the read lock: the contiguous views around `address`, for this thread's next questions. */
+static void span_remember(uint64_t address) {
+    const size_t i = view_index(address);
+    if (i == view_count || views[i].start > address) { span_cache.generation = 0; return; }
+    uint64_t end = views[i].end;
+    for (size_t k = i + 1; k < view_count && views[k].start == end; ++k) end = views[k].end;
+    span_cache.start = views[i].start;
+    span_cache.end = end;
+    span_cache.generation = __atomic_load_n(&table_generation, __ATOMIC_ACQUIRE);
+}
 static int covered_locked(uint64_t start, uint64_t end) {
     uint64_t at = start;
     for (size_t i = view_index(start); at < end; ++i) {
@@ -80,8 +103,10 @@ static int covered_locked(uint64_t start, uint64_t end) {
     return 1;
 }
 int host_view_covered(uint64_t start, uint64_t end) {
+    if (start < end && span_hit(start, end)) return 1;
     pthread_rwlock_rdlock(&table_lock);
     const int result = covered_locked(start, end);
+    if (result && start < end) span_remember(start);
     pthread_rwlock_unlock(&table_lock);
     return result;
 }
@@ -106,6 +131,7 @@ void host_view_apply(uint32_t op, uint32_t prot, uint64_t address, uint64_t size
     const uint64_t start = address, end = address + size;
     GpuRange hook = NULL;
     pthread_rwlock_wrlock(&table_lock);
+    __atomic_fetch_add(&table_generation, 1, __ATOMIC_RELEASE); /* before any change: see span_cache */
     ++events_applied;
     if (!size || (start | size) % TLGGPU_GUEST_PAGE || start < TLGGPU_GUEST_MIN || end > TLGGPU_GUEST_MAX || end < start) {
         fail_view(op, address, size, phys, "range check", EINVAL);
@@ -264,12 +290,14 @@ int runtime_memory_is_mapped(uintptr_t address, uint64_t size) {
     return host_view_covered(address, address + size);
 }
 uint64_t runtime_memory_clamp(uintptr_t address, uint64_t size) {
+    if (size && address + size >= address && span_hit(address, address + size)) return size;
     pthread_rwlock_rdlock(&table_lock);
     uint64_t length = 0;
     for (size_t i = view_index(address); i < view_count && length < size; ++i) {
         if (views[i].start > address + length) break;
         length = views[i].end - address;
     }
+    if (length) span_remember(address);
     pthread_rwlock_unlock(&table_lock);
     return length < size ? length : size;
 }

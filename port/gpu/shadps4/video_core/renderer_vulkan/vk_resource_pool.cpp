@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <cstddef>
+#include <cstdlib>
 #include <optional>
+
+#include "common/thread.h"
 
 #include "common/assert.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -62,7 +65,8 @@ std::size_t ResourcePool::ManageOverflow() {
 constexpr std::size_t COMMAND_BUFFER_POOL_SIZE = 4;
 
 CommandPool::CommandPool(const Instance& instance, Semaphore* work_semaphore, u32 queue_family)
-    : ResourcePool{work_semaphore, COMMAND_BUFFER_POOL_SIZE}, instance{instance} {
+    : ResourcePool{work_semaphore, COMMAND_BUFFER_POOL_SIZE}, instance{instance},
+      queue_family{queue_family} {
     const vk::CommandPoolCreateInfo pool_create_info = {
         .flags = vk::CommandPoolCreateFlagBits::eTransient |
                  vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
@@ -74,9 +78,81 @@ CommandPool::CommandPool(const Instance& instance, Semaphore* work_semaphore, u3
                vk::to_string(pool_result));
     cmd_pool = std::move(pool);
     SetObjectName(device, *cmd_pool, "CommandPool");
+    if (const char* env = std::getenv("TLG_CMD_PRERESET"); env && *env == '1') {
+        prereset = true;
+        reset_thread = std::jthread([this](std::stop_token stop) { ResetThread(stop); });
+    }
 }
 
-CommandPool::~CommandPool() = default;
+CommandPool::~CommandPool() {
+    if (reset_thread.joinable()) {
+        reset_thread.request_stop();
+        slot_cv.notify_all();
+        reset_thread.join();
+    }
+    const vk::Device device = instance.GetDevice();
+    for (const vk::CommandPool pool : slot_pools) {
+        device.destroyCommandPool(pool);
+    }
+}
+
+CommandPool::Slot CommandPool::NewSlot() {
+    const vk::Device device = instance.GetDevice();
+    const auto [pool_result, pool] = device.createCommandPool({
+        .flags = vk::CommandPoolCreateFlagBits::eTransient |
+                 vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+        .queueFamilyIndex = queue_family,
+    });
+    ASSERT_MSG(pool_result == vk::Result::eSuccess, "Failed to create command pool: {}",
+               vk::to_string(pool_result));
+    const vk::CommandBufferAllocateInfo buffer_alloc_info = {
+        .commandPool = pool,
+        .level = vk::CommandBufferLevel::ePrimary,
+        .commandBufferCount = 1,
+    };
+    Slot slot{.pool = pool};
+    const auto result = device.allocateCommandBuffers(&buffer_alloc_info, &slot.buffer);
+    ASSERT(result == vk::Result::eSuccess);
+    std::scoped_lock lock{slot_mutex};
+    SetObjectName(device, slot.buffer, "CommandPool: Command Buffer {}", slot_pools.size());
+    slot_pools.push_back(pool);
+    return slot;
+}
+
+void CommandPool::ResetThread(std::stop_token stop) {
+    Common::SetCurrentThreadName("tlg:CmdReset");
+    const vk::Device device = instance.GetDevice();
+    const vk::Semaphore semaphore = work_semaphore->Handle();
+    while (!stop.stop_requested()) {
+        Slot slot;
+        {
+            std::unique_lock lock{slot_mutex};
+            slot_cv.wait(lock, stop, [this] { return !in_flight.empty(); });
+            if (stop.stop_requested()) {
+                return;
+            }
+            slot = in_flight.front();
+        }
+        // The oldest one first: its submission is signalled before the later ones.
+        while (!work_semaphore->IsFree(slot.tick)) {
+            if (stop.stop_requested()) {
+                return;
+            }
+            const vk::SemaphoreWaitInfo wait_info = {
+                .semaphoreCount = 1,
+                .pSemaphores = &semaphore,
+                .pValues = &slot.tick,
+            };
+            if (device.waitSemaphores(&wait_info, 20'000'000) == vk::Result::eSuccess) {
+                work_semaphore->Refresh();
+            }
+        }
+        (void)slot.buffer.reset();
+        std::scoped_lock lock{slot_mutex};
+        in_flight.pop_front();
+        ready.push_back(slot);
+    }
+}
 
 void CommandPool::Allocate(std::size_t begin, std::size_t end) {
     cmd_buffers.resize(end);
@@ -98,6 +174,26 @@ void CommandPool::Allocate(std::size_t begin, std::size_t end) {
 }
 
 vk::CommandBuffer CommandPool::Commit() {
+    if (prereset) {
+        Slot slot{};
+        {
+            std::scoped_lock lock{slot_mutex};
+            if (!ready.empty()) {
+                slot = ready.back();
+                ready.pop_back();
+            }
+        }
+        if (!slot.buffer) {
+            slot = NewSlot();
+        }
+        slot.tick = work_semaphore->CurrentTick();
+        {
+            std::scoped_lock lock{slot_mutex};
+            in_flight.push_back(slot);
+        }
+        slot_cv.notify_one();
+        return slot.buffer;
+    }
     const std::size_t index = CommitResource();
     return cmd_buffers[index];
 }

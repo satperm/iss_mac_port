@@ -773,3 +773,13 @@ Instruments (Shader Timeline option) for per-shader cost.
   => TLG_GFX_FENCE_BATCH default 8 (0 = a submission per fence). TLG_IDLE_FLUSH stays off: no gain and
   single-run dips in Seattle; do not retry. PR #4 was merged before its second commit (the unattended kit) was
   pushed: check `git log origin/macos` contains what you think before branching.
+- 2026-11-10: host span cache (host_runtime.c: runtime_memory_clamp / host_view_covered answer from a per-thread
+  remembered span + table generation, no rwlock; TLG_HOST_SPAN_CACHE=0 = old): truck 48.3 -> 49.2, bridge
+  66.5 -> 68.0 (4 alternated runs, +-0.2). TLG_CMD_PRERESET=1 (a pool per command buffer, a thread resets it at GPU
+  completion): no gain (truck 49.1, bridge 67.8), default off. NOTE lib_ab.sh swaps only libtlggpu.dylib:
+  host/ changes need an env switch. SEATTLE DROP: in ~1 of 3 runs of seattle-run-20261103 FPS falls 49 -> 28 at
+  ~40 s and stays, in every variant; the owner sees it when a person walks past. Same draws/dispatches per frame,
+  GPU busy 10 -> 27 ms a frame (Metal trace: new 1-5 ms intervals: ~1.7 graphics-queue compute dispatches, ~3
+  render encoders with long vertex and fragment parts a frame). It did not appear in 5 runs with
+  TLG_DRAW_TIMING/TLG_DISPATCH_TIMING on. Likely the 25-30 FPS of busy streets. Open.
+  The session stopped for 8 h after a tool call at ~11:10 (no hung wait): unattended turns can simply end.
