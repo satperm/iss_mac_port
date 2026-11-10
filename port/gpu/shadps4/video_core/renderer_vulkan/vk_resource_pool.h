@@ -3,7 +3,10 @@
 
 #pragma once
 
+#include <condition_variable>
 #include <deque>
+#include <mutex>
+#include <thread>
 #include <vector>
 #include <boost/container/static_vector.hpp>
 #include <tsl/robin_map.h>
@@ -59,9 +62,29 @@ public:
     vk::CommandBuffer Commit();
 
 private:
+    /// tlg: TLG_CMD_PRERESET=1: every command buffer has a pool of its own, and a thread resets each
+    /// one as soon as the GPU is done with it. MoltenVK releases a buffer's recorded commands in
+    /// vkBeginCommandBuffer (10% of the draw recording thread, once per submission) and its pools
+    /// are not thread-safe: a pool per buffer lets another thread do it while this one records.
+    struct Slot {
+        vk::CommandPool pool;
+        vk::CommandBuffer buffer;
+        u64 tick{};
+    };
+    Slot NewSlot();
+    void ResetThread(std::stop_token stop);
+
     const Instance& instance;
+    u32 queue_family;
     vk::UniqueCommandPool cmd_pool;
     std::vector<vk::CommandBuffer> cmd_buffers;
+    bool prereset{};
+    std::mutex slot_mutex;
+    std::condition_variable_any slot_cv;
+    std::deque<Slot> in_flight;      ///< in commit order: recorded or at the GPU
+    std::vector<Slot> ready;         ///< reset, free to record into
+    std::vector<vk::CommandPool> slot_pools;
+    std::jthread reset_thread;
 };
 
 class DescriptorHeap final {

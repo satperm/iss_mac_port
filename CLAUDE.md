@@ -765,3 +765,21 @@ Instruments (Shader Timeline option) for per-shader cost.
   TLG_SUBMIT_DRAWS=128 with it: nothing. Day's standing numbers: bridge 59.8 -> 66.1, truck 45.2 -> 47.3.
   Lesson: a session restart kills background A/B scripts; keep results in a file (they were) and never leave the
   tree stashed for longer than a build.
+- 2026-11-10 morning, quiet Mac (everything closed; identical runs now agree within +-0.2 FPS on the bridge),
+  lib_ab.sh, 5 alternated runs x 60 s, one LTO build, switches only:
+    truck   head 47.4 | TLG_GFX_FENCE_BATCH=8 48.3 | TLG_IDLE_FLUSH=16 outside passes 47.7 | both 48.1
+    bridge  head 66.6 | 66.7 | 66.7 | 66.7
+    Seattle head 46.4 | 47.5 | 46.3 (runs 31.4 and 43.9 in it) | 48.0 (one run 39.5)
+  => TLG_GFX_FENCE_BATCH default 8 (0 = a submission per fence). TLG_IDLE_FLUSH stays off: no gain and
+  single-run dips in Seattle; do not retry. PR #4 was merged before its second commit (the unattended kit) was
+  pushed: check `git log origin/macos` contains what you think before branching.
+- 2026-11-10: host span cache (host_runtime.c: runtime_memory_clamp / host_view_covered answer from a per-thread
+  remembered span + table generation, no rwlock; TLG_HOST_SPAN_CACHE=0 = old): truck 48.3 -> 49.2, bridge
+  66.5 -> 68.0 (4 alternated runs, +-0.2). TLG_CMD_PRERESET=1 (a pool per command buffer, a thread resets it at GPU
+  completion): no gain (truck 49.1, bridge 67.8), default off. NOTE lib_ab.sh swaps only libtlggpu.dylib:
+  host/ changes need an env switch. SEATTLE DROP: in ~1 of 3 runs of seattle-run-20261103 FPS falls 49 -> 28 at
+  ~40 s and stays, in every variant; the owner sees it when a person walks past. Same draws/dispatches per frame,
+  GPU busy 10 -> 27 ms a frame (Metal trace: new 1-5 ms intervals: ~1.7 graphics-queue compute dispatches, ~3
+  render encoders with long vertex and fragment parts a frame). It did not appear in 5 runs with
+  TLG_DRAW_TIMING/TLG_DISPATCH_TIMING on. Likely the 25-30 FPS of busy streets. Open.
+  The session stopped for 8 h after a tool call at ~11:10 (no hung wait): unattended turns can simply end.

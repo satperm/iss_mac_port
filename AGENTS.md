@@ -138,9 +138,15 @@ dispatch runs), `TLG_QUEUE_STATS=1`, `TLG_THREAD_PROFILE_MS=5` (where game threa
 - Every wait has a deadline. Wait for the game with `scripts/macos/wait_game.sh <max s>` (exact
   process names); never `pgrep -f tlg-probe` in a loop: it matches the loop's own shell and never ends.
 - One run with a summary: `scripts/macos/agent_run.sh <truck|bridge> <label> <seconds> [VAR=value ...]`;
-  A/B: `fps_ab.sh`. Both are bounded by `timeout`. Run anything longer than ~8 minutes in the
+  A/B of settings: `fps_ab.sh`; A/B of builds (and settings) alternated: `lib_ab.sh save <name>` /
+  `lib_ab.sh run ...`; CPU profile of the GPU process: `host_profile.sh <scene> <label>`. Both are bounded by `timeout`. Run anything longer than ~8 minutes in the
   background and wait for its completion notice; never end a turn waiting on an unbounded command.
 - `out/bridge-fresh` (a save on the bridge) is local, not in git; copy any save before use.
+- `timeout` on the owner's Mac is an x86-64 binary: anything started through it runs under Rosetta
+  (`xctrace` then fails with "ktrace cannot trace the system under Rosetta translation"; use `arch -arm64`).
+- A restart of the agent session kills its background commands: scripts write results to files as they go,
+  and never leave the tree stashed or half-switched while something long runs.
+- The session plan with what the agent may do alone: `docs/macos/AGENT_PLAN.md`.
 - Pushes and PRs into this repository are fine when the plan says so; releases (tags) and anything
   in other people's repositories wait for the owner.
 

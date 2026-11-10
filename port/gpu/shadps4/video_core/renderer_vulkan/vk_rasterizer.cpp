@@ -1132,6 +1132,9 @@ void LogWork(const char* kind, u64 hash, u32 x, u32 y, u32 z) {
         return;
     }
     const u64 threshold = DispatchLogThreshold();
+    if (threshold == 0) {
+        return; // the usual case, before the string searches below (once per draw)
+    }
     static std::atomic<u32> indirect_logged{0}, tess_logged{0};
     const bool indirect = std::strstr(kind, "indirect") != nullptr;
     auto& logged = std::strstr(kind, "tess") ? tess_logged : indirect_logged;
@@ -2480,6 +2483,23 @@ void Rasterizer::AcbIdle(void* context) {
     // more is being recorded (the game may be waiting for one of them).
     if (self->gfx_fences_unflushed && self->gfx_fence_tick == self->scheduler.CurrentTick()) {
         self->gfx_fences_unflushed = 0;
+        self->scheduler.Flush();
+    }
+    // TLG_IDLE_FLUSH=N (0, the default: off): with nothing more to record, the main queue's work
+    // goes to the GPU once N draws/dispatches wait; TLG_IDLE_FLUSH_PASS=0: only outside a render
+    // pass. The GPU otherwise idles until 64 draws or a fence end the submission.
+    static const u32 idle_flush = [] {
+        const char* v = std::getenv("TLG_IDLE_FLUSH");
+        return v && *v ? u32(std::atoi(v)) : 0u;
+    }();
+    static const bool idle_in_pass = [] {
+        const char* v = std::getenv("TLG_IDLE_FLUSH_PASS");
+        return !v || *v != '0';
+    }();
+    if (idle_flush && self->scheduler.WorkSinceSubmit() >= idle_flush &&
+        (idle_in_pass || !self->scheduler.IsRendering()) &&
+        Pipeline::deferred_binds.load(std::memory_order_relaxed) == 0 && !FrameRecord::IsRecording() &&
+        !FrameCapture::Active()) {
         self->scheduler.Flush();
     }
     if (!self->acb_scheduler || (self->acb_fences_since_flush == 0 && self->acb_copies.empty())) {
@@ -5553,13 +5573,14 @@ bool Rasterizer::DeferUnifiedFence(Common::UniqueFunction<void>&& write) {
         AcbDeferFence(std::move(write));
     } else {
         scheduler.DeferPriorityOperation(std::move(write));
-        // tlg: TLG_GFX_FENCE_BATCH=N (0, the default: a submission per fence): the game's ~24
-        // graphics fences a frame each ended a submission (a command buffer reset on this thread
-        // and a GPU hand-over each). With N, a fence leaves with the next submission: when this
-        // thread runs out of packets (AcbIdle), after N fences, or with the piled-up draws.
+        // tlg: TLG_GFX_FENCE_BATCH=N (default 8; 0: a submission per fence, as before 0.1.8): the
+        // game's ~24 graphics fences a frame each ended a submission (a command buffer reset on
+        // this thread and a GPU hand-over each). With N, a fence leaves with the next submission:
+        // when this thread runs out of packets (AcbIdle), after N fences, or with the piled-up
+        // draws. M3 Max, 5 alternated runs: truck 47.4 -> 48.3, Seattle 46.4 -> 47.5, bridge same.
         static const u32 batch = [] {
             const char* v = std::getenv("TLG_GFX_FENCE_BATCH");
-            return v && *v ? u32(std::atoi(v)) : 0u;
+            return v && *v ? u32(std::atoi(v)) : 8u;
         }();
         const u64 tick = scheduler.CurrentTick();
         if (tick != gfx_fence_tick) {
