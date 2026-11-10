@@ -783,3 +783,12 @@ Instruments (Shader Timeline option) for per-shader cost.
   render encoders with long vertex and fragment parts a frame). It did not appear in 5 runs with
   TLG_DRAW_TIMING/TLG_DISPATCH_TIMING on. Likely the 25-30 FPS of busy streets. Open.
   The session stopped for 8 h after a tool call at ~11:10 (no hung wait): unattended turns can simply end.
+- 2026-11-10 evening: THE SEATTLE DROP IS THE GPU CLOCKING DOWN, not the scene. Metal trace: every GPU interval,
+  even the smallest, is ~3x longer in the slow state (compute median 7.9 -> 23.7 us, vertex p10 4.0 -> 12.5 us);
+  light count of the tiled culling dispatch (ce1675e0, 120x68) unchanged (~400). tools/gpu_probes/gpu_pstate.c
+  (IOReport, no root): GPUPH at P13 of 15 while 49 FPS, then P13 -> P7 -> P3 -> P1 within 3 s and stuck at P1 with
+  93-95% active = 28 FPS. No thermal or power limit (pmset -g therm clean, 140 W). In harness runs the game window
+  is NOT frontmost (the owner's Chrome/Telegram is): macOS throttles the GPU for it. Ruled out on the way: a new
+  full-screen pass (ps 93efbd54, skipping it changes nothing), geometry (+3.6% indices), per-draw timing.
+  New diagnostics: TLG_NEW_SHADERS=1, TLG_TIMING_AFTER_S=N, TLG_CS_DUMP=<hash>, TLG_HOST_ACTIVITY (host asserts
+  NSActivityUserInitiated|LatencyCritical). First M1 Pro benchmark (issue #5): 21.2 FPS at the truck, defaults.
