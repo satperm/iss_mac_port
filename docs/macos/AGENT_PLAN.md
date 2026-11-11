@@ -4,6 +4,39 @@ Read `AGENTS.md` first ("Working unattended"), then the last entries of `CLAUDE.
 item has a time box. When a box runs out without a measured gain, write the numbers into CLAUDE.md and go
 on. Never wait for an answer: nobody is there. Decide, write down why, continue.
 
+## Staying alive for a whole day (read this first, every time you wake up)
+
+Three things have stopped unattended work: a wait that never ended (8 h), a turn that simply ended after
+a tool call (8 h), and a session restart that killed background commands. The routine below covers all three.
+
+1. **The owner starts the day with `/loop` and this file**, e.g. `/loop работай по docs/macos/AGENT_PLAN.md`.
+   In that mode the agent schedules its own next wake-up (ScheduleWakeup) at the end of every turn, so a
+   turn that ends is followed by another one. First action of the day as a second net: a recurring
+   CronCreate job every 20 minutes with the same prompt (it fires only while idle; it dies with the session).
+2. **State lives in a file, not in the conversation**: `port/out/agent/STATE.md`. Rewrite it at the end
+   of every step: what was just finished (numbers), what is running (job name, when it must be done),
+   the next three actions. On every wake-up: read STATE.md, run `agent_job.sh status`, continue. Never
+   rely on remembering.
+3. **Anything longer than two minutes is a job**: `scripts/macos/agent_job.sh start <name> <max s> <cmd>`.
+   It is detached (survives the turn and a session restart), bounded, exclusive (one game job at a time),
+   and leaves log and exit code in `out/agent/jobs/`. Then either do work that needs no game (reading,
+   writing code, never a build while a measurement runs) or `agent_job.sh wait <name>` (at most 9 minutes
+   a call), then schedule the next wake-up for when the job is due. A job found DEAD or overdue: read its
+   log, write what happened into STATE.md, start it again once; twice dead: skip the item.
+4. **No questions, no approvals needed**: branch `agent/<date>`, one commit per finished experiment
+   (kept or reverted, with numbers), push after each commit. No merges, tags, force pushes or other
+   repositories. Open ONE pull request at the end of the day (the owner merges PRs within minutes, and
+   commits pushed after a merge are left out). A change that can alter the picture stays default-off.
+5. **Time boxes**: each plan item has one. When it runs out: numbers into CLAUDE.md, next item. An item
+   that needs the owner (eyes, full screen by hand): write it under "For the owner" in STATE.md and go on.
+6. **Measurements** (owner's rules, 2026-11-12): three standing scenes only (truck, bridge, Seattle), no
+   camera turning; full screen with Game Mode from inside ISS.app, window in front
+   (`TLG_PROBE=<repo>/ISS.app/Contents/MacOS/tlg-probe TLG_FULLSCREEN=1 TLG_RAISE_WINDOW=1`); a run with
+   "GPU clocked down" above 5 s is repeated, not used. These runs take the whole screen: only on days the
+   owner said the Mac is free.
+7. **End of the day** (or when the owner writes): final STATE.md, CLAUDE.md, this file's item list, the PR,
+   a report in Russian with a table per kept change.
+
 ## What the agent may do alone
 
 - Branch `agent/<topic>` from `origin/macos` (or from the previous unmerged agent branch when the work

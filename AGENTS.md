@@ -137,6 +137,8 @@ dispatch runs), `TLG_QUEUE_STATS=1`, `TLG_THREAD_PROFILE_MS=5` (where game threa
 
 - Every wait has a deadline. Wait for the game with `scripts/macos/wait_game.sh <max s>` (exact
   process names); never `pgrep -f tlg-probe` in a loop: it matches the loop's own shell and never ends.
+- Long jobs: `scripts/macos/agent_job.sh start <name> <max s> <cmd>` (detached, bounded, one at a time),
+  `status`, `wait`; state between turns in `port/out/agent/STATE.md` (routine: docs/macos/AGENT_PLAN.md).
 - One run with a summary: `scripts/macos/agent_run.sh <truck|bridge> <label> <seconds> [VAR=value ...]`;
   A/B of settings: `fps_ab.sh`; A/B of builds (and settings) alternated: `lib_ab.sh save <name>` /
   `lib_ab.sh run ...`; CPU profile of the GPU process: `host_profile.sh <scene> <label>`. Both are bounded by `timeout`. Run anything longer than ~8 minutes in the
