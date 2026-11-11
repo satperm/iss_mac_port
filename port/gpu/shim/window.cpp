@@ -156,6 +156,12 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     window = SDL_CreateWindowWithProperties(props);
     SDL_DestroyProperties(props);
     ASSERT_MSG(window, "Failed to create window: {}", SDL_GetError());
+    // tlg: TLG_RAISE_WINDOW=1 (unattended test runs with nobody at the Mac): bring the window to the
+    // front. macOS clocks the GPU down for a window behind another app (P13 -> P1 of 15, 49 -> 28 FPS in
+    // Seattle; tools/gpu_probes/gpu_pstate.c), which makes background measurements unreliable.
+    if (const char* raise = std::getenv("TLG_RAISE_WINDOW"); raise && *raise == '1') {
+        SDL_RaiseWindow(window);
+    }
     // tlg: the game's own icon (run.py converts sce_sys/icon0.png to BMP, SDL's built-in format).
     if (const char* icon_path = std::getenv("TLG_WINDOW_ICON")) {
         if (SDL_Surface* icon = SDL_LoadBMP(icon_path)) {
