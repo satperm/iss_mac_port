@@ -48,13 +48,14 @@ for ((r = 1; r <= runs; ++r)); do
         cp "out/ab/$name.dylib" "$lib"
         label=ab$i
         # shellcheck disable=SC2086 # the settings are separate words on purpose
-        fps=$(bash scripts/macos/agent_run.sh "$scene" "$label" "$secs" ${settings//,/ } 2>/dev/null |
-            awk '/FPS median/ {print $3}')
+        report=$(bash scripts/macos/agent_run.sh "$scene" "$label" "$secs" ${settings//,/ } 2>/dev/null)
+        fps=$(awk '/FPS median/ {print $3}' <<<"$report")
+        slow=$(awk '/GPU clocked down/ {print $(NF-1)}' <<<"$report")
         dir=$(ls -td out/diag/*-a-"$label" 2>/dev/null | head -1)
         us=$(grep -a 'Frame stats' "$dir/game.log" 2>/dev/null | tail -1 | grep -o 'GPU thread [0-9.]* us' | awk '{print $3}')
         crash=$(grep -acE 'Crash:|STOP:' "$dir/game.log" 2>/dev/null)
         busy=$(ps -Ao pcpu,comm -r | grep -v 'tlg' | awk 'NR==2 {print $1 " " $2}' | cut -c1-60)
-        say "run $r $v: ${fps:-0} FPS, ${us:-?} us/draw, crash lines ${crash:-?}, busiest other process: ${busy}"
+        say "run $r $v: ${fps:-0} FPS, ${us:-?} us/draw, crash lines ${crash:-?}, GPU clocked down ${slow:-?} s, busiest other process: ${busy}"
         results[$i]="${results[$i]:-} ${fps:-0}"
         i=$((i + 1))
     done

@@ -1541,6 +1541,12 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
         RecordFrameInputs(pipeline, draw_prepared, &state, is_indexed, index_offset, nullptr);
     }
     scheduler.BeginRendering(state);
+    if (!pass_label.empty()) [[unlikely]] {
+        scheduler.Record([label = std::move(pass_label)](vk::CommandBuffer cmdbuf) {
+            cmdbuf.insertDebugUtilsLabelEXT(vk::DebugUtilsLabelEXT{.pLabelName = label.c_str()});
+        });
+        pass_label.clear();
+    }
     CountDraw(state, pipeline);
 
     const auto& vs_info = pipeline->GetStage(Shader::SwStage::Vertex);
@@ -2072,6 +2078,12 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
         RecordFrameInputs(pipeline, nullptr, &state, is_indexed, 0, &indirect);
     }
     scheduler.BeginRendering(state);
+    if (!pass_label.empty()) [[unlikely]] {
+        scheduler.Record([label = std::move(pass_label)](vk::CommandBuffer cmdbuf) {
+            cmdbuf.insertDebugUtilsLabelEXT(vk::DebugUtilsLabelEXT{.pLabelName = label.c_str()});
+        });
+        pass_label.clear();
+    }
     CountDraw(state, pipeline);
 
     ASSERT(stride == (is_indexed ? sizeof(VkDrawIndexedIndirectCommand)
@@ -5318,6 +5330,30 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
     if (state.num_layers == std::numeric_limits<u16>::max()) {
         state.num_layers = 1;
     }
+    // tlg (shadPS4 #5452): a pass with no colour or depth attachment kept the maximum framebuffer
+    // size as its render area (16384x16384), which a tile-based GPU pays for: at the truck crash
+    // three kinds of such passes took ~5.6 ms of GPU time a frame. Draws cannot pass the scissors,
+    // so the area is bounded by them. TLG_BOUND_EMPTY_PASS=0: as before.
+    static const bool bound_empty = [] {
+        const char* env = std::getenv("TLG_BOUND_EMPTY_PASS");
+        return !env || *env != '0';
+    }();
+    if (bound_empty && state.width == instance.GetMaxFramebufferWidth() &&
+        state.height == instance.GetMaxFramebufferHeight()) {
+        const bool enable_offset = !regs.window_scissor.window_offset_disable;
+        const s16 x_offset = enable_offset ? s16(regs.window_offset.window_x_offset) : s16{0};
+        const s16 y_offset = enable_offset ? s16(regs.window_offset.window_y_offset) : s16{0};
+        const s32 right = std::min({s32(regs.screen_scissor.bottom_right_x),
+                                    s32(s16(regs.window_scissor.bottom_right_x + x_offset)),
+                                    s32(s16(regs.generic_scissor.bottom_right_x + x_offset))});
+        const s32 bottom = std::min({s32(regs.screen_scissor.bottom_right_y),
+                                     s32(s16(regs.window_scissor.bottom_right_y + y_offset)),
+                                     s32(s16(regs.generic_scissor.bottom_right_y + y_offset))});
+        if (right > 0 && bottom > 0) {
+            state.width = std::min<u32>(state.width, u32(right));
+            state.height = std::min<u32>(state.height, u32(bottom));
+        }
+    }
 
     if (reduced) {
         // Half-resolution passes keep the scene's factor (proxy / native = scene / 1920).
@@ -6412,12 +6448,38 @@ u32 Rasterizer::GetGpuCommandProcessorThreadId() {
 namespace Vulkan {
 
 void Rasterizer::MarkPass(const GraphicsPipeline* pipeline, const RenderState& state) {
+    // tlg: TLG_PASS_LABELS=1 (diagnostic): a "tlgpass ..." debug label right after each render pass
+    // begins; the patched MoltenVK names the Metal render encoder after it, so a Metal System
+    // Trace shows GPU time per kind of pass (tools/gpu_probes/trace_passes.py).
+    static const bool labels = [] {
+        const char* env = std::getenv("TLG_PASS_LABELS");
+        return env && *env == '1';
+    }();
     auto* profiler = GpuProfiler::Get();
-    if (!profiler || !scheduler.WillBeginRendering(state)) {
+    pass_label.clear();
+    if ((!profiler && !labels) || !scheduler.WillBeginRendering(state)) {
         return;
     }
     const auto& vs = pipeline->GetStage(Shader::SwStage::Vertex);
     const auto* ps = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
+    if (labels) {
+        std::string targets;
+        for (u32 cb = 0; cb < state.num_color_attachments; ++cb) {
+            targets += cb_descs[cb].first
+                           ? vk::to_string(texture_cache.GetImage(cb_descs[cb].first).info.pixel_format)
+                           : std::string{"-"};
+            targets += ',';
+        }
+        pass_label = fmt::format("tlgpass {}x{} [{}] d:{} vs:{:08x} ps:{:08x}", state.width, state.height,
+                                 targets,
+                                 db_desc.first ? vk::to_string(texture_cache.GetImage(db_desc.first)
+                                                                   .info.pixel_format)
+                                               : std::string{"-"},
+                                 u32(vs.pgm_hash), u32(ps ? ps->pgm_hash : 0));
+    }
+    if (!profiler) {
+        return;
+    }
     std::array<u64, AmdGpu::NUM_COLOR_BUFFERS + 6> parts{};
     parts[0] = state.width | u64(state.height) << 32;
     parts[1] = vs.pgm_hash;

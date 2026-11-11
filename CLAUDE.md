@@ -805,3 +805,15 @@ Instruments (Shader Timeline option) for per-shader cost.
   (30c3f7a) and the temporal upscaler (needs the renderer side here); shadPS4: #5572 submit every N draws (we
   have it), #5591 PopPendingOperations fast path (we have it), #5571 one wait for all pending image downloads and
   #5599 refresh images stored after a GPU-written image (worth reading), mbcnt generalisation #5669/#5689.
+- 2026-11-11: REAL PLAY IS GPU-BOUND. Owner, 6.5 min in Seattle, full screen from the fixed local app, with
+  gpu_pstate + TLG_FRAME_STATS: GPU at P12.8-13.0 the whole time (no clock-down in front, full screen), 90-99%
+  active, median 44 FPS, p10 34, min 25, GPU thread idle 50-68%; every frame > 150 ms had shader compiles (1662
+  in 6 min). Harness runs keep the window behind other apps and the clock-down still hits them (also from the
+  bundle): agent_run.sh now logs it ("GPU clocked down N s", lib_ab.sh shows it per run); TLG_RAISE_WINDOW=1
+  brings the window to the front when nobody is at the Mac.
+  PASS PROFILER: TLG_PASS_LABELS=1 + patches/moltenvk-1.4.2-pass-labels.patch name each Metal render encoder
+  "tlgpass WxH [formats] d:depth vs ps"; tools/gpu_probes/trace_passes.py gives GPU ms per kind of pass a frame.
+  First use found ~5.6 ms a frame at the truck in passes with NO attachment and a 16384x16384 render area
+  (shadPS4 #5452 had just fixed the same). TLG_BOUND_EMPTY_PASS (default on; 0 = before): the area is bounded
+  by the scissors. lib_ab 3 x 60 s: truck 47.5 -> 61.9, bridge 67.0 -> 75.3, Seattle 47.4 -> 50.5. Same
+  picture (screenshots; the owner watched the runs).

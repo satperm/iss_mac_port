@@ -22,6 +22,11 @@ esac
 user=out/agent-user
 rm -rf "$user" && mkdir -p "$user" && cp -R "$template" "$user/" && mkdir -p out/fps-ab-cache &&
     ln -s "$PWD/out/fps-ab-cache" "$user/cache"
+# The GPU's performance state during the run (macOS clocks it down for a window behind another app).
+pstate=out/tools/gpu_pstate
+[[ -x $pstate ]] || { mkdir -p out/tools; clang -O2 tools/gpu_probes/gpu_pstate.c -o "$pstate" -framework CoreFoundation -lIOReport 2>/dev/null || true; }
+plog=out/agent-pstate-$label.txt
+[[ -x $pstate ]] && { "$pstate" $((secs + 20)) > "$plog" 2>&1 & disown; }
 SHOT_SECONDS=${SHOT_SECONDS:-0} timeout $((secs + 180)) bash scripts/macos/diag_run.sh "a-$label" "$secs" \
     TLG_USER_DIR="$PWD/$user" TLG_HOST_INPUT=0 TLG_ACB_PACKETS=1 TLG_FENCE_LATENCY=1 "$@" >/dev/null 2>&1
 echo "exit $?"
@@ -33,4 +38,6 @@ grep -a 'Frame stats:' "$d/game.log" | awk -F'Frame stats: ' '{split($2,a," "); 
     awk '{v[NR]=$1} END{if (NR) printf "FPS median %.1f min %.1f max %.1f\n", v[int((NR+1)/2)], v[1], v[NR]; else print "FPS: no frame stats (did not reach gameplay)"}'
 grep -a 'ACB queue (5' "$d/game.log" | tail -1 | cut -c1-160
 grep -a 'Fence latency' "$d/game.log" | tail -2 | cut -c1-130
+[[ -s $plog ]] && echo "GPU clocked down (state < 3 of 15 at > 60% load): $(awk '{a=$(NF-5); gsub("%,","",a); if ($(NF-2)+0<3 && a+0>60) n++} END{print n+0}' "$plog") s"
+pkill -x gpu_pstate 2>/dev/null || true
 echo "memory (MiB): $(sed -n 2p "$d/memory.csv" | cut -d, -f4) -> $(tail -1 "$d/memory.csv" | cut -d, -f4)"

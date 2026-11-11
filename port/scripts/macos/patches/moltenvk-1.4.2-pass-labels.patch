@@ -1,0 +1,15 @@
+diff --git a/MoltenVK/MoltenVK/Commands/MVKCmdDebug.mm b/MoltenVK/MoltenVK/Commands/MVKCmdDebug.mm
+--- a/MoltenVK/MoltenVK/Commands/MVKCmdDebug.mm
++++ b/MoltenVK/MoltenVK/Commands/MVKCmdDebug.mm
+@@ -72,5 +72,11 @@
+ #pragma mark MVKCmdDebugMarkerInsert
+ 
+ void MVKCmdDebugMarkerInsert::encode(MVKCommandEncoder* cmdEncoder) {
++	// iss_mac_port: a "tlgpass ..." label (TLG_PASS_LABELS=1) names the render encoder, so GPU traces
++	// show time per kind of render pass.
++	if (cmdEncoder->_mtlRenderEncoder && [_markerName hasPrefix: @"tlgpass "]) {
++		[cmdEncoder->_mtlRenderEncoder setLabel: _markerName];
++		return;
++	}
+ 	[cmdEncoder->getMTLEncoder() insertDebugSignpost: _markerName];
+ }

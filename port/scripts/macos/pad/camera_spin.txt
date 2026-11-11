@@ -1,0 +1,3 @@
+# Scripted pad for diag_run.sh / agent_run.sh / lib_ab.sh (PAD_SCRIPT): stand still and turn the camera
+# at a constant speed from second 30 on (right stick held to the right): a repeatable moving load.
+30 rx=200
