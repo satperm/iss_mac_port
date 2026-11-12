@@ -878,3 +878,6 @@ Instruments (Shader Timeline option) for per-shader cost.
   60 s runs mostly are), and treat "GPU clocked down" runs as tainted.
   Precompile (players' first start, never in agent_run: TLG_PRECOMPILE=0) fails 20 records with
   resource_discover_pass.cpp:257 MarkReadConstBufferSharpSources assertions: the same with the 0.1.9 library.
+- 2026-11-12: tried TLG_EARLY_VO_LABEL (release the previous display buffer's label at the next flip's submission
+  instead of on screen): WaitRegMem drains 60 -> 32/s, FPS the same (Seattle 62-64 before the drop). The VO label
+  is not on the critical path; the game's own frame-counter wait (one frame at the GPU) is. Reverted.

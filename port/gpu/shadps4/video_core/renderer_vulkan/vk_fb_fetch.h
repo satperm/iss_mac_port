@@ -6,7 +6,7 @@
 // of an image are own-pixel level-0 loads (ImageResource::fb_fetchable) and the image is one of
 // the draw's colour targets, the shader reads it as a subpass input, which MoltenVK turns into a
 // [[color(n)]] read (patches/moltenvk-1.4.2-framebuffer-fetch.patch), and the pass stays open.
-// Only at 100% render scale: the game scales FragCoord by 1920 / render width for those loads.
+// Only without the native resolution patch: the game scales FragCoord by 1920 / render width.
 // M3 Max, lib_ab 3 x 60 s (2026-11-12): Seattle 55.6 -> 62.1, bridge 81.0 -> 85.0, truck 65.0 -> 65.4
 // (Seattle: pass restarts on the same attachments 3690 -> 408 a second); same picture.
 #pragma once
@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include "shader_recompiler/runtime_info.h"
 #include "video_core/amdgpu/regs_color.h"
+#include "tlg_settings.h"
 
 namespace Vulkan::FbFetch {
 
@@ -22,7 +23,9 @@ inline bool Enabled() {
     static const bool on = [] {
         const char* env = std::getenv("TLG_MAC_FB_FETCH");
         const char* scale = std::getenv("TLG_RENDER_SCALE");
-        return !(env && *env == '0') && !(scale && *scale);
+        // The launcher's render scale (TLG_RENDER_SCALE) and tlg.ini's iss_native_output (any preset or
+        // percentage: the game then scales FragCoord) both move the loads off the own pixel.
+        return !(env && *env == '0') && !(scale && *scale) && TlgSettings::Get().iss_native_output.load() == 0;
     }();
     return on;
 #else
