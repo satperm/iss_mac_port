@@ -18,6 +18,7 @@
 #include "video_core/renderer_vulkan/vk_resource_pool.h"
 #include "video_core/renderer_vulkan/vk_async_compiler.h"
 #include "video_core/renderer_vulkan/vk_precompile.h"
+#include "tlg_rwlock.h"
 
 template <>
 struct std::hash<vk::ShaderModule> {
@@ -297,7 +298,7 @@ private:
     std::unordered_set<u64> lazy_tried;
     std::vector<Program*> pending_programs;
     /// tlg: exclusive for program/permutation insertions, shared for worker lookups.
-    std::shared_mutex programs_mutex;
+    TlgRwLock programs_mutex; ///< tlg: readers share an atomic (tlg_rwlock.h)
     u64 prepared_hits = 0, prepared_misses = 0;
     u64 lazy_loaded_programs = 0, lazy_loaded_permutations = 0;
     const PreparedDraw* used_prepared = nullptr;

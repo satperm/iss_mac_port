@@ -170,6 +170,11 @@ s32 PS4_SYSV_ABI sceVideoOutRegisterBuffers(s32 handle, s32 startIndex, void* co
 
 s32 PS4_SYSV_ABI sceVideoOutSetFlipRate(s32 handle, s32 rate) {
     LOG_TRACE(Lib_VideoOut, "called");
+    // tlg: the game halves its frame rate itself (rate 1: every second vblank) when it misses
+    // frames; rare, so always logged.
+    if (driver->GetPort(handle)->flip_rate != rate) {
+        std::printf("VideoOut: the game sets flip rate %d (was %d)\n", rate, driver->GetPort(handle)->flip_rate);
+    }
     driver->GetPort(handle)->flip_rate = rate;
     if (TlgSplit::Remote()) {
         PushScalar(TLGGPU_REC_VO_SET_FLIP_RATE, handle, rate);
