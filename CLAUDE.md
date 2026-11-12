@@ -881,3 +881,7 @@ Instruments (Shader Timeline option) for per-shader cost.
 - 2026-11-12: tried TLG_EARLY_VO_LABEL (release the previous display buffer's label at the next flip's submission
   instead of on screen): WaitRegMem drains 60 -> 32/s, FPS the same (Seattle 62-64 before the drop). The VO label
   is not on the critical path; the game's own frame-counter wait (one frame at the GPU) is. Reverted.
+- 2026-11-12: rejected TLG_SUBMIT_IDLE (submit after N draws when the GPU has caught up): truck 68.2 -> 68.5,
+  bridge 86.6 -> 87.3 (noise). After today's PRs all three scenes are CPU/latency-bound (GPU idle 40-53%):
+  the next lever is per-draw CPU on stage A (~1.9 us), stage B (BindTextures/BindBuffers/AccessBuffer,
+  MVKCommandBuffer::reset in vkBeginCommandBuffer ~10%) and MoltenVK encoding on the host's main queue.
