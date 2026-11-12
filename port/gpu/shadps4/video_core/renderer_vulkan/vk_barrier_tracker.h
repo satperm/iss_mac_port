@@ -111,6 +111,14 @@ public:
         return !root_mask_valid;
     }
 
+    /// tlg (TLG_DRAW_RUNS): nodes allocated so far (tree roots included).
+    size_t Nodes() const {
+        return nodes.size();
+    }
+    size_t FreeNodes() const {
+        return free.size();
+    }
+
 private:
     u32 AllocateNode();
     void FreeNode(u32 node);

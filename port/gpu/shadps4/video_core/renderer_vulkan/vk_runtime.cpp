@@ -987,6 +987,28 @@ void Runtime::AccessBuffer(const VideoCore::Buffer* handle, u64 offset, u64 size
         range.range_start &= ~u64{0xFFF};
         range.range_end |= 0xFFF;
     }
+    static const bool run_stats = [] {
+        const char* env = std::getenv("TLG_DRAW_RUNS");
+        return env && *env == '1';
+    }();
+    static u64 stat_calls = 0, stat_hits = 0, stat_writes = 0, stat_epoch = 0, stat_live = 0;
+    if (run_stats) {
+        ++stat_calls;
+        stat_writes += (src_access & WRITE_MASK) ? 1 : 0;
+        static u64 report = 0;
+        const u64 now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+        if (!report) report = now;
+        if (now - report >= 5'000'000'000ull) {
+            std::printf("Buffer accesses (5 s): %llu calls (%llu writes), %llu memo hits, %u "
+                        "barrier flushes, tracker %zu nodes allocated, %zu free now\n",
+                        (unsigned long long)stat_calls, (unsigned long long)stat_writes,
+                        (unsigned long long)stat_hits, access_epoch - u32(stat_epoch),
+                        barrier_tracker.Nodes(), barrier_tracker.FreeNodes());
+            stat_calls = stat_hits = stat_writes = 0;
+            stat_epoch = access_epoch;
+            report = now;
+        }
+    }
     const auto insert = [&](Access access) {
         if (TlgToggle::Disabled(TlgToggle::AccessMemo)) {
             barrier_tracker.InsertRange(range, access);
@@ -999,6 +1021,7 @@ void Runtime::AccessBuffer(const VideoCore::Buffer* handle, u64 offset, u64 size
         if (memo.epoch == access_epoch && memo.resource == range.resource &&
             memo.start == range.range_start && memo.end == range.range_end &&
             memo.access == u32(access)) {
+            stat_hits += run_stats;
             return;
         }
         barrier_tracker.InsertRange(range, access);
