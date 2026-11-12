@@ -1,0 +1,15 @@
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm b/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
+index 7eae64c..2a77981 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
+@@ -1690,6 +1690,10 @@ bool MVKGraphicsPipeline::addFragmentShaderToPipeline(MTLRenderPipelineDescripto
+ 		if (std::any_of(shaderOutputs.begin(), shaderOutputs.end(), [](const SPIRVShaderOutput& output) { return output.builtin == spv::BuiltInLayer; })) {
+ 			shaderConfig.options.mslOptions.arrayed_subpass_input = true;
+ 		}
++		// iss_mac_port: Apple GPUs read colour attachments in the shader (programmable blending): subpass
++		// inputs become [[color(InputAttachmentIndex)]] reads, so a shader that reads its own target's
++		// pixel needs no render pass split.
++		if (isAppleGPU()) { shaderConfig.options.mslOptions.use_framebuffer_fetch_subpasses = true; }
+ 		addPrevStageOutputToShaderConversionConfig(shaderConfig, shaderOutputs);
+ 
+ 		MVKMTLFunction func = getMTLFunction(shaderConfig, pFragmentSS, pFragmentFB, _fragmentModule, "Fragment");

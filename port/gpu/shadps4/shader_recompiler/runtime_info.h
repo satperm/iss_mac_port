@@ -232,6 +232,15 @@ struct HwFragmentRuntimeInfo {
     bool motion_vectors{false};
     /// tlg: BP12 (shadPS4 7d28d279, #5264) DEPTH_BEFORE_SHADER asks for early Z tests.
     bool depth_before_shader{false};
+    /// tlg (macOS, TLG_MAC_FB_FETCH): the colour targets of the draw (address, data and number
+    /// format; address 0: none), for ImageSpecialization::fb_cb. Not compared: the specialization
+    /// carries the result.
+    struct FbTarget {
+        u64 address;
+        u32 data_format;
+        u32 number_format;
+    };
+    std::array<FbTarget, MaxColorBuffers> fb_targets{};
 
     bool operator==(const HwFragmentRuntimeInfo& other) const noexcept {
         return std::ranges::equal(color_buffers, other.color_buffers) &&

@@ -244,7 +244,14 @@ Id EmitImageRead(EmitContext& ctx, IR::Inst* inst, u32 handle, Id coords, Id lod
     const Id color_type = texture.data_types->Get(4);
     ImageOperands operands;
     Id texel;
-    if (!texture.is_storage) {
+    if (texture.is_fb_fetch) {
+        // tlg (macOS): the fragment's own pixel of the bound colour target (framebuffer fetch).
+        const Id image = ctx.OpLoad(texture.image_type, texture.id);
+        const Id zero = ctx.ConstantComposite(ctx.S32[2], ctx.ConstS32(0), ctx.ConstS32(0));
+        const Id raw = ctx.OpImageRead(color_type, image, zero);
+        const auto& sw = texture.fb_swizzle;
+        texel = ctx.OpVectorShuffle(color_type, raw, raw, sw[0], sw[1], sw[2], sw[3]);
+    } else if (!texture.is_storage) {
         const Id image = ctx.OpLoad(texture.image_type, texture.id);
         if (texture.view_type == AmdGpu::ImageType::Color2DMsaa) {
             // GCN hardware wraps out-of-range MSAA sample indices

@@ -124,6 +124,7 @@ public:
         image.is_atomic |= desc.is_atomic;
         image.is_written |= desc.is_written;
         image.needs_native |= desc.needs_native;
+        image.fb_fetchable &= desc.fb_fetchable;
         return index;
     }
 
@@ -216,6 +217,69 @@ void PatchBufferSharp(const ResourceDiscovery& resource, Info& info, Descriptors
     inst.SetArg(0, ir.Imm32(buffer_binding));
 }
 
+// tlg (macOS): FragCoord component `comp`, or a product with it (the game scales FragCoord by
+// 1920 / render width for its native-resolution patch: 1 at 100%).
+static const IR::Inst* DefOf(const IR::Value& value) {
+    return value.Inst();
+}
+
+static bool IsFragCoordComponent(const IR::Value& value, u32 comp, int depth = 0) {
+    if (value.IsImmediate() || depth > 4) {
+        return false;
+    }
+    const IR::Inst* inst = DefOf(value);
+    switch (inst->GetOpcode()) {
+    case IR::Opcode::GetAttribute:
+        return inst->Arg(0).Attribute() == IR::Attribute::FragCoord && inst->Arg(1).IsImmediate() &&
+               inst->Arg(1).U32() == comp;
+    case IR::Opcode::FPMul32:
+        return IsFragCoordComponent(inst->Arg(0), comp, depth + 1) ||
+               IsFragCoordComponent(inst->Arg(1), comp, depth + 1);
+    default:
+        return false;
+    }
+}
+
+static bool IsPixelCoordinate(const IR::Value& value, u32 comp) {
+    if (value.IsImmediate()) {
+        return false;
+    }
+    const IR::Inst* inst = DefOf(value);
+    const auto op = inst->GetOpcode();
+    return (op == IR::Opcode::ConvertS32F32 || op == IR::Opcode::ConvertU32F32) &&
+           IsFragCoordComponent(inst->Arg(0), comp);
+}
+
+// tlg (macOS): a 2D texel load (not written, no offset, level 0) at the fragment's own pixel.
+static bool IsOwnPixelLoad(const IR::Inst& inst) {
+    if (inst.GetOpcode() != IR::Opcode::ImageRead) {
+        return false;
+    }
+    const auto inst_info = inst.Flags<IR::TextureInstInfo>();
+    if (inst_info.is_array || inst_info.is_depth || inst_info.has_offset) {
+        return false;
+    }
+    const IR::Value coords = inst.Arg(1);
+    if (coords.IsImmediate()) {
+        return false;
+    }
+    const IR::Inst* body = DefOf(coords);
+    if (body->GetOpcode() != IR::Opcode::CompositeConstructU32x2 &&
+        body->GetOpcode() != IR::Opcode::CompositeConstructU32x3 &&
+        body->GetOpcode() != IR::Opcode::CompositeConstructU32x4) {
+        return false;
+    }
+    if (!IsPixelCoordinate(body->Arg(0), 0) || !IsPixelCoordinate(body->Arg(1), 1)) {
+        return false;
+    }
+    if (inst_info.has_lod) {
+        if (body->NumArgs() < 3 || !body->Arg(2).IsImmediate() || body->Arg(2).U32() != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void PatchImageSharp(const ResourceDiscovery& resource, Info& info, Descriptors& descriptors,
                      const Profile& profile) {
     IR::Inst& inst = *resource.user;
@@ -245,6 +309,7 @@ void PatchImageSharp(const ResourceDiscovery& resource, Info& info, Descriptors&
         .is_written = is_written,
         .is_r128 = bool(inst_info.is_r128),
         .needs_native = !normalized_sample,
+        .fb_fetchable = IsOwnPixelLoad(inst),
         .post_op = resource.sharps[0].post_op,
     };
 

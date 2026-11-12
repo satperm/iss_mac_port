@@ -19,6 +19,7 @@
 #include "tlg_toggles.h"
 #include "tlg_settings.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
+#include "video_core/renderer_vulkan/vk_fb_fetch.h"
 #include "video_core/renderer_vulkan/vk_lighting_test.h"
 #include "video_core/renderer_vulkan/vk_pass_census.h"
 #include "video_core/renderer_vulkan/vk_frame_record.h"
@@ -3507,6 +3508,9 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
     if (!SetWritePool()) {
         set_writes.clear();
     }
+    fb_mrt_mask = pipeline->IsCompute()
+                      ? 0u
+                      : static_cast<const GraphicsPipeline*>(pipeline)->GetGraphicsKey().mrt_mask;
     buffer_infos.clear();
     image_infos.clear();
     // tlg: G-buffer passes sample material textures for a scene rendered below the output
@@ -4307,6 +4311,9 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
     const bool sample_proxies = !TlgToggle::Disabled(TlgToggle::SampleSceneProxies) &&
                                 !on_helper && scene_targets->Reduced();
 
+    boost::container::small_vector<u8, 16> binding_fb;
+    Shader::RuntimeInfo fb_runtime{};
+    bool fb_runtime_ready = false;
     for (u32 image_index = 0; image_index < stage.images.size(); ++image_index) {
         const auto& image_desc = stage.images[image_index];
         const auto tsharp =
@@ -4323,6 +4330,7 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
             image_bindings.emplace_back(VideoCore::ImageId{}, &image_desc_storage.emplace_back());
             image_binding_entries.push_back(nullptr);
             binding_proxy_ok.push_back(false);
+            binding_fb.push_back(0);
             image_descriptor_array_sizes.push_back(1);
             continue;
         }
@@ -4337,10 +4345,23 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
             image_bindings.emplace_back(VideoCore::ImageId{}, &image_desc_storage.emplace_back());
             image_binding_entries.push_back(nullptr);
             binding_proxy_ok.push_back(false);
+            binding_fb.push_back(0);
             image_descriptor_array_sizes.push_back(1);
             continue;
         }
 
+        // tlg (macOS): an own-pixel load of one of the draw's colour targets reads it through
+        // framebuffer fetch (vk_fb_fetch.h); the same rule chose the shader's permutation.
+        u8 fb_cb = 0;
+        if (stage.hw_stage == Shader::HwStage::Fragment && image_desc.fb_fetchable && fb_mrt_mask &&
+            FbFetch::Enabled()) {
+            if (!fb_runtime_ready) {
+                fb_runtime.hw_stage = Shader::HwStage::Fragment;
+                FbFetch::FillTargets(Regs(), fb_mrt_mask, fb_runtime.hw.fs.fb_targets);
+                fb_runtime_ready = true;
+            }
+            fb_cb = Shader::FbFetchTarget(image_desc, tsharp, fb_runtime);
+        }
         const Shader::MipStorageFallbackMode mip_fallback_mode = image_desc.mip_fallback_mode;
         // Same as image_desc.NumBindings(stage), without fetching the T# again.
         const u32 num_bindings =
@@ -4376,6 +4397,7 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
                     image_bindings.emplace_back(desc_entry.found_id, &desc_entry.found_desc);
                 image_binding_entries.push_back(&desc_entry);
                 binding_proxy_ok.push_back(proxy_candidate);
+                binding_fb.push_back(fb_cb);
                 texture_cache.MarkFound(image_id);
                 auto* image = &texture_cache.GetImage(image_id);
                 if (auto depth_image_id = texture_cache.GetAssociatedDepth(*image)) {
@@ -4387,12 +4409,14 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
                     image->binding.force_general |= image_desc.is_written;
                 }
                 image->binding.is_bound = 1u;
+                if (fb_cb) { image->binding.fb_fetch = 1u; } else { image->binding.fb_plain = 1u; }
                 continue;
             }
             auto& desc = image_desc_storage.emplace_back(desc_entry.desc);
             auto& [image_id, _] = image_bindings.emplace_back(VideoCore::ImageId{}, &desc);
             image_binding_entries.push_back(nullptr);
             binding_proxy_ok.push_back(proxy_candidate);
+            binding_fb.push_back(fb_cb);
 
             if (mip_fallback_mode == Shader::MipStorageFallbackMode::ConstantIndex) {
                 ASSERT(num_bindings == 1);
@@ -4427,6 +4451,7 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
                 image->binding.force_general |= image_desc.is_written;
             }
             image->binding.is_bound = 1u;
+            if (fb_cb) { image->binding.fb_fetch = 1u; } else { image->binding.fb_plain = 1u; }
         }
 
         image_descriptor_array_sizes.push_back(num_bindings);
@@ -4546,7 +4571,11 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
             // The image is either bound as storage in a separate descriptor or bound as render
             // target in feedback loop. Depth images are excluded because they can't be bound as
             // storage and feedback loop doesn't make sense for them
-            if ((binding.force_general || binding.is_target) && !image.info.props.is_depth) {
+            if (binding_index < binding_fb.size() && binding_fb[binding_index] && binding.is_target &&
+                !binding.force_general) {
+                // tlg (macOS): read in the pass through framebuffer fetch: no layout change, no
+                // barrier (the attachment keeps its layout; the descriptor is not read).
+            } else if ((binding.force_general || binding.is_target) && !image.info.props.is_depth) {
                 if (instance.IsAttachmentFeedbackLoopLayoutSupported() && image.binding.is_target) {
                     barrier |= runtime.Transit(
                         &image, vk::ImageLayout::eAttachmentFeedbackLoopOptimalEXT,
@@ -5097,7 +5126,8 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
 
         if (reduced) {
             // The native image is resolved lazily when a shader/copy actually reads it.
-        } else if (image->binding.is_bound) {
+        } else if (image->binding.is_bound &&
+                   !(image->binding.fb_fetch && !image->binding.fb_plain)) {
             ASSERT_MSG(!image->binding.force_general,
                        "Having image both as storage and render target is unsupported");
             // tlg: TLG_FEEDBACK_STATS=1: every 5 s, colour feedback draws per fragment shader, and
@@ -5118,6 +5148,27 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
                                    (u64(cb) << 4);
                 auto& [overlap, disjoint] = per_ps[key_ps];
                 (level_overlap && layer_overlap ? overlap : disjoint)++;
+                // Once per shader and target: why framebuffer fetch did or did not take it.
+                static std::set<u64> explained;
+                if (fs && explained.insert(key_ps).second && explained.size() < 64) {
+                    const auto cb_sw = col_buf.Swizzle();
+                    for (const auto& desc : fs->images) {
+                        const auto sharp = desc.GetSharp(*fs);
+                        if (sharp.Address() != col_buf.Address()) {
+                            continue;
+                        }
+                        std::printf("Feedback ps %llx cb%u: fb_fetchable %d written %d array %d depth %d type %u "
+                                    "base_level %u sel %u%u%u%u fmt %u/%u target fmt %u/%u target swizzle %u%u%u%u "
+                                    "mrt %x fb on %d\n",
+                                    static_cast<unsigned long long>(fs->pgm_hash), cb, int(desc.fb_fetchable),
+                                    int(desc.is_written), int(desc.is_array), int(desc.is_depth),
+                                    u32(sharp.GetType()), u32(sharp.base_level), u32(sharp.dst_sel_x),
+                                    u32(sharp.dst_sel_y), u32(sharp.dst_sel_z), u32(sharp.dst_sel_w),
+                                    u32(sharp.GetDataFmt()), u32(sharp.GetNumberFmt()), u32(col_buf.GetDataFmt()),
+                                    u32(col_buf.GetNumberFmt()), u32(cb_sw.r), u32(cb_sw.g), u32(cb_sw.b),
+                                    u32(cb_sw.a), u32(pipeline->GetGraphicsKey().mrt_mask), int(FbFetch::Enabled()));
+                    }
+                }
                 if (std::chrono::steady_clock::now() - last > std::chrono::seconds(5)) {
                     last = std::chrono::steady_clock::now();
                     std::printf("Feedback draws (5 s) per ps: (hash<<8 | cb<<4 | write mask) overlapping / disjoint ranges, target %ux%u:",

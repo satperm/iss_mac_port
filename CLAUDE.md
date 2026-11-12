@@ -846,3 +846,14 @@ Instruments (Shader Timeline option) for per-shader cost.
   target's level/layer). Upper bound: TLG_MAC_KEEP_FEEDBACK=1 (diagnostic, stale reads) Seattle 56.0 -> 61.8.
   Real fix: framebuffer fetch (VK_KHR_dynamic_rendering_local_read is in MoltenVK; SPIR-V SubpassData +
   InputAttachmentIndex -> [[color(n)]]), only at 100% render scale.
+- 2026-11-12: FRAMEBUFFER FETCH FOR COLOUR FEEDBACK (default on; TLG_MAC_FB_FETCH=0 off; vk_fb_fetch.h). Gbuffer
+  decals load their own targets at their own pixel; ImageResource::fb_fetchable (IR: ImageRead whose coords are
+  ConvertS32F32(FragCoord.x/y [x scale]), level 0) + the image is one of the draw's colour targets (same address
+  and format; FbFetchTarget in specialization.h, ImageSpecialization::fb_cb) -> SPIR-V SubpassData +
+  InputAttachmentIndex cb + OpImageRead + the T#'s channel permutation; patches/moltenvk-1.4.2-framebuffer-fetch.patch
+  sets SPIRV-Cross use_framebuffer_fetch_subpasses on Apple GPUs ([[color(n)]]). The runtime skips the feedback
+  transition/barrier for those bindings, so the Metal pass stays open. Only at 100% render scale (TLG_RENDER_SCALE
+  unset). lib_ab 3 x 60 s: Seattle 55.6 -> 62.1, bridge 81.0 -> 85.0, truck 65.0 -> 65.4; Seattle restarts 3690
+  -> 408/s; screenshots Seattle/bridge/burning building identical. Not converted: shaders that SAMPLE their target
+  (9215a6e8, 961c93ba). ShaderMetaVersion 16, PipelineKeyVersion 6. Installed MoltenVK backups:
+  deps/{arm64,x86_64}/lib/libMoltenVK.dylib.before-fbfetch.

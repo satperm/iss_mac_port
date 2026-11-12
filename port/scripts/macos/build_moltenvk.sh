@@ -10,8 +10,9 @@ src=deps/src/MoltenVK-src
 if [[ ! -d $src ]]; then
     git clone --depth 1 --branch v1.4.2 https://github.com/KhronosGroup/MoltenVK.git "$src"
 fi
-# patches/moltenvk-1.4.2-*.patch in name order: the drawable race fix, and concurrent compute
-# encoders (MVK_TLG_CONCURRENT_DISPATCH=1, run_macos.sh) for the game's unordered compute queue.
+# patches/moltenvk-1.4.2-*.patch in name order: the drawable race fix, concurrent compute encoders
+# (MVK_TLG_CONCURRENT_DISPATCH=1, run_macos.sh) for the game's unordered compute queue, framebuffer
+# fetch for subpass inputs on Apple GPUs (vk_fb_fetch.h), and the others named after what they do.
 for patch in "$PWD"/scripts/macos/patches/moltenvk-1.4.2-*.patch; do
     if ! (cd "$src" && git apply --check --reverse "$patch" 2>/dev/null); then
         (cd "$src" && git apply "$patch")

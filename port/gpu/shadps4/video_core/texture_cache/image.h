@@ -145,6 +145,8 @@ public:
         u32 is_target : 1;
         u32 needs_rebind : 1;
         u32 force_general : 1;
+        u32 fb_fetch : 1; ///< tlg: a fragment shader reads it through framebuffer fetch
+        u32 fb_plain : 1; ///< tlg: also bound as an ordinary texture by this draw
     } binding{};
     struct {
         u32 texture : 1;

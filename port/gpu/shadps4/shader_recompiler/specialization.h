@@ -53,9 +53,37 @@ struct ImageSpecialization {
     AmdGpu::NumberConversion num_conversion{};
     // FIXME any pipeline cache changes needed?
     u32 num_bindings = 0;
+    /// tlg (macOS): read through framebuffer fetch from colour attachment fb_cb - 1 (0: no).
+    u8 fb_cb = 0;
 
     bool operator==(const ImageSpecialization&) const = default;
 };
+
+/// tlg (macOS, TLG_MAC_FB_FETCH): the colour target (cb + 1; 0: none) a fragment shader's image
+/// can read through framebuffer fetch: only own-pixel level-0 loads (ImageResource::fb_fetchable)
+/// of a plain 2D image that is that target (same address and format).
+inline u8 FbFetchTarget(const ImageResource& desc, const AmdGpu::Image& sharp, const RuntimeInfo& rt) {
+    if (rt.hw_stage != HwStage::Fragment || !desc.fb_fetchable || desc.is_written || desc.is_array ||
+        desc.is_depth || desc.is_atomic) {
+        return 0;
+    }
+    // The attachment holds what the export wrote; a texture read applies the T#'s swizzle to it,
+    // and so does the framebuffer read (TextureDefinition::fb_swizzle): only channel permutations.
+    const auto sel = sharp.DstSelect();
+    const auto is_channel = [](AmdGpu::CompSwizzle c) { return u32(c) >= 4 && u32(c) <= 7; };
+    if (sharp.GetType() != AmdGpu::ImageType::Color2D || sharp.base_level != 0 || !is_channel(sel.r) ||
+        !is_channel(sel.g) || !is_channel(sel.b) || !is_channel(sel.a)) {
+        return 0;
+    }
+    for (u32 cb = 0; cb < MaxColorBuffers; ++cb) {
+        const auto& t = rt.hw.fs.fb_targets[cb];
+        if (t.address != 0 && t.address == sharp.Address() &&
+            t.data_format == u32(sharp.GetDataFmt()) && t.number_format == u32(sharp.GetNumberFmt())) {
+            return u8(cb + 1);
+        }
+    }
+    return 0;
+}
 
 struct FMaskSpecialization {
     u32 width;
@@ -143,6 +171,7 @@ struct StageSpecialization {
                          }
                          spec.num_conversion = sharp.GetNumberConversion();
                          spec.num_bindings = desc.NumBindings(*info);
+                         spec.fb_cb = FbFetchTarget(desc, sharp, runtime_info);
                      });
         ForEachSharp(binding, fmasks, info->fmasks,
                      [](auto& spec, const auto& desc, AmdGpu::Image sharp) {

@@ -8,6 +8,7 @@
 #include "shader_recompiler/ir/attribute.h"
 #include "shader_recompiler/ir/microinstruction.h"
 #include "shader_recompiler/runtime_info.h"
+#include "shader_recompiler/specialization.h"
 
 #include <boost/container/static_vector.hpp>
 #include <fmt/format.h>
@@ -1034,7 +1035,12 @@ void EmitContext::DefineImagesAndSamplers() {
         const MipStorageFallbackMode mip_fallback_mode = image_desc.mip_fallback_mode;
         const VectorIds& data_types = GetAttributeType(*this, nfmt);
         const Id sampled_type = data_types[1];
-        const Id image_type{ImageType(*this, image_desc, sampled_type)};
+        // tlg (macOS): an own-pixel load of the bound colour target becomes a subpass input;
+        // MoltenVK turns it into a framebuffer read ([[color(n)]]), no render pass split.
+        const u8 fb_cb = FbFetchTarget(image_desc, sharp, runtime_info);
+        const Id image_type{fb_cb ? TypeImage(sampled_type, spv::Dim::SubpassData, false, false, false, 2,
+                                              spv::ImageFormat::Unknown)
+                                  : ImageType(*this, image_desc, sampled_type)};
 
         const u32 num_bindings = image_desc.NumBindings(info);
         Id pointee_type = image_type;
@@ -1047,6 +1053,10 @@ void EmitContext::DefineImagesAndSamplers() {
         Decorate(id, spv::Decoration::Binding, binding.unified);
         binding.unified += num_bindings;
         Decorate(id, spv::Decoration::DescriptorSet, 0U);
+        if (fb_cb) {
+            AddCapability(spv::Capability::InputAttachment);
+            Decorate(id, spv::Decoration::InputAttachmentIndex, u32(fb_cb - 1));
+        }
         Name(id, fmt::format("{}_{}{}", hw_stage, "img", images.size()));
         images.push_back({
             .data_types = &data_types,
@@ -1057,6 +1067,9 @@ void EmitContext::DefineImagesAndSamplers() {
             .is_integer = is_integer,
             .is_storage = is_storage,
             .mip_fallback_mode = mip_fallback_mode,
+            .is_fb_fetch = fb_cb != 0,
+            .fb_swizzle = {sharp.DstSelect().Map(0), sharp.DstSelect().Map(1), sharp.DstSelect().Map(2),
+                           sharp.DstSelect().Map(3)},
         });
         interfaces.push_back(id);
     }
