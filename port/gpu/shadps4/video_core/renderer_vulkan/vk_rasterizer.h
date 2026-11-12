@@ -372,6 +372,7 @@ private:
                       Shader::Backend::Bindings& binding, u32& write_index, bool& barrier,
                       bool on_helper = false);
     bool BindResources(const Pipeline* pipeline);
+    u32 fb_mrt_mask = 0; ///< tlg: the graphics pipeline's mrt_mask while its textures bind (vk_fb_fetch.h)
     /// tlg: a stage's resolved textures remembered by its prepared T# hashes
     /// (TextureSetMemo): a hit only redoes the per-draw effects (binding flags, transitions).
     struct TextureSetEntry {

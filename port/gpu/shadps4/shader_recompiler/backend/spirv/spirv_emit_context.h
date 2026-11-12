@@ -321,6 +321,8 @@ public:
         bool is_integer = false;
         bool is_storage = false;
         MipStorageFallbackMode mip_fallback_mode{};
+        bool is_fb_fetch = false; ///< tlg (macOS): a subpass input read through framebuffer fetch
+        std::array<u32, 4> fb_swizzle{0, 1, 2, 3}; ///< tlg: the T#'s channel order applied to that read
     };
 
     enum class PointerType : u32 {

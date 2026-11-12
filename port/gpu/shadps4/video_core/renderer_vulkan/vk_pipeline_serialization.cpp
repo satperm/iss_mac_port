@@ -39,8 +39,8 @@
 namespace Serialization {
 /* You should increment versions below once corresponding serialization scheme is changed. */
 static constexpr u32 ShaderBinaryVersion = 9u; // tlg: LDS barrier scope per guest wave
-static constexpr u32 ShaderMetaVersion = 15u; // tlg: 15 vertex loop cap 1024 (macOS); 14 NaN guard on float outputs; 13 NaN/Inf tests on bits, mac/mad legacy; 12 load bounds compute only (macOS); 11 compute loop cap; 10 portable SRT walker
-static constexpr u32 PipelineKeyVersion = 5u; // tlg: Info layout (ImageResource::needs_native)
+static constexpr u32 ShaderMetaVersion = 16u; // tlg: 16 framebuffer fetch (ImageSpecialization::fb_cb, fs fb_targets); 15 vertex loop cap 1024 (macOS); 14 NaN guard on float outputs; 13 NaN/Inf tests on bits, mac/mad legacy; 12 load bounds compute only (macOS); 11 compute loop cap; 10 portable SRT walker
+static constexpr u32 PipelineKeyVersion = 6u; // tlg: Info layout (ImageResource::fb_fetchable; 5: needs_native)
 } // namespace Serialization
 
 namespace Vulkan {

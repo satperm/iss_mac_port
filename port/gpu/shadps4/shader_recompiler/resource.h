@@ -122,6 +122,10 @@ struct ImageResource {
     /// tlg: read other than by normalized sampling without offsets (texel loads, size
     /// queries, offsets): needs the native-size image, not a reduced scene proxy.
     bool needs_native{};
+    /// tlg (macOS): every use is a level-0 texel load at the fragment's own pixel (coordinates
+    /// FragCoord.xy, possibly scaled, converted to integers): it can read the colour attachment it
+    /// aliases through framebuffer fetch (TLG_MAC_FB_FETCH).
+    bool fb_fetchable{};
     u8 constant_mip_index{};
     MipStorageFallbackMode mip_fallback_mode{};
     SharpFetchPostOp post_op{};

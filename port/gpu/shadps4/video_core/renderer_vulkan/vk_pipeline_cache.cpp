@@ -38,6 +38,7 @@
 #include "video_core/amdgpu/liverpool.h"
 #include "video_core/cache_storage.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
+#include "video_core/renderer_vulkan/vk_fb_fetch.h"
 #include "video_core/renderer_vulkan/vk_depth_stencil_state.h"
 #include "video_core/renderer_vulkan/motion_history.h"
 #include "video_core/renderer_vulkan/vk_draw_prep.h"
@@ -316,6 +317,7 @@ const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(PipelineSelection& se
             info.hw.fs.color_buffers[i] = sel.graphics_key.color_buffers[i];
         }
         info.hw.fs.clip_distance_emulation = NeedsClipDistanceEmulation(regs, profile);
+        FbFetch::FillTargets(regs, sel.graphics_key.mrt_mask, info.hw.fs.fb_targets);
         break;
     }
     case HwStage::Compute: {
