@@ -413,6 +413,10 @@ void VideoOutDriver::Flip(const Request& req) {
         const auto now = Clock::now();
         const double frame_ms = std::chrono::duration<double, std::milli>(now - last).count();
         worst_ms = std::max(worst_ms, frame_ms);
+        // tlg: flip-to-flip intervals in 1 ms buckets (0..39, 40+), printed with the frame stats:
+        // shows frames snapping to the display's refresh (8.3 / 16.7 ms on a 120 Hz panel).
+        static std::array<u32, 41> interval_hist{};
+        ++interval_hist[std::min<u32>(u32(frame_ms), 40)];
         static std::vector<double> intervals;
         intervals.push_back(frame_ms);
         last = now;
@@ -586,6 +590,18 @@ void VideoOutDriver::Flip(const Request& req) {
             const double draws_per_frame = frames ? double(all_draws - window_draws) / frames : 0.0;
             window_draws = all_draws;
             window_gpu_us = gpu_us;
+            {
+                u32 total = 0;
+                for (const u32 n : interval_hist) total += n;
+                std::printf("Frame intervals (ms: %% of frames):");
+                for (u32 i = 0; i < interval_hist.size(); ++i) {
+                    if (interval_hist[i] * 200 >= total) {
+                        std::printf(" %u%s: %.0f%%", i, i == 40 ? "+" : "", 100.0 * interval_hist[i] / total);
+                    }
+                }
+                std::printf("\n");
+                interval_hist.fill(0);
+            }
             std::printf("Frame stats: %.1f FPS, worst frame %.1f ms (vblank %u Hz); "
                         "%u shader/pipeline compiles, %.1f ms; async: capture %.1f ms, workers "
                         "%.1f ms, sync wait %.1f ms, snapshots %.1f ms, GPU capture wait %.1f ms, "

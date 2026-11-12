@@ -29,6 +29,7 @@ void BarrierTracker::InsertRange(const AddressRange& range, Access access_type) 
     u32 node_index = InsertNode(range, root_index);
 
     if (!node_index) [[likely]] {
+        ++stat_new;
         return;
     }
 
@@ -36,8 +37,10 @@ void BarrierTracker::InsertRange(const AddressRange& range, Access access_type) 
     // don't do anything. If there are conflicting access ops, reset it.
     auto& node = nodes[node_index];
     if (node.address_range.Contains(range)) {
+        ++stat_contained;
         return;
     }
+    ++stat_other;
 
     // Otherwise, check if there are any other overlapping ranges.
     // If that is not the case, simply update the range we found.

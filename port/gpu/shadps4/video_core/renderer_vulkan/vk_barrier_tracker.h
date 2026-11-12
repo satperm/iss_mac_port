@@ -118,6 +118,7 @@ public:
     size_t FreeNodes() const {
         return free.size();
     }
+    u64 stat_new = 0, stat_contained = 0, stat_other = 0; ///< tlg: InsertRange outcomes
 
 private:
     u32 AllocateNode();

@@ -1000,10 +1000,14 @@ void Runtime::AccessBuffer(const VideoCore::Buffer* handle, u64 offset, u64 size
         if (!report) report = now;
         if (now - report >= 5'000'000'000ull) {
             std::printf("Buffer accesses (5 s): %llu calls (%llu writes), %llu memo hits, %u "
-                        "barrier flushes, tracker %zu nodes allocated, %zu free now\n",
+                        "barrier flushes, tracker %zu nodes allocated, %zu free now; inserts: %llu new, "
+                        "%llu contained, %llu widened\n",
                         (unsigned long long)stat_calls, (unsigned long long)stat_writes,
                         (unsigned long long)stat_hits, access_epoch - u32(stat_epoch),
-                        barrier_tracker.Nodes(), barrier_tracker.FreeNodes());
+                        barrier_tracker.Nodes(), barrier_tracker.FreeNodes(),
+                        (unsigned long long)std::exchange(barrier_tracker.stat_new, 0),
+                        (unsigned long long)std::exchange(barrier_tracker.stat_contained, 0),
+                        (unsigned long long)std::exchange(barrier_tracker.stat_other, 0));
             stat_calls = stat_hits = stat_writes = 0;
             stat_epoch = access_epoch;
             report = now;
