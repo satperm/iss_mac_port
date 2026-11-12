@@ -817,3 +817,12 @@ Instruments (Shader Timeline option) for per-shader cost.
   (shadPS4 #5452 had just fixed the same). TLG_BOUND_EMPTY_PASS (default on; 0 = before): the area is bounded
   by the scissors. lib_ab 3 x 60 s: truck 47.5 -> 61.9, bridge 67.0 -> 75.3, Seattle 47.4 -> 50.5. Same
   picture (screenshots; the owner watched the runs).
+- 2026-11-12: ISSUE #11 GPU HANG = FPS CAP. M1 Max, Hank's fight, "Slowest" preset. Reproduced with
+  out/chase-save (burning building) + TLG_FPS_LIMIT=30 (also 45): Metal GPU hang in 40-80 s, never uncapped;
+  particles off / scale 50 / office alone don't matter; old builds hang too. MVK_CONFIG_DEBUG=1 +
+  TLG_DRAW_LABELS=1 (now dispatches too) + TLG_PASS_LABELS=1 name the faulted encoder: the gbuffer pass with
+  67 indirect draws of vs 5e6e49c1 (lit particles), whose loop walks a 43523-node tree (ud10 = 0xaa03; same as
+  vs 3f30e238). Fix: TLG_MAC_VS_LOOP_CAP default 1024 (ShaderMetaVersion 15: the cap is NOT in the cache key,
+  test such switches with AGENT_CACHE=<fresh dir> in agent_run.sh). 280 s at a 30 cap, no hang; picture same
+  even at 64; lib_ab 3 x 60 s neutral (truck 64.2/64.1, bridge 78.0/77.8, Seattle 52.5/52.0). Root cause
+  (why the walk runs long only when the GPU idles between frames) still open.

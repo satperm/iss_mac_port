@@ -20,8 +20,10 @@ bridge) template=out/bridge-fresh/savedata ;;
 *) template=$scene/savedata ;;
 esac
 user=out/agent-user
-rm -rf "$user" && mkdir -p "$user" && cp -R "$template" "$user/" && mkdir -p out/fps-ab-cache &&
-    ln -s "$PWD/out/fps-ab-cache" "$user/cache"
+# AGENT_CACHE: another shader cache dir (for switches the cache key does not cover).
+cache=${AGENT_CACHE:-out/fps-ab-cache}
+rm -rf "$user" && mkdir -p "$user" && cp -R "$template" "$user/" && mkdir -p "$cache" &&
+    ln -s "$(cd "$cache" && pwd)" "$user/cache"
 # The GPU's performance state during the run (macOS clocks it down for a window behind another app).
 pstate=out/tools/gpu_pstate
 [[ -x $pstate ]] || { mkdir -p out/tools; clang -O2 tools/gpu_probes/gpu_pstate.c -o "$pstate" -framework CoreFoundation -lIOReport 2>/dev/null || true; }
