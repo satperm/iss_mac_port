@@ -1205,6 +1205,76 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset, const PreparedDraw* pre
             return;
         }
     }
+    // tlg: TLG_DRAW_RUNS=1: every 5 s, how many draws repeat the previous draw's pipeline (runs a
+    // batching path could take), the run lengths, and the pipelines with the most draws.
+    static const bool draw_runs = [] {
+        const char* env = std::getenv("TLG_DRAW_RUNS");
+        return env && *env == '1';
+    }();
+    if (draw_runs) {
+        struct Per {
+            u64 draws = 0, repeats = 0, vs = 0, ps = 0;
+            u32 colors = 0;
+        };
+        static std::unordered_map<const GraphicsPipeline*, Per> per;
+        static const GraphicsPipeline* last = nullptr;
+        static u64 total = 0, repeats = 0, runs = 0, flips_at = 0;
+        static u64 run_hist[6]{}; // 1, 2-3, 4-7, 8-15, 16-63, 64+
+        static u64 run = 0;
+        static auto report = std::chrono::steady_clock::now();
+        const auto close_run = [&] {
+            if (!run) return;
+            ++runs;
+            run_hist[run >= 64 ? 5 : run >= 16 ? 4 : run >= 8 ? 3 : run >= 4 ? 2 : run >= 2 ? 1 : 0] += run;
+            run = 0;
+        };
+        auto& e = per[pipeline];
+        if (!e.draws) {
+            const auto* vs = pipeline->GetStages()[u32(Shader::SwStage::Vertex)];
+            const auto* ps = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
+            e.vs = vs ? vs->pgm_hash : 0;
+            e.ps = ps ? ps->pgm_hash : 0;
+            e.colors = pipeline->GetGraphicsKey().num_color_attachments;
+        }
+        ++e.draws;
+        ++total;
+        if (pipeline == last) {
+            ++e.repeats;
+            ++repeats;
+        } else {
+            close_run();
+        }
+        ++run;
+        last = pipeline;
+        const auto now = std::chrono::steady_clock::now();
+        if (now - report >= std::chrono::seconds(5)) {
+            close_run();
+            std::printf("Draw runs (5 s): %llu draws, %llu (%.0f%%) repeat the previous pipeline, "
+                        "%llu runs (%.1f draws each); draws in runs of 1: %.0f%%, 2-3: %.0f%%, "
+                        "4-7: %.0f%%, 8-15: %.0f%%, 16-63: %.0f%%, 64+: %.0f%%; %zu pipelines\n",
+                        (unsigned long long)total, (unsigned long long)repeats,
+                        100.0 * repeats / total, (unsigned long long)runs, double(total) / runs,
+                        100.0 * run_hist[0] / total, 100.0 * run_hist[1] / total,
+                        100.0 * run_hist[2] / total, 100.0 * run_hist[3] / total,
+                        100.0 * run_hist[4] / total, 100.0 * run_hist[5] / total, per.size());
+            std::vector<std::pair<u64, const GraphicsPipeline*>> top;
+            for (const auto& [key, value] : per) top.emplace_back(value.draws, key);
+            std::ranges::sort(top, std::greater{});
+            for (size_t i = 0; i < top.size() && i < 8; ++i) {
+                const auto& v = per[top[i].second];
+                std::printf("  vs %08llx ps %08llx, %u colour targets: %.1f%% of draws, %.0f%% "
+                            "repeats\n",
+                            (unsigned long long)(v.vs & 0xffffffff),
+                            (unsigned long long)(v.ps & 0xffffffff), v.colors,
+                            100.0 * v.draws / total, 100.0 * v.repeats / v.draws);
+            }
+            per.clear();
+            total = repeats = runs = 0;
+            std::ranges::fill(run_hist, 0);
+            last = nullptr;
+            report = now;
+        }
+    }
     if (pipelined && FilterDrawPasses()) {
         PostDraw(pipeline, used_prepared, is_indexed, index_offset);
         return;
@@ -1344,6 +1414,76 @@ DrawTiming& DrawTimer() {
 
 void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw* used_prepared,
                             bool is_indexed, u32 index_offset) {
+    // tlg: TLG_DRAW_RUNS=1, recording side: time per draw by pipeline, repeats apart.
+    struct RunTimer {
+        const GraphicsPipeline* pipeline;
+        u64 start;
+        bool on;
+        explicit RunTimer(const GraphicsPipeline* p) : pipeline{p} {
+            static const bool enabled = [] {
+                const char* env = std::getenv("TLG_DRAW_RUNS");
+                return env && *env == '1';
+            }();
+            on = enabled;
+            start = on ? clock_gettime_nsec_np(CLOCK_UPTIME_RAW) : 0;
+        }
+        ~RunTimer() {
+            if (!on) return;
+            struct Per {
+                u64 draws = 0, ns = 0, repeats = 0, repeat_ns = 0;
+            };
+            static std::unordered_map<const GraphicsPipeline*, Per> per;
+            static const GraphicsPipeline* last = nullptr;
+            static u64 report = 0;
+            const u64 now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+            auto& e = per[pipeline];
+            ++e.draws;
+            e.ns += now - start;
+            if (pipeline == last) {
+                ++e.repeats;
+                e.repeat_ns += now - start;
+            }
+            last = pipeline;
+            if (!report) report = now;
+            if (now - report < 5'000'000'000ull) return;
+            report = now;
+            Per all;
+            std::vector<std::pair<u64, const GraphicsPipeline*>> top;
+            for (const auto& [key, v] : per) {
+                all.draws += v.draws, all.ns += v.ns, all.repeats += v.repeats;
+                all.repeat_ns += v.repeat_ns;
+                top.emplace_back(v.ns, key);
+            }
+            std::ranges::sort(top, std::greater{});
+            std::printf("Draw record (5 s): %llu draws, %.2f us each; repeats %.2f us, others "
+                        "%.2f us\n",
+                        (unsigned long long)all.draws, all.ns / 1e3 / all.draws,
+                        all.repeat_ns / 1e3 / std::max<u64>(all.repeats, 1),
+                        (all.ns - all.repeat_ns) / 1e3 / std::max<u64>(all.draws - all.repeats, 1));
+            for (size_t i = 0; i < top.size() && i < 8; ++i) {
+                const auto* p = top[i].second;
+                const auto& v = per[p];
+                const auto* vs = p->GetStages()[u32(Shader::SwStage::Vertex)];
+                const auto* ps = p->GetStages()[u32(Shader::SwStage::Fragment)];
+                u32 buffers = 0, images = 0, samplers = 0;
+                for (const auto* stage : p->GetStages()) {
+                    if (!stage) continue;
+                    buffers += stage->buffers.size();
+                    images += stage->images.size();
+                    samplers += stage->samplers.size();
+                }
+                std::printf("  vs %08llx ps %08llx: %.1f%% of the time, %.2f us a draw (repeats "
+                            "%.2f), %u buffers %u images %u samplers\n",
+                            (unsigned long long)((vs ? vs->pgm_hash : 0) & 0xffffffff),
+                            (unsigned long long)((ps ? ps->pgm_hash : 0) & 0xffffffff),
+                            100.0 * v.ns / all.ns, v.ns / 1e3 / v.draws,
+                            v.repeat_ns / 1e3 / std::max<u64>(v.repeats, 1), buffers, images,
+                            samplers);
+            }
+            per.clear();
+            last = nullptr;
+        }
+    } run_timer{pipeline};
     // tlg: TLG_SKIP_DRAW_PS=<hex pixel shader hashes, comma-separated> (diagnostic): drops the
     // direct draws of those pixel shaders, to see what they draw.
     static const std::vector<u64> skip_ps = [] {
