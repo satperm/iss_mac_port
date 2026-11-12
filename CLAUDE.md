@@ -885,3 +885,25 @@ Instruments (Shader Timeline option) for per-shader cost.
   bridge 86.6 -> 87.3 (noise). After today's PRs all three scenes are CPU/latency-bound (GPU idle 40-53%):
   the next lever is per-draw CPU on stage A (~1.9 us), stage B (BindTextures/BindBuffers/AccessBuffer,
   MVKCommandBuffer::reset in vkBeginCommandBuffer ~10%) and MoltenVK encoding on the host's main queue.
+- 2026-11-12 evening (0.1.10 tagged: #12-#18): WHERE THE TRUCK FRAME GOES. Readbacks: the 512x512 RGBA16F
+  linear image went back ~10 times a frame; copies a later queued copy covers are not published
+  (TLG_READBACK_SUPERSEDE=0: off), ObtainBuffer's ResolveReadbacks answers from the queue's page span without the
+  lock (TLG_READBACK_SPAN=0): truck 69.2 -> 69.5. TLG_DRAW_RUNS=1: 85% of draws repeat the previous pipeline (60%
+  in runs of 16+), 57% are shadow draws (ps 1318ddd4, 2 buffers, no images: 0.6-0.7 us each in DrawRecord; average
+  1.12 us, 4850 draws a frame). SENSITIVITY (TLG_STAGE_DELAY_A_NS / _B_NS = busy wait per draw): +400 ns a draw
+  on stage A costs 0.55 ms of the frame (28% of the added time), on stage B 1.03 ms (53%): 69.9 -> 67.3 / 65.2
+  FPS. So no stage owns the frame: B about half, A a quarter, the rest MoltenVK/GPU/guest. Halving DrawRecord
+  would give ~+7 FPS. time_profile.py --thread <name>. Stacked PRs: #16 landed in its base branch because #15
+  was merged first; retarget children to macos before merging the base.
+- 2026-11-12 night: WHAT THE TRUCK/BRIDGE FRAME REALLY IS (TLG_WAIT_PROBE=1 TLG_THREAD_PROFILE_MS=2): the game's
+  main thread works ~48% of the frame (~7 ms under Rosetta), waits ~36% (truck 5.2 ms, bridge 3.8 ms) in the
+  end-of-frame particle join (guest 0x16961a < 0x29cd5b, label idx 2 behind by ~5 fences when the wait starts)
+  and ~16% for the frame counter. So draws are NOT most of the frame: TLG_SHADOW_CASCADES=-3 (new, src/
+  iss_perf_patches.h: sun-shadow cascade offset only) halves the draws (4776 -> 2395) for 68.8 -> 75.1 FPS;
+  TLG_RENDER_SCALE=50: 77.2; both: 81.0 (frames ~12 ms: the floor). Frame intervals are not snapped to the
+  display (histogram now printed with TLG_FRAME_STATS). True draw merging is not there: only 14% of repeat draws
+  share the mesh. No gain: TLG_COMPUTE_FAIRNESS=4/16 (69.4 all), TLG_ACB_FLUSH_FENCES 1/2/4 (69.2-69.8 vs 70.1 at
+  8; 16: 70.5, 64: 70.4, noise). NotePendingGpuWrite pruned every 32 notes (it was 42% of a dispatch on stage A;
+  TLG_PENDING_PRUNE=0): 69.9 -> 70.3. Dispatch path costs ~3 us per dispatch on each stage (530 a frame);
+  stage B's share is the barrier tracker (31%). MoltenVK barriers are NOT no-ops for us: the patched concurrent
+  compute encoder orders dispatches by them. Next: a timeline of the particle chain (where its ~5 ms go).

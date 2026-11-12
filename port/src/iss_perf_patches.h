@@ -124,8 +124,30 @@ static void iss_particle_light_one_submit(unsigned char *image, uint64_t size, i
     puts("Performance patches: TLG_PARTICLE_LIGHT_ONE_SUBMIT: one ring submit for the particle lights");
 }
 
+/* TLG_SHADOW_CASCADES=<-1..-4> (diagnostic, without TLG_PERF_MODE): only the sun-shadow cascade
+ * offset of quality row 0, everything else as the game ships it. Shadow draws are over half of
+ * the truck scene's draws: this measures what fewer cascades give. */
+static int iss_shadow_cascades(unsigned char *image, uint64_t size) {
+    const char *env = getenv("TLG_SHADOW_CASCADES");
+    if (!env || !*env || getenv("TLG_PERF_MODE")) return 0;
+    const int32_t cascades = (int32_t)strtol(env, NULL, 10);
+    if (cascades >= 0 || cascades < -4) return 0;
+    static const unsigned char row0[20] = {0x00, 0x00, 0x80, 0x3f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x24,
+                                           0x74, 0x49, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    unsigned char row[20];
+    memcpy(row, row0, sizeof row);
+    memcpy(row + 4, &cascades, 4);
+    const IssPerfBytes original[] = {{0xda08c0, row0, 20}};
+    const IssPerfBytes patched[] = {{0xda08c0, row, 20}};
+    if (!iss_perf_matches(image, size, original, 1, "TLG_SHADOW_CASCADES")) return 0;
+    iss_perf_write(image, patched, 1);
+    printf("Performance patches: TLG_SHADOW_CASCADES=%d: sun-shadow cascade offset only\n", cascades);
+    return 1;
+}
+
 static void iss_perf_patches(unsigned char *image, uint64_t size) {
     iss_perf_mode(image, size);
+    iss_shadow_cascades(image, size);
     const int late = iss_particle_late_read(image, size);
     iss_particle_light_one_submit(image, size, late);
 }
