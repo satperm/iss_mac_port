@@ -165,14 +165,17 @@ u32 LoopCap() {
 }
 
 // tlg (macOS): TLG_MAC_VS_LOOP_CAP=<n> ends vertex-like stages' loops after n back-edges (default
-// 0: off). A loading draw of the game's tree-walking vertex shader (vs 3f30e238: up to 43523 steps
-// a vertex, ~68k vertices) ran past Metal's GPU watchdog; the cause was out-of-range stores
-// corrupting its tree (now dropped, MacBufferLength), so the cap is only a fallback.
+// 1024, 0: off). A loading draw of the game's tree-walking vertex shader (vs 3f30e238: up to 43523
+// steps a vertex, ~68k vertices) ran past Metal's GPU watchdog; the cause was out-of-range stores
+// corrupting its tree (now dropped, MacBufferLength). The burning building's lit particles
+// (vs 5e6e49c1, indirect, ~1M vertices a frame, the same 43523-node walk) still lost the device
+// within 40-80 s at a 30 or 45 FPS cap (issue #11, Hank's fight on an M1 Max), never uncapped;
+// 1024: 280 s without a hang, same picture. Not in the cache key: ShaderMetaVersion 15.
 u32 VertexLoopCap(const EmitContext& ctx) {
 #ifdef __APPLE__
     static const u32 cap = [] {
         const char* env = std::getenv("TLG_MAC_VS_LOOP_CAP");
-        return env && *env ? static_cast<u32>(std::strtoul(env, nullptr, 10)) : 0u;
+        return env && *env ? static_cast<u32>(std::strtoul(env, nullptr, 10)) : 1024u;
     }();
     if (ctx.sw_stage == Shader::SwStage::Compute) {
         // TLG_MAC_CS_LOOP_CAP=<n> (default 1048576, 0: off): compute shaders too. ISS lost the device

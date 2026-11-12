@@ -1836,13 +1836,14 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
         const auto* ps = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
         const u32 seen = *reinterpret_cast<const u32*>(indirect.args);
         const auto& trace_cb = Regs().color_buffers[0];
-        std::fprintf(indirect_trace, "%lld %llx %llx %u %u %u %u %u %llx %u\n", static_cast<long long>(now_ms),
+        const auto& trace_ud = Regs().vs_program.user_data;
+        std::fprintf(indirect_trace, "%lld %llx %llx %u %u %u %u %u %llx %u ud10 %x ud11 %x\n", static_cast<long long>(now_ms),
                      ps ? static_cast<unsigned long long>(ps->pgm_hash) : 0ull,
                      static_cast<unsigned long long>(indirect.args), indirect.max_count, seen,
                      reinterpret_cast<const u32*>(indirect.args)[1], prev_seen,
                      prev_args ? *reinterpret_cast<const u32*>(prev_args) : 0u,
                      trace_cb ? static_cast<unsigned long long>(trace_cb.Address()) : 0ull,
-                     trace_cb ? u32(trace_cb.Pitch()) : 0u);
+                     trace_cb ? u32(trace_cb.Pitch()) : 0u, trace_ud[10], trace_ud[11]);
         std::fflush(indirect_trace);
         prev_args = indirect.args;
         prev_seen = seen;
@@ -2857,8 +2858,10 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
         const auto acb_bind = ComputeBind(pipeline);
         const u32 x = cs_program.dim_x, y = cs_program.dim_y, z = cs_program.dim_z;
         LogWork("dispatch cs", cs.pgm_hash, x, y, z);
+        const DrawLabel label = MakeDrawLabel("acb cs", cs.pgm_hash, 0, x, y);
         acb->Record([=](vk::CommandBuffer cmdbuf) {
             acb_bind(cmdbuf);
+            InsertLabel(cmdbuf, label);
             cmdbuf.dispatch(x, y, z);
         });
         acb->MarkCompanionWork();
@@ -2885,11 +2888,13 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
     if (FrameCapture::Active()) {
         FrameCapture::Dispatch(cs.pgm_hash, dim_x, dim_y, dim_z);
     }
+    const DrawLabel label = MakeDrawLabel("cs", cs.pgm_hash, 0, dim_x, dim_y);
     scheduler.Record([=](vk::CommandBuffer cmdbuf) {
         if (Scheduler::FullBarriers()) {
             Scheduler::RecordFullBarrier(cmdbuf);
         }
         bind(cmdbuf);
+        InsertLabel(cmdbuf, label);
         cmdbuf.dispatch(dim_x, dim_y, dim_z);
         if (Scheduler::FullBarriers()) {
             Scheduler::RecordFullBarrier(cmdbuf);
@@ -2969,8 +2974,11 @@ void Rasterizer::DispatchIndirectRecord(const ComputePipeline* pipeline, VAddr a
                                            ? buffer_cache.UnifiedAlias()
                                            : args_buffer->Handle();
         const u64 offset_in_args = args_base;
+        const DrawLabel label =
+            MakeDrawLabel("acb indirect cs", pipeline->GetStage(Shader::SwStage::Compute).pgm_hash, 0, 0, 0);
         acb->Record([=](vk::CommandBuffer cmdbuf) {
             acb_bind(cmdbuf);
+            InsertLabel(cmdbuf, label);
             cmdbuf.dispatchIndirect(args_handle, offset_in_args);
         });
         acb->MarkCompanionWork();
@@ -3011,11 +3019,14 @@ void Rasterizer::DispatchIndirectRecord(const ComputePipeline* pipeline, VAddr a
     const auto bind = ComputeBind(pipeline);
     const vk::Buffer args = buffer->Handle();
     const u64 args_offset = base;
+    const DrawLabel label =
+        MakeDrawLabel("indirect cs", pipeline->GetStage(Shader::SwStage::Compute).pgm_hash, 0, 0, 0);
     scheduler.Record([=](vk::CommandBuffer cmdbuf) {
         if (Scheduler::FullBarriers()) {
             Scheduler::RecordFullBarrier(cmdbuf);
         }
         bind(cmdbuf);
+        InsertLabel(cmdbuf, label);
         cmdbuf.dispatchIndirect(args, args_offset);
         if (Scheduler::FullBarriers()) {
             Scheduler::RecordFullBarrier(cmdbuf);
