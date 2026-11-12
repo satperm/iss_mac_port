@@ -22,6 +22,8 @@ def main():
     if '--callers' in args:
         callers = args[args.index('--callers') + 1]
     process = args[args.index('--process') + 1] if '--process' in args else 'tlggpu'
+    # --thread <name part>: only that thread (its leaves, 40 of them, and inclusive functions).
+    only = args[args.index('--thread') + 1] if '--thread' in args else None
     fmt, frames, stacks = {}, {}, {}
     per_thread = collections.Counter()
     leaf = collections.Counter()
@@ -50,6 +52,9 @@ def main():
                 stack = stacks.get(x.get('ref') or x.get('id'))
         if proc and process in proc and stack:
             t = (thread or '?').split(' (0x')[0][:22]
+            if only and only not in t:
+                e.clear()
+                continue
             per_thread[t] += 1
             leaf[(t, stack[0])] += 1
             for name in set(stack):
@@ -65,7 +70,7 @@ def main():
     for t, n in per_thread.most_common(12):
         print(f'  {n:6d} {t}')
     print('hottest leaves:')
-    for (t, name), n in leaf.most_common(30):
+    for (t, name), n in leaf.most_common(40 if only else 30):
         print(f'  {n:6d} {t}  {name[:120]}')
     skip = ('thread_start', '_pthread_start', '__thread_proxy', 'start_wqthread', '_pthread_wqthread', '_dispatch_')
     for t, _ in per_thread.most_common(4):
