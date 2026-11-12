@@ -9,7 +9,7 @@ It is a macOS fork of [iss_pc](https://github.com/HayatoG/iss_pc), the native PC
 
 > **Status: first test version, work in progress.** The story can be played from the start with
 > GPU particles (smoke, rain, sparks). Tested on one Mac (M3 Max, 36 GB) as far as the first missions
-> in Seattle. On that Mac expect about 75 FPS on the opening bridge, about 62 in the heaviest
+> in Seattle. On that Mac expect about 87 FPS on the opening bridge, about 69 in the heaviest
 > fire-and-smoke scene (the launcher's Benchmark) and 25-30 in busy streets. See
 > [Expected performance](#expected-performance) and [Known issues](#known-issues).
 
@@ -151,12 +151,13 @@ outdoor views).
 ## Expected performance
 
 Measured on a **MacBook Pro with M3 Max**, macOS 27, 1080p rendering, default settings, release
-0.1.9 (2026-11-11). Each value is the median of 40 s after loading.
+0.1.10 (2026-11-12). Each value is the median of 40 s after loading.
 
 | Scene | FPS |
 |---|---|
-| Truck crash in the forest (fire, smoke, sparks; the launcher's **Benchmark**), standing | 62 (0.1.8: 48, 0.1.3: 36) |
-| Bridge after the car crash (rain, smoke), standing | 75 (0.1.8: 67, 0.1.5: 60) |
+| Truck crash in the forest (fire, smoke, sparks; the launcher's **Benchmark**), standing | 69 (0.1.9: 65, 0.1.3: 36) |
+| Bridge after the car crash (rain, smoke), standing | 87 (0.1.9: 78, 0.1.5: 60) |
+| First Seattle street after the bridge, standing | 60 (0.1.9: 53) |
 | Bridge, camera turning at a constant speed | 63 (0.1.8: 53, 0.1.5: 49) |
 | Bridge with render scale 50% | about 72 |
 | Frame rate cap 30 | exactly 30 |
@@ -189,6 +190,15 @@ to add yours.
 
 Fixed recently:
 
+- **No more GPU hang with a 30 or 45 FPS cap** (0.1.10, issue #11). With the cap, a particle shader
+  could walk a 43,000-node tree for every vertex until Metal stopped the GPU (seen in the burning
+  building). Its loops are now capped at 1,024 steps: same picture, same FPS, no hang in 240 s.
+- **Faster where the GPU is busy** (0.1.10): render passes stay open across read-only barriers, and
+  the gbuffer decals read their target through framebuffer fetch (a small MoltenVK patch) instead of
+  ending the pass: Seattle 53 -> 60 FPS, bridge 78 -> 87 (M3 Max), same picture.
+- **Less CPU waiting per frame** (0.1.10): draw preparation runs on the performance cores and no longer
+  waits on a lock, command buffers are reset off the recording thread, and a 2 MiB image is no longer
+  copied back ~10 times a frame: truck crash 65 -> 69 FPS.
 - **Render passes without targets no longer cover a 16384x16384 area** (0.1.9). The game draws some
   passes with no colour or depth target; they kept the largest possible render area, which Apple's
   tile-based GPUs pay for in full. Bounded by the scissors now: truck crash 48 -> 62 FPS, bridge
@@ -243,8 +253,9 @@ Fixed recently:
 
 ## Known issues
 
-- **Frame rate is not a steady 60 everywhere.** The bridge is about 75 standing and 63 turning the camera;
-  the truck crash 62; Seattle about 50, with dips to 35 while moving (the GPU is the limit there). Busy streets with thousands of objects are limited by the CPU work per draw
+- **Frame rate is not a steady 60 everywhere.** The bridge is about 87 standing; the truck crash 69;
+  Seattle about 60 standing, lower while moving. Standing still in Seattle, the GPU can clock down
+  after ~40 s (60 -> 31 FPS) for a reason not found yet; moving play did not show it. Busy streets with thousands of objects are limited by the CPU work per draw
   (about 25-30 FPS where the game draws ~7,500 objects a frame). Drops seen while playing on the
   bridge are not explained yet.
 - **The frame rate can halve while the game is not the front app** (seen 49 -> 28 FPS): macOS clocks the
