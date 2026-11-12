@@ -1042,15 +1042,25 @@ void Runtime::FlushBarriers() {
     // accesses (execution only) and image barriers that keep a read-only layout (nothing in this
     // pass writes such an image). Colour feedback (General) and layout changes still end the pass.
     // The barriers stay pending (accesses stay tracked): they are recorded by the next flush
-    // outside a pass, before anything that conflicts with them. Off by default: ~1000 fewer
-    // passes a second in the smoke-shot tutorial measured no FPS difference (54.7-55.5 against
-    // 55.1). TLG_MAC_KEEP_PASS=1: on.
+    // outside a pass, before anything that conflicts with them. The smoke-shot tutorial (not
+    // GPU-bound) measured no difference; where the GPU is the limit it does (2026-11-12, M3 Max,
+    // lib_ab 3 x 60 s: Seattle 53.6 -> 56.4, bridge 78.0 -> 81.2, truck 65.5 -> 65.7; same
+    // picture; Seattle ~34 fewer restarts a frame). On by default; TLG_MAC_KEEP_PASS=0: off.
     static const bool keep_pass = [] {
         const char* env = std::getenv("TLG_MAC_KEEP_PASS");
+        return !env || *env != '0';
+    }();
+    // TLG_MAC_KEEP_FEEDBACK=1 (diagnostic, may read stale pixels): colour feedback barriers
+    // (General -> General) keep the pass open too, to bound what framebuffer fetch would gain.
+    static const bool keep_feedback = [] {
+        const char* env = std::getenv("TLG_MAC_KEEP_FEEDBACK");
         return env && *env == '1';
     }();
     if (keep_pass && scheduler.IsRendering() && image_barriers.size() <= 64) {
         const auto read_only = [](vk::ImageLayout layout) {
+            if (keep_feedback && layout == vk::ImageLayout::eGeneral) {
+                return true;
+            }
             return layout == vk::ImageLayout::eDepthStencilReadOnlyOptimal ||
                    layout == vk::ImageLayout::eDepthReadOnlyOptimal ||
                    layout == vk::ImageLayout::eStencilReadOnlyOptimal ||

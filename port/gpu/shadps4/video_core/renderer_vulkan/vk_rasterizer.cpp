@@ -2715,6 +2715,16 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
     const auto& cs_program = CsRegs();
 
     const auto& cs = pipeline->GetStage(Shader::SwStage::Compute);
+    // TLG_MAC_SKIP_CS=<hex> (diagnostic, breaks the picture): drops direct dispatches of that shader,
+    // to bound what its dispatches cost.
+    static const u64 skip_cs = [] {
+        const char* env = std::getenv("TLG_MAC_SKIP_CS");
+        return env && *env ? std::strtoull(env, nullptr, 16) : 0ull;
+    }();
+    if (skip_cs != 0 && cs.pgm_hash == skip_cs) [[unlikely]] {
+        ResetBindings(true);
+        return;
+    }
     // TLG_CS_WATCH=<hex address>[,<hex address>...] (diagnostic): the first dispatch of each compute
     // shader whose buffers cover one of these addresses, and if it may write them.
     static const std::vector<VAddr> cs_watch = [] {
@@ -4561,6 +4571,7 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
                         vk::AccessFlagBits2::eShaderRead, desc.view_info.range);
                 }
             }
+            image.sampled_range = desc.view_info.range;
             image.usage.storage |= is_storage;
             image.usage.texture |= !is_storage;
             if (FrameCapture::Active()) {
@@ -5089,6 +5100,35 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
         } else if (image->binding.is_bound) {
             ASSERT_MSG(!image->binding.force_general,
                        "Having image both as storage and render target is unsupported");
+            // tlg: TLG_FEEDBACK_STATS=1: every 5 s, colour feedback draws per fragment shader, and
+            // whether the sampled range overlaps the target's level/layer (else: no real feedback).
+            static const bool feedback_stats = [] {
+                const char* env = std::getenv("TLG_FEEDBACK_STATS");
+                return env && *env == '1';
+            }();
+            if (feedback_stats) [[unlikely]] {
+                static std::map<u64, std::pair<u32, u32>> per_ps;
+                static auto last = std::chrono::steady_clock::now();
+                const auto& r = image->sampled_range;
+                const bool level_overlap = mip >= r.base.level && mip < r.base.level + r.extent.levels;
+                const bool layer_overlap = slice >= r.base.layer && slice < r.base.layer + r.extent.layers;
+                const auto* fs = pipeline ? pipeline->GetStages()[u32(Shader::SwStage::Fragment)] : nullptr;
+                // Key: shader hash, low 4 bits replaced by this target's colour write mask.
+                const u64 key_ps = ((fs ? fs->pgm_hash : 0) << 8) | (regs.color_target_mask.GetMask(cb) & 0xf) |
+                                   (u64(cb) << 4);
+                auto& [overlap, disjoint] = per_ps[key_ps];
+                (level_overlap && layer_overlap ? overlap : disjoint)++;
+                if (std::chrono::steady_clock::now() - last > std::chrono::seconds(5)) {
+                    last = std::chrono::steady_clock::now();
+                    std::printf("Feedback draws (5 s) per ps: (hash<<8 | cb<<4 | write mask) overlapping / disjoint ranges, target %ux%u:",
+                                image->info.size.width, image->info.size.height);
+                    for (const auto& [ps, n] : per_ps) {
+                        std::printf(" %llx %u/%u", static_cast<unsigned long long>(ps), n.first, n.second);
+                    }
+                    std::printf("\n");
+                    per_ps.clear();
+                }
+            }
             runtime.FlushBarriers();
             needs_barrier |=
                 runtime.Transit(image,

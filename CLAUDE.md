@@ -826,3 +826,23 @@ Instruments (Shader Timeline option) for per-shader cost.
   test such switches with AGENT_CACHE=<fresh dir> in agent_run.sh). 280 s at a 30 cap, no hang; picture same
   even at 64; lib_ab 3 x 60 s neutral (truck 64.2/64.1, bridge 78.0/77.8, Seattle 52.5/52.0). Root cause
   (why the walk runs long only when the GPU idles between frames) still open.
+- 2026-11-12: harness runs from inside ISS.app by default now (agent_run.sh: TLG_PROBE in the bundle, full screen,
+  raise; AGENT_APP=0 = out/): gamepolicyd "Game mode status is now on" for the whole run; truck 65.0 vs 65.5
+  windowed (no effect standing). The Seattle CLOCK-DOWN (P13 -> P1 at 96% busy, 54 -> 30 FPS, 40-90 s into a
+  run) happens in full screen, in front, Game Mode on, any input state: it follows the SoC power loop (kernel
+  ApplePPMPolicyCPMS setDetailedThermalPowerBudget fell to 4-10 W during back-to-back runs; no "thermal
+  pressure" state). Not window, not input idle (a synthetic mouse event every 5-20 s did not prevent it). A/B
+  stays fair by alternating; lib_ab shows "GPU clocked down N s" per run, discard runs with many seconds.
+  Rejected today: MVK_CONFIG_FAST_MATH_ENABLED=1 (all 775 shaders "MathMode Fast"; truck 64.5/63.2, bridge
+  77.7/77.4, Seattle 52.9/51.9). Seattle compute: cs 5b1e2375 is ~650 dispatches a frame of 1-3 groups (tree walk
+  bound by ud6), on the ACB queue; TLG_MAC_SKIP_CS=5b1e2375 (new diagnostic) 53.9 -> 53.7: free, overlapped.
+  Seattle pass restarts (TLG_PASS_STATS): ~100 a frame on the same attachments: ~51 colour General->General
+  feedback (Apple GPUs have no render-pass barriers: needs framebuffer fetch), ~34 DepthStencilReadOnly->same
+  (TLG_MAC_KEEP_PASS=1 keeps those passes open).
+- 2026-11-12: TLG_MAC_KEEP_PASS ON BY DEFAULT (lib_ab 3 x 60 s: Seattle 53.6 -> 56.4, bridge 78.0 -> 81.2,
+  truck 65.5 -> 65.7; same picture). Remaining Seattle restarts are colour feedback: gbuffer decal shaders
+  (b4565337, 27f242c2, bfe1af9, 9ce8b6db, ...) write part of cb0/1/2 (masks 7/3/c) and texelFetch the same
+  targets at their own pixel (fragcoord x 1920/render width). TLG_FEEDBACK_STATS=1 counts them (all overlap the
+  target's level/layer). Upper bound: TLG_MAC_KEEP_FEEDBACK=1 (diagnostic, stale reads) Seattle 56.0 -> 61.8.
+  Real fix: framebuffer fetch (VK_KHR_dynamic_rendering_local_read is in MoltenVK; SPIR-V SubpassData +
+  InputAttachmentIndex -> [[color(n)]]), only at 100% render scale.
