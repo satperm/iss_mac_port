@@ -885,3 +885,13 @@ Instruments (Shader Timeline option) for per-shader cost.
   bridge 86.6 -> 87.3 (noise). After today's PRs all three scenes are CPU/latency-bound (GPU idle 40-53%):
   the next lever is per-draw CPU on stage A (~1.9 us), stage B (BindTextures/BindBuffers/AccessBuffer,
   MVKCommandBuffer::reset in vkBeginCommandBuffer ~10%) and MoltenVK encoding on the host's main queue.
+- 2026-11-12 evening (0.1.10 tagged: #12-#18): WHERE THE TRUCK FRAME GOES. Readbacks: the 512x512 RGBA16F
+  linear image went back ~10 times a frame; copies a later queued copy covers are not published
+  (TLG_READBACK_SUPERSEDE=0: off), ObtainBuffer's ResolveReadbacks answers from the queue's page span without the
+  lock (TLG_READBACK_SPAN=0): truck 69.2 -> 69.5. TLG_DRAW_RUNS=1: 85% of draws repeat the previous pipeline (60%
+  in runs of 16+), 57% are shadow draws (ps 1318ddd4, 2 buffers, no images: 0.6-0.7 us each in DrawRecord; average
+  1.12 us, 4850 draws a frame). SENSITIVITY (TLG_STAGE_DELAY_A_NS / _B_NS = busy wait per draw): +400 ns a draw
+  on stage A costs 0.55 ms of the frame (28% of the added time), on stage B 1.03 ms (53%): 69.9 -> 67.3 / 65.2
+  FPS. So no stage owns the frame: B about half, A a quarter, the rest MoltenVK/GPU/guest. Halving DrawRecord
+  would give ~+7 FPS. time_profile.py --thread <name>. Stacked PRs: #16 landed in its base branch because #15
+  was merged first; retarget children to macos before merging the base.

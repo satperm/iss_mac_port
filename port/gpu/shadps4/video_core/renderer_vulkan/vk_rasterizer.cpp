@@ -1164,8 +1164,28 @@ void LogWork(const char* kind, u64 hash, u32 x, u32 y, u32 z) {
 }
 } // namespace
 
+
+namespace {
+// tlg: TLG_STAGE_DELAY_A_NS / TLG_STAGE_DELAY_B_NS (diagnostic): a busy wait of that many
+// nanoseconds per draw on the GPU command thread / the recording thread. The FPS lost per
+// nanosecond tells how much of the frame's critical path each stage is.
+inline void StageDelay(const char* name, u64& cached) {
+    if (cached == ~0ULL) {
+        const char* env = std::getenv(name);
+        cached = env ? std::strtoull(env, nullptr, 10) : 0;
+    }
+    if (cached) {
+        const u64 end = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) + cached;
+        while (clock_gettime_nsec_np(CLOCK_UPTIME_RAW) < end) {
+        }
+    }
+}
+} // namespace
+
 void Rasterizer::Draw(bool is_indexed, u32 index_offset, const PreparedDraw* prepared) {
     RENDERER_TRACE;
+    static u64 delay_a = ~0ULL;
+    StageDelay("TLG_STAGE_DELAY_A_NS", delay_a);
     TlgStats::draws.fetch_add(1, std::memory_order_relaxed);
 
     // tlg: with the draw pipeline this thread only selects the pipeline and hands the draw
@@ -1484,6 +1504,8 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
             last = nullptr;
         }
     } run_timer{pipeline};
+    static u64 delay_b = ~0ULL;
+    StageDelay("TLG_STAGE_DELAY_B_NS", delay_b);
     // tlg: TLG_SKIP_DRAW_PS=<hex pixel shader hashes, comma-separated> (diagnostic): drops the
     // direct draws of those pixel shaders, to see what they draw.
     static const std::vector<u64> skip_ps = [] {
