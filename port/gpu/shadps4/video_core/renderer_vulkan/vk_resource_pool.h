@@ -62,7 +62,7 @@ public:
     vk::CommandBuffer Commit();
 
 private:
-    /// tlg: TLG_CMD_PRERESET=1: every command buffer has a pool of its own, and a thread resets each
+    /// tlg: (default; TLG_CMD_PRERESET=0 off) every command buffer has a pool of its own, and a thread resets each
     /// one as soon as the GPU is done with it. MoltenVK releases a buffer's recorded commands in
     /// vkBeginCommandBuffer (10% of the draw recording thread, once per submission) and its pools
     /// are not thread-safe: a pool per buffer lets another thread do it while this one records.

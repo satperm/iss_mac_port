@@ -4,6 +4,8 @@
 // SCHED_IDLE: they use cores the game leaves idle and never take time from its threads.
 
 #pragma once
+#include <cstdlib>
+#include <cstring>
 
 #include <algorithm>
 #include <cstdio>
@@ -45,9 +47,30 @@ inline unsigned PhysicalCores() {
     return Available();
 }
 
-/// Background QoS: efficiency cores, lowest priority (the closest match to SCHED_IDLE).
+/// QoS of the draw preparation helpers (scanner and workers). Background QoS keeps them on the
+/// efficiency cores at low clocks: on an M3 Max (10 P + 4 E) 40% of Seattle's draws reached the GPU
+/// thread before their worker had prepared them. With 8 or more performance cores they run as
+/// user-initiated (99% prepared; lib_ab 2026-11-12: truck 65.4 -> 68.3, bridge 85.5 -> 87.2); with
+/// fewer (M1-M4, the Pro chips with 5-6) they stay background so they never take a core from the game.
+/// TLG_PREP_QOS=background|utility|default|user overrides.
 inline void MakeBackground() {
-    pthread_set_qos_class_self_np(QOS_CLASS_BACKGROUND, 0);
+    static const qos_class_t qos = [] {
+        const char* env = std::getenv("TLG_PREP_QOS");
+        if (env && *env) {
+            if (!std::strcmp(env, "utility")) return QOS_CLASS_UTILITY;
+            if (!std::strcmp(env, "default")) return QOS_CLASS_DEFAULT;
+            if (!std::strcmp(env, "user")) return QOS_CLASS_USER_INITIATED;
+            return QOS_CLASS_BACKGROUND;
+        }
+        int performance_cores = 0;
+        size_t size = sizeof(performance_cores);
+        if (sysctlbyname("hw.perflevel0.physicalcpu", &performance_cores, &size, nullptr, 0) == 0 &&
+            performance_cores >= 8) {
+            return QOS_CLASS_USER_INITIATED;
+        }
+        return QOS_CLASS_BACKGROUND;
+    }();
+    pthread_set_qos_class_self_np(qos, 0);
 }
 #else
 

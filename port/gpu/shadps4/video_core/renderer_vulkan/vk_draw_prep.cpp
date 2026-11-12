@@ -484,8 +484,14 @@ void DrawPreparation::WorkerLoop(std::stop_token stop, u32 index) {
     }
 }
 
-void DrawPreparation::Count(bool was_used) {
+void DrawPreparation::Count(bool was_used, u32 state, bool checksum_ok) {
     ++(was_used ? used : unused);
+    if (!was_used) {
+        ++(state == PreparedDraw::Pending       ? unused_pending
+           : state == PreparedDraw::Unavailable ? unused_unavailable
+           : !checksum_ok                       ? unused_checksum
+                                                : unused_pending);
+    }
     static const bool stats = std::getenv("TLG_FRAME_STATS") != nullptr;
     // The clock is read every 1024 draws: per draw it was 8% of the GPU thread.
     if (!stats || ((used + unused) & 1023) != 0) {
@@ -498,10 +504,13 @@ void DrawPreparation::Count(bool was_used) {
     }
     window = now;
     std::printf("Draw preparation: %llu prepared pipelines used, %llu not (%u workers, "
-                "%llu scanner rebases)\n",
+                "%llu scanner rebases; not used: %llu not ready yet, %llu unavailable, %llu checksum)\n",
                 static_cast<unsigned long long>(used), static_cast<unsigned long long>(unused),
-                worker_count, static_cast<unsigned long long>(rebases));
-    used = unused = 0;
+                worker_count, static_cast<unsigned long long>(rebases),
+                static_cast<unsigned long long>(unused_pending),
+                static_cast<unsigned long long>(unused_unavailable),
+                static_cast<unsigned long long>(unused_checksum));
+    used = unused = unused_pending = unused_unavailable = unused_checksum = 0;
 }
 
 } // namespace Vulkan

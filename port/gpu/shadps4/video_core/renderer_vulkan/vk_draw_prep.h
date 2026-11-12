@@ -114,7 +114,7 @@ public:
     const PreparedDraw* NextDraw();
 
     /// GPU thread: counts whether a prepared draw was used; prints every 5 s (TLG_FRAME_STATS).
-    void Count(bool used);
+    void Count(bool used, u32 state = 1, bool checksum_ok = true);
 
     struct Submission {
         u64 seq{};
@@ -161,6 +161,7 @@ public:
 private:
     u32 current_draw = 0;
     u64 used = 0, unused = 0;
+    u64 unused_pending = 0, unused_unavailable = 0, unused_checksum = 0; ///< tlg: why not used
     u32 worker_count = 0; ///< fixed before the worker threads start
     std::jthread scanner;
     std::vector<std::jthread> workers;

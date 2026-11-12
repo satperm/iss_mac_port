@@ -857,3 +857,31 @@ Instruments (Shader Timeline option) for per-shader cost.
   -> 408/s; screenshots Seattle/bridge/burning building identical. Not converted: shaders that SAMPLE their target
   (9215a6e8, 961c93ba). ShaderMetaVersion 16, PipelineKeyVersion 6. Installed MoltenVK backups:
   deps/{arm64,x86_64}/lib/libMoltenVK.dylib.before-fbfetch.
+- 2026-11-12: AFTER FB FETCH SEATTLE IS NO LONGER GPU-BOUND (~61 FPS, GPU idle ~53%, mostly starved: the
+  next command buffer arrives during the gap). The game keeps one frame at the GPU, so the chain game ->
+  stage A (2.1 us/draw x ~4800 draws) -> stage B -> MoltenVK -> GPU sets the frame. 40% of draws reached
+  stage A unprepared, all "not ready yet" (the stats line now says why): the DrawPrep workers ran at QoS
+  BACKGROUND (E-cores, low clocks) and waited ~25% on libc++ std::shared_mutex (its lock_shared takes a
+  mutex). Fixes: TlgRwLock (gpu/shim/tlg_rwlock.h) for programs_mutex; workers and scanner user-initiated on
+  Macs with >= 8 performance cores, background otherwise (TLG_PREP_QOS overrides): 47% -> 99% prepared.
+  lib_ab: bridge 85.5 -> 87.2, truck (utility vs user) 65.6 -> 68.3. The graphics WaitRegMem drains (~60/s)
+  are the VO label (flip) wait, not compute fences (TLG_WAIT_LOG=1 lists waits not met at once).
+  gpu_pstate now prints GPU watts too (IOReport Energy Model; no CPU energy there on an M3 Max).
+- 2026-11-12: THE SEATTLE CLOCK-DOWN, REVISED. It is not power or heat (16" M3 Max, Mac15,11: GPU ~18-19 W at
+  P13 in Seattle, 4 W at P1; no budget messages while it happened), not input, not the window, not the app
+  launch (scripts/macos/app_run.sh starts through ISS.app with its own launch.conf: same), not the compute queue
+  (TLG_ACB_QUEUE=0: same), not a 30 FPS cap (frame times 31.3 ms, not 33.3; the game never calls
+  sceVideoOutSetFlipRate: logged now). ~40 s into a standing Seattle run the GPU goes P13 -> P1 and stays there
+  at 96% busy (every pass ~4.5x slower). Seattle standing is now CPU/latency-bound (GPU idle ~53% at P13):
+  macOS's GPU performance controller seems to drop a GPU it sees underused and then holds the slow state. The
+  owner's moving play was GPU-bound (90-99%) and never dropped. Measure Seattle only before the drop (lib_ab's
+  60 s runs mostly are), and treat "GPU clocked down" runs as tainted.
+  Precompile (players' first start, never in agent_run: TLG_PRECOMPILE=0) fails 20 records with
+  resource_discover_pass.cpp:257 MarkReadConstBufferSharpSources assertions: the same with the 0.1.9 library.
+- 2026-11-12: tried TLG_EARLY_VO_LABEL (release the previous display buffer's label at the next flip's submission
+  instead of on screen): WaitRegMem drains 60 -> 32/s, FPS the same (Seattle 62-64 before the drop). The VO label
+  is not on the critical path; the game's own frame-counter wait (one frame at the GPU) is. Reverted.
+- 2026-11-12: rejected TLG_SUBMIT_IDLE (submit after N draws when the GPU has caught up): truck 68.2 -> 68.5,
+  bridge 86.6 -> 87.3 (noise). After today's PRs all three scenes are CPU/latency-bound (GPU idle 40-53%):
+  the next lever is per-draw CPU on stage A (~1.9 us), stage B (BindTextures/BindBuffers/AccessBuffer,
+  MVKCommandBuffer::reset in vkBeginCommandBuffer ~10%) and MoltenVK encoding on the host's main queue.

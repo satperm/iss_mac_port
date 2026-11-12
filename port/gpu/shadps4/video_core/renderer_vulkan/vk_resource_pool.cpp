@@ -78,7 +78,10 @@ CommandPool::CommandPool(const Instance& instance, Semaphore* work_semaphore, u3
                vk::to_string(pool_result));
     cmd_pool = std::move(pool);
     SetObjectName(device, *cmd_pool, "CommandPool");
-    if (const char* env = std::getenv("TLG_CMD_PRERESET"); env && *env == '1') {
+    // tlg: on by default since the scenes are CPU-bound (2026-11-12, lib_ab 3 x 60 s: truck 68.5 ->
+    // 69.5, bridge 87.5 -> 88.3, Seattle 61.8 -> 61.9; earlier, GPU-bound, it measured nothing).
+    // TLG_CMD_PRERESET=0: off.
+    if (const char* env = std::getenv("TLG_CMD_PRERESET"); !(env && *env == '0')) {
         prereset = true;
         reset_thread = std::jthread([this](std::stop_token stop) { ResetThread(stop); });
     }

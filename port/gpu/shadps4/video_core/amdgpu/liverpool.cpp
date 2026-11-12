@@ -1658,12 +1658,54 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 }
                 // Else the value may come from a fence that thread has yet to write: let it
                 // catch up before yielding to other queues.
+                // tlg: TLG_WAIT_LOG=1 (diagnostic): every 5 s, the graphics waits that were not met
+                // at once, per address: count, ms waited in all, last value and reference.
+                static const bool wait_log = [] {
+                    const char* env = std::getenv("TLG_WAIT_LOG");
+                    return env && *env == '1';
+                }();
+                const bool met_at_once = wait_reg_mem->Test(regs.reg_array);
+                const auto wait_start = wait_log && !met_at_once ? std::chrono::steady_clock::now()
+                                                                 : std::chrono::steady_clock::time_point{};
                 while (!wait_reg_mem->Test(regs.reg_array)) {
                     if (rasterizer && !rasterizer->DrawPipeIdle()) {
                         rasterizer->DrainDrawPipe(static_cast<u32>(opcode));
                         continue;
                     }
                     YIELD_GFX();
+                }
+                if (wait_log && !met_at_once) {
+                    struct Entry {
+                        u32 count;
+                        double ms;
+                        u32 ref, mask, func, space, last;
+                    };
+                    static std::map<u64, Entry> waits;
+                    static auto last_print = std::chrono::steady_clock::now();
+                    const auto now = std::chrono::steady_clock::now();
+                    auto& e = waits[wait_reg_mem->mem_space.Value() == PM4CmdWaitRegMem::MemSpace::Memory
+                                        ? wait_reg_mem->Address<VAddr>()
+                                        : u64(wait_reg_mem->poll_addr_lo_raw)];
+                    ++e.count;
+                    e.ms += std::chrono::duration<double, std::milli>(now - wait_start).count();
+                    e.ref = wait_reg_mem->ref;
+                    e.mask = wait_reg_mem->mask;
+                    e.func = u32(wait_reg_mem->function.Value());
+                    e.space = u32(wait_reg_mem->mem_space.Value());
+                    e.last = wait_reg_mem->mem_space.Value() == PM4CmdWaitRegMem::MemSpace::Memory
+                                 ? *wait_reg_mem->Address<const u32*>()
+                                 : 0;
+                    if (now - last_print > std::chrono::seconds(5)) {
+                        last_print = now;
+                        std::printf("Graphics waits not met at once (5 s):");
+                        for (const auto& [addr, w] : waits) {
+                            std::printf(" [%#llx n %u %.1f ms ref %#x mask %#x func %u space %u val %#x]",
+                                        static_cast<unsigned long long>(addr), w.count, w.ms, w.ref,
+                                        w.mask, w.func, w.space, w.last);
+                        }
+                        std::printf("\n");
+                        waits.clear();
+                    }
                 }
                 break;
             }
