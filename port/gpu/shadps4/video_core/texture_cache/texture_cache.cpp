@@ -123,21 +123,42 @@ void TextureCache::WatchReadback(VAddr address, u64 size) {
 void TextureCache::RetireReadbacks() {
     pending_readbacks.Retire([this](u64 tick) { return scheduler.IsFree(tick); },
         [this](auto& entry) {
+            // tlg: a copy a later queued one covers is not published (TLG_READBACK_SUPERSEDE=0:
+            // every copy is); the later copy keeps the pages watched until it is published.
+            static const bool supersede = [] {
+                const char* env = std::getenv("TLG_READBACK_SUPERSEDE");
+                return !(env && *env == '0');
+            }();
             if (entry.valid) {
-                entry.payload.Invalidate();
-                Core::Memory::Instance()->TryWriteBacking(std::bit_cast<u8*>(entry.address),
-                    entry.payload.mapped, entry.size);
+                if (supersede && pending_readbacks.Superseded(entry)) {
+                    ++readbacks_superseded;
+                } else {
+                    entry.payload.Invalidate();
+                    Core::Memory::Instance()->TryWriteBacking(std::bit_cast<u8*>(entry.address),
+                        entry.payload.mapped, entry.size);
+                }
                 if (entry.watched) WatchReadback<false>(entry.address, entry.size);
                 ++readbacks_completed;
             }
             runtime.GetStagingPool().FreeDeferred(entry.payload);
         });
+    PublishPendingSpan();
     has_pending_readbacks.store(!pending_readbacks.Empty(), std::memory_order_release);
 }
 
 bool TextureCache::ResolveReadbacks(VAddr address, u64 size, bool assume_locks,
                                     ReadbackSource source) {
     if (!deferred_readbacks || !has_pending_readbacks.load(std::memory_order_acquire)) return false;
+    // tlg: buffer binds ask for every draw while one image's copy is pending elsewhere: answer
+    // outside the queue's page span without the lock (TLG_READBACK_SPAN=0: always look).
+    static const bool span = [] {
+        const char* env = std::getenv("TLG_READBACK_SPAN");
+        return !(env && *env == '0');
+    }();
+    if (span && (address + size <= pending_lo.load(std::memory_order_relaxed) ||
+                 address >= pending_hi.load(std::memory_order_relaxed))) {
+        return false;
+    }
     // tlg (gow3_pc #386): image uploads read, and frees drop, exactly the image's bytes. A copy of
     // a neighboring image that only shares a page is published later over other bytes. Only with
     // stale readbacks: otherwise pending pages are read-protected and the copy threads fault.
@@ -322,6 +343,7 @@ void TextureCache::ProcessDownloadImages() {
                     }
                     pending_readbacks.Push(copy->guest_address, copy->size,
                         scheduler.CurrentTick(), copy->staging);
+                    PublishPendingSpan();
                     has_pending_readbacks.store(true, std::memory_order_release);
                     ++readbacks_queued;
                     readbacks_peak_bytes = std::max(readbacks_peak_bytes, pending_readbacks.Bytes());
@@ -333,13 +355,15 @@ void TextureCache::ProcessDownloadImages() {
         if (Vulkan::WaitDiagnostics::Enabled()) {
             const auto now = std::chrono::steady_clock::now();
             if (now - readback_report >= std::chrono::seconds(5)) {
-                std::printf("Readback profile: queued %llu, completed %llu, demand/budget waits %llu, canceled %llu, pending %.2f MiB, peak %.2f MiB\n",
+                std::printf("Readback profile: queued %llu, completed %llu (%llu superseded, not published), demand/budget waits %llu, canceled %llu, pending %.2f MiB, peak %.2f MiB\n",
                     static_cast<unsigned long long>(readbacks_queued),
                     static_cast<unsigned long long>(readbacks_completed),
+                    static_cast<unsigned long long>(readbacks_superseded),
                     static_cast<unsigned long long>(readbacks_waited),
                     static_cast<unsigned long long>(readbacks_canceled),
                     pending_readbacks.Bytes() / 1048576.0, readbacks_peak_bytes / 1048576.0);
                 readbacks_queued = readbacks_completed = readbacks_waited = readbacks_canceled = 0;
+                readbacks_superseded = 0;
                 readbacks_peak_bytes = pending_readbacks.Bytes();
                 readback_sources.Report(stdout);
                 if (stale_readbacks) {

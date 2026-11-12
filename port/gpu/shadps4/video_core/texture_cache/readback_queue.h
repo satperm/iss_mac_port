@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <cassert>
 #include <cstdlib>
@@ -68,12 +69,38 @@ public:
         }
         return released;
     }
+    /// tlg: a later valid copy covers all of `entry`'s bytes: publishing `entry` is wasted work,
+    /// the later one overwrites it (ISS: one 2 MiB linear image went back ~10 times a frame).
+    bool Superseded(const Entry& entry) const {
+        bool after = false;
+        for (const auto& other : entries) {
+            if (&other == &entry) {
+                after = true;
+                continue;
+            }
+            if (after && other.valid && other.address <= entry.address &&
+                entry.address + entry.size <= other.address + other.size) {
+                return true;
+            }
+        }
+        return false;
+    }
     template <typename Ready, typename Complete>
     void Retire(Ready&& ready, Complete&& complete) {
         while (!entries.empty() && ready(entries.front().tick)) {
             complete(entries.front());
             bytes -= entries.front().size;
             entries.pop_front();
+        }
+    }
+    /// tlg: pages every queued copy lies in ([lo, hi); lo > hi when empty). A superset of what
+    /// RequiredTick can match, for a lock-free early out (TextureCache::ResolveReadbacks).
+    void Bounds(std::uint64_t& lo, std::uint64_t& hi) const {
+        lo = ~std::uint64_t{0};
+        hi = 0;
+        for (const auto& entry : entries) {
+            lo = std::min(lo, entry.address & ~std::uint64_t{4095});
+            hi = std::max(hi, (entry.address + entry.size + 4095) & ~std::uint64_t{4095});
         }
     }
     std::uint64_t Bytes() const { return bytes; }

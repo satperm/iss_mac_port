@@ -586,7 +586,15 @@ private:
     ReadbackQueue<Vulkan::StagingBufferRef> pending_readbacks;
     std::mutex readback_mutex;
     std::atomic<bool> has_pending_readbacks{false};
-    u64 readbacks_queued = 0, readbacks_completed = 0, readbacks_waited = 0;
+    /// tlg: page span of the queued copies (ReadbackQueue::Bounds), published with the flag.
+    std::atomic<u64> pending_lo{~0ULL}, pending_hi{0};
+    void PublishPendingSpan() {
+        u64 lo, hi;
+        pending_readbacks.Bounds(lo, hi);
+        pending_lo.store(lo, std::memory_order_relaxed);
+        pending_hi.store(hi, std::memory_order_relaxed);
+    }
+    u64 readbacks_queued = 0, readbacks_completed = 0, readbacks_waited = 0, readbacks_superseded = 0;
     u64 readbacks_canceled = 0, readbacks_peak_bytes = 0;
     std::chrono::steady_clock::time_point readback_report = std::chrono::steady_clock::now();
     ReadbackSourceStats readback_sources;
