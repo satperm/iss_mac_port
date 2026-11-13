@@ -92,8 +92,10 @@ if [[ ${1:-} != --test-only ]]; then
     if [[ -f $ARM64_PREFIX/lib/pkgconfig/sdl3.pc && ${TLG_GPU_HOST:-1} != 0 ]]; then
         TLG_LTO=${TLG_LTO:-ON} bash scripts/macos/build_gpu_arm64.sh
         host_cc=(/usr/bin/clang -arch arm64 -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET -std=c11 -O2 -g -Wall -Wextra
-            -I. host/main.c host/host_runtime.c host/host_iss.c -Lout/gpu-arm64 -ltlggpu
-            -Wl,-rpath,"$PWD/out/gpu-arm64" -Wl,-rpath,"$ARM64_PREFIX/lib" -framework CoreFoundation)
+            -I. host/main.c host/host_runtime.c host/host_iss.c host/gpu_keepalive.m -fobjc-arc
+            -Lout/gpu-arm64 -ltlggpu
+            -Wl,-rpath,"$PWD/out/gpu-arm64" -Wl,-rpath,"$ARM64_PREFIX/lib" -framework CoreFoundation
+            -framework Foundation -framework Metal -lIOReport)
         "${host_cc[@]}" -o out/tlggpu-host
         # macOS 27: libmalloc takes addresses in the guest range before main(), so a second host
         # carries the range as a zero-fill segment the kernel maps at exec (host/guest_reservation.s).
