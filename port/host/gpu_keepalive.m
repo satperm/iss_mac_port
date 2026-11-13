@@ -14,8 +14,9 @@
 // Only when needed: where the game keeps the GPU full by itself, the filler cost FPS (truck crash
 // 74.5 -> 72.9, bridge 97.6 -> 97.1). A thread reads the GPU's performance-state residency twice a
 // second (IOReport "GPU Stats", as tools/gpu_probes/gpu_pstate.c; no root) and fills only while
-// the GPU is in use but not full (50..98% active for 2 s); every 10 s it stops for a second to
-// see what the game does alone (the controller needs ~30 s of idling to clock down).
+// the GPU is in use but not full (50..98% active for 2 s), or already slow without a frame rate
+// cap; every 10 s it stops for a second to see what the game does alone (the controller needs
+// ~30 s of idling to clock down).
 //
 // TLG_GPU_KEEPALIVE=0: off; =2: always fill (no measuring). TLG_GPU_KEEPALIVE_STEPS=<n>: loop
 // steps per thread (default 20000: ~0.4 ms of GPU time per dispatch when nothing else runs,
@@ -120,6 +121,11 @@ static void *keepalive_thread(void *arg) {
     CFDictionaryRef before = NULL;
     double state = 0;
     keepalive_active(sub, subscribed, &before, &state);
+    /* Already clocked down (it happened before this started, or in a pause): the filler pulls the
+     * GPU back up within seconds (Seattle 33.7 -> 70 FPS). Not with a frame rate cap: there the
+     * controller slows the GPU on purpose and the cap is still met. */
+    const char *cap = getenv("TLG_FPS_LIMIT");
+    const bool capped = cap && *cap && atoi(cap) > 0;
     unsigned short_of_full = 0, filled_ticks = 0, probe_ticks = 0;
     bool filling = false;
     unsigned long long fills = 0, ticks = 0;
@@ -137,11 +143,11 @@ static void *keepalive_thread(void *arg) {
             }
         } else if (probe_ticks) {
             /* The first sample still holds some filler work; the second decides. */
-            if (--probe_ticks == 0 && active >= 50 && active < 98) {
+            if (--probe_ticks == 0 && active >= 50 && (active < 98 || (!capped && state < 8))) {
                 filling = true;
             }
         } else {
-            short_of_full = active >= 50 && active < 98 ? short_of_full + 1 : 0;
+            short_of_full = active >= 50 && (active < 98 || (!capped && state < 8)) ? short_of_full + 1 : 0;
             if (short_of_full >= 4) filling = true;
         }
         if (filling && !atomic_load(&keepalive_filling)) {
