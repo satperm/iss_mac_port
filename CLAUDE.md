@@ -918,3 +918,10 @@ Instruments (Shader Timeline option) for per-shader cost.
   88.0 -> 91.6, Seattle same. chase-save 240 s at a 30 cap, smoke-save, chase-save clean; truck screenshot same.
   ACB copies already go as compute dispatches (no blit encoders). The rest of the chain (~3 ms) is ~530
   one-workgroup dispatches; next idea there: Metal System Trace of the compute queue with grouped fences.
+- 2026-11-13: SHADOW DETAIL (launcher Advanced > Quality: Full / Lower / Lowest -> TLG_SHADOW_CASCADES unset / -2 /
+  -3; also honoured with TLG_PERF_MODE; default Full, presets keep Full). Only scenes with sun-shadow cascades
+  gain: truck 72.8 -> 75.2 (-2) -> 80.0 (-3; 4781 -> 2400 draws), bridge (1467 draws) and Seattle (4519 draws)
+  do not change at all. Screenshots out/agent/shots-cascades/ (truck at -3 looks the same from the benchmark
+  spot). MVK_TLG_CONCURRENT_DISPATCH=0: truck 72.6 -> 52.8 (the concurrent encoder matters a lot);
+  TLG_ACB_UNORDERED=0: no change with grouped fences. Launcher part written by a Sonnet subagent in its own
+  worktree (no builds while measuring), reviewed and built here.
