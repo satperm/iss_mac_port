@@ -670,7 +670,11 @@ private:
     struct AcbFence {
         vk::Event event;
         Common::UniqueFunction<void> write;
+        u64 seen_ns = 0, run_ns = 0, defer_ns = 0, flush_ns = 0; ///< tlg: TLG_CHAIN_LOG
     };
+    /// tlg: the compute queue's open work goes to the GPU (stamps the fences in it, TLG_CHAIN_LOG).
+    void AcbFlush();
+    static bool AcbFenceGroups();
     struct AcbCopy {
         u32 src, dst, count, pad;
     };

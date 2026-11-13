@@ -907,3 +907,14 @@ Instruments (Shader Timeline option) for per-shader cost.
   TLG_PENDING_PRUNE=0): 69.9 -> 70.3. Dispatch path costs ~3 us per dispatch on each stage (530 a frame);
   stage B's share is the barrier tracker (31%). MoltenVK barriers are NOT no-ops for us: the patched concurrent
   compute encoder orders dispatches by them. Next: a timeline of the particle chain (where its ~5 ms go).
+- 2026-11-13: THE PARTICLE JOIN IS GPU TIME, AND EVERY FENCE ENDED A COMPUTE ENCODER. TLG_CHAIN_LOG=1 (per
+  compute-queue fence: seen by the command thread, run by the recording thread, event recorded, submitted, GPU
+  done): the chain's 28 fences a frame pass our threads in ~1 ms and are submitted at once; the GPU then needs
+  3.5-4 ms (3 ms with half the draws and a quarter of the pixels: ~1 ms is contention with graphics). MoltenVK
+  ends the Metal encoder at every vkCmdSetEvent (MVKCommandEncoder::signalEvent), so the chain restarted 28
+  compute encoders a frame. Now the fences recorded since the compute queue's last flush share one event
+  recorded at the flush (Rasterizer::AcbFlush; runs stay ordered by their memory barriers; TLG_ACB_FENCE_GROUP=0:
+  an event per fence) and TLG_ACB_FLUSH_FENCES defaults to 64 with it: lib_ab truck 70.5 -> 73.1, bridge
+  88.0 -> 91.6, Seattle same. chase-save 240 s at a 30 cap, smoke-save, chase-save clean; truck screenshot same.
+  ACB copies already go as compute dispatches (no blit encoders). The rest of the chain (~3 ms) is ~530
+  one-workgroup dispatches; next idea there: Metal System Trace of the compute queue with grouped fences.

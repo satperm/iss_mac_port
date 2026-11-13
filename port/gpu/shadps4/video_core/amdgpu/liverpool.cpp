@@ -40,6 +40,7 @@
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 
 namespace Vulkan { extern bool g_fence_kind_compute; }
+namespace Vulkan { extern u64 g_chain_seen_ns, g_chain_run_ns; }
 namespace AmdGpu {
 
 // tlg: TLG_GFX_UNORDERED=1 (experiment): compute dispatches of the graphics queue that follow each
@@ -476,11 +477,14 @@ bool PipelinedComputeOpcode(PM4ItOpcode opcode) {
 struct ComputeReleaseMem {
     u32 packet[sizeof(PM4CmdReleaseMem) / sizeof(u32)];
     u32 pipe_id;
+    u64 seen_ns; ///< tlg (TLG_CHAIN_LOG): when the GPU command thread reached the packet
 };
 
 // tlg: a compute queue's end-of-pipe fence, after the draws and dispatches handed over before it.
 void RunComputeReleaseMem(Vulkan::Rasterizer& rasterizer, const u8* data) {
     const auto& task = *reinterpret_cast<const ComputeReleaseMem*>(data);
+    Vulkan::g_chain_seen_ns = task.seen_ns;
+    Vulkan::g_chain_run_ns = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
     rasterizer.WaitHostCopies();
     rasterizer.WaitDeferredSignals();
     rasterizer.ProcessDownloadImages();
@@ -2239,6 +2243,7 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
                 ComputeReleaseMem task;
                 std::memcpy(task.packet, header, sizeof(task.packet));
                 task.pipe_id = queue.pipe_id;
+                task.seen_ns = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
                 rasterizer->RunInOrder(&RunComputeReleaseMem, &task, sizeof(task));
                 // tlg: its label is known to the waits in stream order (AcbFenceWaits).
                 const auto* release = reinterpret_cast<const PM4CmdReleaseMem*>(header);
