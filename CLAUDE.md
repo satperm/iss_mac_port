@@ -918,3 +918,14 @@ Instruments (Shader Timeline option) for per-shader cost.
   88.0 -> 91.6, Seattle same. chase-save 240 s at a 30 cap, smoke-save, chase-save clean; truck screenshot same.
   ACB copies already go as compute dispatches (no blit encoders). The rest of the chain (~3 ms) is ~530
   one-workgroup dispatches; next idea there: Metal System Trace of the compute queue with grouped fences.
+- 2026-11-13: MOLTENVK PREFILL=2 IS NOW A WIN (run_macos.sh default; 0: off). MVK_CONFIG_PERFORMANCE_TRACKING=1
+  (+ MVK_CONFIG_ACTIVITY_PERFORMANCE_LOGGING_STYLE=0, MVK_CONFIG_PERFORMANCE_LOGGING_FRAME_COUNT=900) showed ~14
+  command buffers a frame encoded for ~0.45 ms each on MoltenVK's queue thread AFTER vkQueueSubmit: a serial
+  stage behind the recording thread (graphics fence latency 4.2 ms with ~5 unfinished submissions). With
+  MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS=2 the encoding happens as the recorder thread records. lib_ab:
+  Seattle 65.0 -> 73.1, bridge 92.3 -> 97.5, truck 72.6 -> 73.4, burning building (chase-save) 78.9 -> 81.0;
+  =1 is slower (56.7 in Seattle). chase-save 240 s at a 30 cap, smoke-save (92.7 -> 97.7), chase-save clean;
+  memory the same. It gave nothing on 2026-10-29 (GPU-bound then). Seattle's frame (TLG_WAIT_PROBE): particle
+  join 26%, frame counter 24%, the main thread's own work ~36% + 8% waiting for its job workers.
+  DAY TOTAL vs the 0.1.10 state (3 x 60 s, switches off vs defaults): truck 70.2 -> 73.4, bridge 87.1 -> 97.2,
+  Seattle 63.3 -> 70.7.
