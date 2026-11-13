@@ -309,9 +309,27 @@ void TextureCache::ProcessDownloadImages() {
         std::scoped_lock readback_lock{readback_mutex};
         RetireReadbacks();
         std::unique_lock lock{download_images_mutex};
+        // tlg: one copy of an image per frame (TLG_READBACK_PER_FRAME=0: one at every fence it
+        // was written before, as before). ISS writes a 512x512 RGBA16F linear image all frame
+        // long and the game's ~11 fences a frame each copied its 2 MiB off the GPU (11 blit
+        // encoders, 0.4 ms of GPU time a frame in Seattle); nothing reads it on the CPU. The
+        // first fence after an image's first write of the frame still copies it (an image
+        // rendered once and read back, like a save thumbnail, is unchanged); later writes of the
+        // same frame go back with the next frame's first fence.
+        static const bool per_frame = [] {
+            const char* env = std::getenv("TLG_READBACK_PER_FRAME");
+            return !(env && *env == '0');
+        }();
+        const u64 frame = TlgFreeze::flips_submitted.load(std::memory_order_relaxed);
+        boost::container::small_vector<ImageId, 8> later;
         for (const ImageId image_id : download_images) {
-            const auto& image = slot_images[image_id];
+            auto& image = slot_images[image_id];
             if (False(image.flags & ImageFlagBits::GpuModified)) continue;
+            if (per_frame && image.download_frame == frame) {
+                later.push_back(image_id);
+                continue;
+            }
+            image.download_frame = frame;
             const u64 size = u64{image.info.pitch} * image.info.size.height *
                 image.info.size.depth * image.info.resources.layers * (image.info.num_bits / 8);
             if (!pending_readbacks.CanFit(size)) {
@@ -351,7 +369,8 @@ void TextureCache::ProcessDownloadImages() {
             }
         }
         download_images.clear();
-        has_download_images.store(false, std::memory_order_release);
+        download_images.insert(later.begin(), later.end());
+        has_download_images.store(!download_images.empty(), std::memory_order_release);
         if (Vulkan::WaitDiagnostics::Enabled()) {
             const auto now = std::chrono::steady_clock::now();
             if (now - readback_report >= std::chrono::seconds(5)) {

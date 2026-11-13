@@ -929,3 +929,13 @@ Instruments (Shader Timeline option) for per-shader cost.
   join 26%, frame counter 24%, the main thread's own work ~36% + 8% waiting for its job workers.
   DAY TOTAL vs the 0.1.10 state (3 x 60 s, switches off vs defaults): truck 70.2 -> 73.4, bridge 87.1 -> 97.2,
   Seattle 63.3 -> 70.7.
+- 2026-11-13: GPU-BOUND AGAIN, PASS PROFILE (scripts/macos/pass_profile.sh <scene> <label>: 4 s of Metal System
+  Trace at second 28 with TLG_PASS_LABELS=1, table by trace_passes.py). After prefill + grouped fences the frame
+  counter wait is nearly gone and the particle join is the queue for a full GPU (truck 43%, Seattle 44%, bridge
+  20% of the frame; GPU 99-100% active). Seattle: ~88 Metal encoders and 13.7 ms of GPU work a frame: compute
+  encoders 2.45 ms (19 a frame), main gbuffer pass 1.44, 11 vkCmdCopyImageToBuffer blits 0.39 (the 512x512
+  RGBA16F linear image, copied at every graphics fence). ONE DEFERRED DOWNLOAD PER IMAGE PER FRAME
+  (TLG_READBACK_PER_FRAME=0: at every fence): the first fence after an image's first write of a frame still
+  copies it, later writes go with the next frame's first fence. lib_ab 3 x 50 s: bridge 97.0 -> 98.3, truck
+  74.5 -> 75.1, Seattle 72.4 -> 72.7; chase-save 180 s at a 30 cap, smoke-save clean (readback waits there:
+  21 per 5 s, were 0).
