@@ -394,6 +394,8 @@ static int reserve_guest_range(void) {
  * doing: user-initiated, latency-critical work (also ends App Nap and timer coalescing for it).
  * TLG_HOST_ACTIVITY=1 (diagnostic, default off): measured in Seattle with the window in the background,
  * the drop came in 3 of 5 runs with it and 2 of 5 without. Through the Objective-C runtime: plain C here. */
+void tlg_gpu_keepalive_start(void);
+
 static void begin_game_activity(void) {
     const char *on = getenv("TLG_HOST_ACTIVITY"); /* default off: it did not keep the GPU clocked up */
     if (!(on && *on == '1')) return;
@@ -488,6 +490,7 @@ int main(int argc, char **argv) {
     send_ready(status);
     if (status) { say("setup failed; exiting"); return 1; }
     say("ready: serving the submit ring");
+    tlg_gpu_keepalive_start(); /* host/gpu_keepalive.m: the GPU stays clocked up in CPU-bound scenes */
     /* Cocoa: the renderer's window and its event loop run on the main thread. SDL stops the
      * main run loop at times (entering full screen): run it again; the window closing exits. */
     for (;;) {

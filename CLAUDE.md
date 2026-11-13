@@ -929,3 +929,15 @@ Instruments (Shader Timeline option) for per-shader cost.
   join 26%, frame counter 24%, the main thread's own work ~36% + 8% waiting for its job workers.
   DAY TOTAL vs the 0.1.10 state (3 x 60 s, switches off vs defaults): truck 70.2 -> 73.4, bridge 87.1 -> 97.2,
   Seattle 63.3 -> 70.7.
+- 2026-11-13: THE SEATTLE CLOCK-DOWN EXPLAINED AND FIXED (host/gpu_keepalive.m). macOS's GPU performance
+  controller clocks the GPU down when it is in use but not full: ~30-40 s at ~94% active (a CPU-bound scene
+  leaves gaps) -> P13 -> P1 within seconds, and it STAYS at P1 at 98% (Seattle 72 -> 33 FPS). Reproduced at the
+  truck with TLG_STAGE_DELAY_B_NS=1500 (GPU 93-95% active: 52 -> 29.5 FPS at ~50 s); scenes at 99-100% never
+  drop. Not thermal (kernel "Thermal Budget" keeps rising), not power (AC, powermode 0), Game Mode on throughout.
+  With a 30 FPS cap the controller also goes to P1 and the cap is still met (fine, less heat). Fix: one small
+  compute dispatch at a time on a Metal queue of its own in tlggpu-host fills the gaps (GPU reads 100%, stays at
+  P13): Seattle 120 s at 72-74 FPS. Always on it cost FPS where the GPU is full anyway (truck 74.5 -> 72.9), so
+  a thread reads GPUPH residency twice a second (IOReport, as gpu_pstate.c) and fills only while the GPU is
+  50..98% active for 2 s, pausing 1 s every 10 s to look at the game alone: truck 73.8 / 73.7, bridge 97.7 /
+  97.1 (off / on, 3 x 50 s). TLG_GPU_KEEPALIVE=0 off, =2 always, _STEPS (20000), _LOG=1. Test tool:
+  tools/gpu_probes/gpu_fill.swift. Open: whether the filler pulls a GPU that is already at P1 back up.
