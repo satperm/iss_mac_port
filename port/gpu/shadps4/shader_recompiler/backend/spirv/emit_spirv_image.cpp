@@ -81,9 +81,26 @@ Id EmitImageSampleRaw(EmitContext& ctx, IR::Inst* inst, u32 handle, Id address1,
     UNREACHABLE_MSG("Unreachable instruction");
 }
 
+namespace {
+// tlg (macOS): a sample the resource pass took for the fragment's own pixel (TLG_FB_FETCH_SAMPLE):
+// a framebuffer fetch, as EmitImageRead does for such loads.
+Id FbFetchTexel(EmitContext& ctx, const auto& texture) {
+    const Id color_type = texture.data_types->Get(4);
+    const Id image = ctx.OpLoad(texture.image_type, texture.id);
+    const Id zero = ctx.ConstantComposite(ctx.S32[2], ctx.ConstS32(0), ctx.ConstS32(0));
+    const Id raw = ctx.OpImageRead(color_type, image, zero);
+    const auto& sw = texture.fb_swizzle;
+    const Id texel = ctx.OpVectorShuffle(color_type, raw, raw, sw[0], sw[1], sw[2], sw[3]);
+    return texture.is_integer ? ctx.OpBitcast(ctx.F32[4], texel) : texel;
+}
+} // namespace
+
 Id EmitImageSampleImplicitLod(EmitContext& ctx, IR::Inst* inst, u32 handle, Id coords, Id bias,
                               const IR::Value& offset) {
     const auto& texture = ctx.images[handle & 0xFFFF];
+    if (texture.is_fb_fetch) {
+        return FbFetchTexel(ctx, texture);
+    }
     const Id image = ctx.OpLoad(texture.image_type, texture.id);
     const Id result_type = texture.data_types->Get(4);
     const Id sampler = ctx.OpLoad(ctx.sampler_type, ctx.samplers[handle >> 16]);
@@ -99,6 +116,9 @@ Id EmitImageSampleImplicitLod(EmitContext& ctx, IR::Inst* inst, u32 handle, Id c
 Id EmitImageSampleExplicitLod(EmitContext& ctx, IR::Inst* inst, u32 handle, Id coords, Id lod,
                               const IR::Value& offset) {
     const auto& texture = ctx.images[handle & 0xFFFF];
+    if (texture.is_fb_fetch) {
+        return FbFetchTexel(ctx, texture);
+    }
     const Id image = ctx.OpLoad(texture.image_type, texture.id);
     const Id result_type = texture.data_types->Get(4);
     const Id sampler = ctx.OpLoad(ctx.sampler_type, ctx.samplers[handle >> 16]);

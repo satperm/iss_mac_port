@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+#include <cstdlib>
+#include <vector>
 #include <limits>
 #include <optional>
 #include "shader_recompiler/info.h"
@@ -280,6 +283,38 @@ static bool IsOwnPixelLoad(const IR::Inst& inst) {
     return true;
 }
 
+// tlg (macOS, diagnostic): TLG_FB_FETCH_SAMPLE=<hex pixel shader hashes, comma-separated>: their
+// plain 2D samples (no offset, array or depth compare) are taken to read the fragment's own pixel
+// and may become framebuffer fetches, as a texel load at the pixel does. True only when the
+// coordinates land on the pixel's centre (a screen-space decal projection); compare the picture.
+static bool ForcedFbSample(const Info& info, const IR::Inst& inst) {
+    static const std::vector<u64> hashes = [] {
+        std::vector<u64> list;
+        if (const char* env = std::getenv("TLG_FB_FETCH_SAMPLE")) {
+            for (const char* p = env; *p;) {
+                char* end = nullptr;
+                const u64 v = std::strtoull(p, &end, 16);
+                if (end == p) break;
+                list.push_back(v);
+                p = *end == ',' ? end + 1 : end;
+            }
+        }
+        return list;
+    }();
+    if (hashes.empty() || info.sw_stage != SwStage::Fragment ||
+        std::ranges::find(hashes, info.pgm_hash & 0xffffffffull) == hashes.end()) {
+        return false;
+    }
+    const auto opcode = inst.GetOpcode();
+    // At this pass samples are still ImageSampleRaw (lowered to Implicit/ExplicitLod later).
+    if (opcode != IR::Opcode::ImageSampleRaw && opcode != IR::Opcode::ImageSampleImplicitLod &&
+        opcode != IR::Opcode::ImageSampleExplicitLod) {
+        return false;
+    }
+    const auto flags = inst.Flags<IR::TextureInstInfo>();
+    return !flags.is_array && !flags.is_depth && !flags.has_offset;
+}
+
 void PatchImageSharp(const ResourceDiscovery& resource, Info& info, Descriptors& descriptors,
                      const Profile& profile) {
     IR::Inst& inst = *resource.user;
@@ -309,7 +344,7 @@ void PatchImageSharp(const ResourceDiscovery& resource, Info& info, Descriptors&
         .is_written = is_written,
         .is_r128 = bool(inst_info.is_r128),
         .needs_native = !normalized_sample,
-        .fb_fetchable = IsOwnPixelLoad(inst),
+        .fb_fetchable = IsOwnPixelLoad(inst) || ForcedFbSample(info, inst),
         .post_op = resource.sharps[0].post_op,
     };
 

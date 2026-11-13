@@ -971,3 +971,11 @@ Instruments (Shader Timeline option) for per-shader cost.
   73.1 -> 72.4. LESSON: 60 s benchmarks hide session decay; soak 8-10 min before a release. Never call
   vkWaitSemaphores per submission on MoltenVK. The game process's "memory" line in agent_run grows with
   streaming (388 -> 2150 MiB in 10 min), not a leak in the host.
+- 2026-11-14 (after 0.1.11): PASS RESTARTS ARE CHEAP ON AN M3 MAX. The remaining ~2,100 restarts/s at the truck are
+  mostly ps 3539184e (~20 a frame, 1920x1080 RGBA8 + D32S8): a screen-space decal that SAMPLES its own target at
+  (Param0.xy / Param0.w) * c36.. + c37.. (projective UV), so IsOwnPixelLoad does not match. Diagnostic
+  TLG_FB_FETCH_SAMPLE=<hex ps hashes> (resource_patching_pass.cpp ForcedFbSample; at that pass samples are still
+  ImageSampleRaw) takes its plain 2D samples as own-pixel reads -> framebuffer fetch: restarts 2163 -> 753/s,
+  Metal encoders 101 -> 83 a frame, screenshot the same by eye, but FPS 75.2 -> 75.2 and GPU work per frame the
+  same (14.9 vs 15.4 ms, noise). Store/load of the tile costs ~nothing here: do not chase restarts or store
+  actions for FPS on the M3 Max (maybe on smaller GPUs; not measurable here). Not shipped.
