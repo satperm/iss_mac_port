@@ -37,9 +37,16 @@ export VK_DRIVER_FILES=${VK_DRIVER_FILES:-$PWD/deps/x86_64/share/vulkan/icd.d/Mo
 # without, a steady ~16 FPS there before the NoContraction change, ~30 after.
 export MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS=${MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS:-0}
 # Room for the ~80 submissions a frame the tessellation limits make (MoltenVK's default of 64
-# active command buffers made submissions wait). Not MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS=2:
-# encoding at record time crashed in the driver's occlusion query setup (cannery area).
+# active command buffers made submissions wait).
 export MVK_CONFIG_MAX_ACTIVE_METAL_COMMAND_BUFFERS_PER_QUEUE=${MVK_CONFIG_MAX_ACTIVE_METAL_COMMAND_BUFFERS_PER_QUEUE:-512}
+# MoltenVK encodes Metal commands as they are recorded (on the renderer's recording thread) instead
+# of after vkQueueSubmit on its queue thread, where ~14 command buffers a frame queued up for
+# ~0.45 ms each (MVK_CONFIG_PERFORMANCE_TRACKING): the GPU gets its work earlier. M3 Max 2026-11-13:
+# Seattle 65.0 -> 73.1 FPS, bridge 92.3 -> 97.5, truck 72.6 -> 73.4, burning building 78.9 -> 81.0;
+# chase-save 240 s at a 30 FPS cap, smoke-save, chase-save clean; same memory. It crashed in the
+# driver's occlusion query setup before 2026-10-29 and gave nothing while the GPU was the limit.
+# 0: encoding at submission, as before 0.1.11. (1, encoding on a thread per command buffer: slower.)
+export MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS=${MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS:-2}
 # Synchronous submits (MoltenVK encodes in vkQueueSubmit). The asynchronous mode (0: encoding on
 # MoltenVK's queue thread, cannery benchmark 24.0 -> 27.0 FPS) crashed at start-up right after the
 # splash screen in Metal's scheduled handlers (objc_msgSend in didSchedule, Block_copy in

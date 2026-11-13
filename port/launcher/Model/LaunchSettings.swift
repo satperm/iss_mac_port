@@ -31,6 +31,20 @@ enum RenderScale: String, CaseIterable, Identifiable {
     var label: String { self == .full ? "100%" : "\(rawValue)%" }
 }
 
+/// How many sun-shadow cascades the game draws (TLG_SHADOW_CASCADES): Full leaves the variable unset;
+/// fewer cascades mean far fewer draws in open scenes, with coarser or missing distant shadows.
+enum ShadowDetail: String, CaseIterable, Identifiable {
+    case full = "", lower = "-2", lowest = "-3"
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .full: "Full"
+        case .lower: "Lower"
+        case .lowest: "Lowest"
+        }
+    }
+}
+
 /// One frame counter at a time: the game's own FPS counter (TLG_SHOW_FPS) or Apple's Metal
 /// Performance HUD (MTL_HUD_ENABLED).
 enum FrameCounter: String, CaseIterable, Identifiable {
@@ -121,6 +135,7 @@ enum PerformancePreset: String, CaseIterable, Identifiable {
         }
     }
     var particles: ParticleMode { self == .slowest ? .off : .auto }
+    var shadowDetail: ShadowDetail { .full }
 }
 
 struct LaunchSettings: Equatable {
@@ -134,6 +149,7 @@ struct LaunchSettings: Equatable {
     var quality = QualityPreset.original
     var fpsCap = FrameRateCap.display
     var renderScale = RenderScale.full
+    var shadowDetail = ShadowDetail.full
     var particles = ParticleMode.auto
     var textLanguage = "1"
     var voiceLanguage = ""
@@ -153,6 +169,7 @@ struct LaunchSettings: Equatable {
         get {
             PerformancePreset.allCases.first {
                 $0.quality == quality && $0.fpsCap == fpsCap && $0.renderScale == renderScale && $0.particles == particles
+                    && $0.shadowDetail == shadowDetail
             }
         }
         set {
@@ -161,6 +178,7 @@ struct LaunchSettings: Equatable {
             fpsCap = p.fpsCap
             renderScale = p.renderScale
             particles = p.particles
+            shadowDetail = p.shadowDetail
         }
     }
 
@@ -183,6 +201,7 @@ struct LaunchSettings: Equatable {
         quality = value("TLG_PERF_MODE").flatMap(QualityPreset.init(rawValue:)) ?? .original
         fpsCap = value("TLG_FPS_LIMIT").flatMap(FrameRateCap.init(rawValue:)) ?? .display
         renderScale = value("TLG_RENDER_SCALE").flatMap(RenderScale.init(rawValue:)) ?? .full
+        shadowDetail = value("TLG_SHADOW_CASCADES").flatMap(ShadowDetail.init(rawValue:)) ?? .full
         textLanguage = value("TLG_LANGUAGE").flatMap { code in GameLanguage.text.contains { $0.code == code } ? code : nil } ?? "1"
         voiceLanguage = value("TLG_AUDIO_LANGUAGE") ?? ""
         particles = value("TLG_PARTICLES").flatMap(ParticleMode.init(rawValue:)) ?? .auto
@@ -203,6 +222,7 @@ struct LaunchSettings: Equatable {
         set("TLG_PERF_MODE", quality == .original ? nil : quality.rawValue)
         set("TLG_FPS_LIMIT", fpsCap == .display ? nil : fpsCap.rawValue)
         set("TLG_RENDER_SCALE", renderScale == .full ? nil : renderScale.rawValue)
+        set("TLG_SHADOW_CASCADES", shadowDetail == .full ? nil : shadowDetail.rawValue)
         set("TLG_PARTICLES", particles == .auto ? nil : particles.rawValue)
         set("TLG_LANGUAGE", textLanguage)
         set("TLG_AUDIO_LANGUAGE", voiceLanguage.isEmpty ? nil : voiceLanguage)
@@ -224,7 +244,7 @@ struct LaunchSettings: Equatable {
     /// For the session log and crash reports.
     var summary: [String] {
         [fullscreen ? "full screen" : "windowed", stretch ? "stretched" : "16:9", "pacing \(pacing.label)",
-         "quality \(quality.label)", "FPS cap \(fpsCap.label)", "render scale \(renderScale.label)",
+         "quality \(quality.label)", "FPS cap \(fpsCap.label)", "render scale \(renderScale.label)", "shadow detail \(shadowDetail.label)",
          "particles \(particles.label)", gpuProcess ? "GPU process" : "single process"]
     }
 

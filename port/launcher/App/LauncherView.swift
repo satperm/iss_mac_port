@@ -188,6 +188,12 @@ struct LauncherView: View {
                     .pickerStyle(.segmented)
                     Text("30 FPS is steadier on slower Macs than an uneven 35-50. Render scale draws the game at a part of 1080p (sharp at 100%, softer below) and scales it up: more FPS where the GPU is the limit.")
                         .font(.caption).foregroundStyle(.secondary)
+                    Picker("Shadow detail", selection: $model.settings.shadowDetail) {
+                        ForEach(ShadowDetail.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    Text("Fewer sun-shadow cascades: distant shadows get coarser or disappear, and the game draws far fewer objects. Lowest roughly halves the draws in open scenes.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
             .formStyle(.grouped)

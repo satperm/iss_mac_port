@@ -2738,7 +2738,7 @@ bool Rasterizer::AcbFillGds(u32 offset, u32 num_bytes, u32 value) {
         cmdbuf.fillBuffer(gds, offset, num_bytes, value);
     });
     // The next dispatches, in another encoder of the same queue: ordered by submission.
-    acb_scheduler->Flush();
+    AcbFlush();
     return true;
 }
 
@@ -2758,13 +2758,78 @@ bool Rasterizer::AcbCopyGds(VAddr dst, u32 gds_offset, u32 num_bytes) {
     const vk::Buffer alias = buffer_cache.UnifiedAlias();
     const u64 dst_offset = offset;
     // The dispatches that count, then the copy, then the dispatches that read it: submission order.
-    acb_scheduler->Flush();
+    AcbFlush();
     acb_scheduler->Record([=](vk::CommandBuffer cmdbuf) {
         const vk::BufferCopy region{.srcOffset = gds_offset, .dstOffset = dst_offset, .size = num_bytes};
         cmdbuf.copyBuffer(gds, alias, region);
     });
-    acb_scheduler->Flush();
+    AcbFlush();
     return true;
+}
+
+u64 g_chain_seen_ns = 0, g_chain_run_ns = 0;
+
+namespace {
+bool ChainLog() {
+    static const bool on = [] {
+        const char* env = std::getenv("TLG_CHAIN_LOG");
+        return env && *env == '1';
+    }();
+    return on;
+}
+} // namespace
+
+bool Rasterizer::AcbFenceGroups() {
+    // tlg: the compute queue's fences recorded since its last flush share one event, recorded
+    // at the flush (TLG_ACB_FENCE_GROUP=0: an event per fence, as before 0.1.11). MoltenVK ends the Metal compute encoder at every
+    // vkCmdSetEvent (MVKCommandEncoder::signalEvent): ISS's particle chain has ~28 fences a
+    // frame, each between runs of ~19 small dispatches, so the GPU restarted 28 encoders. The
+    // runs stay ordered by the memory barrier at each run's first dispatch; the labels of one
+    // flush are written together when its work is done (the game waits for the last one).
+    // M3 Max, lib_ab 3 x 50-60 s, with TLG_ACB_FLUSH_FENCES 64: truck 70.5 -> 73.1, bridge
+    // 88.0 -> 91.6, Seattle the same (few particles); chase-save 240 s at a 30 FPS cap clean.
+    static const bool on = [] {
+        const char* env = std::getenv("TLG_ACB_FENCE_GROUP");
+        return !(env && *env == '0');
+    }();
+    return on;
+}
+
+void Rasterizer::AcbFlush() {
+    if (AcbFenceGroups()) {
+        vk::Event event{};
+        {
+            std::scoped_lock lock{acb_fence_mutex};
+            if (!acb_fences.empty() && !acb_fences.back().event) {
+                if (!acb_free_events.empty()) {
+                    event = acb_free_events.back();
+                    acb_free_events.pop_back();
+                } else {
+                    const auto [result, created] = instance.GetDevice().createEvent(vk::EventCreateInfo{});
+                    ASSERT_MSG(result == vk::Result::eSuccess, "createEvent: {}", vk::to_string(result));
+                    event = created;
+                }
+                for (auto it = acb_fences.rbegin(); it != acb_fences.rend() && !it->event; ++it) {
+                    it->event = event;
+                }
+            }
+        }
+        if (event) {
+            acb_scheduler->Record([event](vk::CommandBuffer cmdbuf) {
+                cmdbuf.setEvent(event, vk::PipelineStageFlagBits::eAllCommands);
+            });
+            acb_scheduler->MarkCompanionWork();
+            acb_fence_cv.notify_one();
+        }
+    }
+    if (ChainLog()) {
+        const u64 now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+        std::scoped_lock lock{acb_fence_mutex};
+        for (auto it = acb_fences.rbegin(); it != acb_fences.rend() && it->flush_ns == 0; ++it) {
+            it->flush_ns = now;
+        }
+    }
+    acb_scheduler->Flush();
 }
 
 void Rasterizer::AcbFenceThread(std::stop_token stop) {
@@ -2773,6 +2838,7 @@ void Rasterizer::AcbFenceThread(std::stop_token stop) {
     u32 spins = 0;
     while (!stop.stop_requested()) {
         AcbFence fence;
+        bool shared = false;
         {
             std::unique_lock lock{acb_fence_mutex};
             acb_fence_cv.wait(lock, stop, [this] { return !acb_fences.empty(); });
@@ -2780,7 +2846,9 @@ void Rasterizer::AcbFenceThread(std::stop_token stop) {
                 return;
             }
             // The front stays queued until done: the recording side only appends.
-            if (device.getEventStatus(acb_fences.front().event) != vk::Result::eEventSet) {
+            // (TLG_ACB_FENCE_GROUP: no event yet = not flushed yet.)
+            if (!acb_fences.front().event ||
+                device.getEventStatus(acb_fences.front().event) != vk::Result::eEventSet) {
                 lock.unlock();
                 if (++spins < 64) {
                     std::this_thread::yield();
@@ -2791,9 +2859,56 @@ void Rasterizer::AcbFenceThread(std::stop_token stop) {
             }
             fence = std::move(acb_fences.front());
             acb_fences.pop_front();
+            // The next fence of the same flush shares the event: it stays set for it.
+            shared = !acb_fences.empty() && acb_fences.front().event == fence.event;
         }
         spins = 0;
+        const u64 set_ns = ChainLog() ? clock_gettime_nsec_np(CLOCK_UPTIME_RAW) : 0;
         fence.write();
+        if (ChainLog() && fence.seen_ns) {
+            // tlg: TLG_CHAIN_LOG=1: where a compute-queue fence spends its time, every 5 s:
+            // seen by the GPU command thread -> run by the recording thread -> deferred (its
+            // event recorded) -> flushed (submitted) -> the GPU set the event -> written.
+            struct Rec {
+                u64 seen, run, defer, flush, set, done;
+            };
+            static std::vector<Rec> recs;
+            static u64 report = 0;
+            const u64 now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+            recs.push_back({fence.seen_ns, fence.run_ns, fence.defer_ns, fence.flush_ns, set_ns, now});
+            if (!report) report = now;
+            if (now - report >= 5'000'000'000ull && recs.size() > 64) {
+                report = now;
+                const auto median = [&](auto&& f) {
+                    std::vector<double> v;
+                    for (const auto& r : recs) v.push_back(f(r));
+                    std::ranges::sort(v);
+                    return v[v.size() / 2];
+                };
+                const auto ms = [](u64 a, u64 b) { return b > a ? (b - a) / 1e6 : 0.0; };
+                std::printf("Chain log (5 s): %zu compute fences; medians, ms: command thread -> "
+                            "recording thread %.2f, -> event recorded %.2f, -> submitted %.2f, -> "
+                            "GPU done %.2f, -> written %.2f; total %.2f\n",
+                            recs.size(), median([&](const Rec& r) { return ms(r.seen, r.run); }),
+                            median([&](const Rec& r) { return ms(r.run, r.defer); }),
+                            median([&](const Rec& r) { return ms(r.defer, r.flush); }),
+                            median([&](const Rec& r) { return ms(r.flush, r.set); }),
+                            median([&](const Rec& r) { return ms(r.set, r.done); }),
+                            median([&](const Rec& r) { return ms(r.seen, r.done); }));
+                const size_t first = recs.size() - 64;
+                std::printf("  last 64 fences (ms from the first: seen, run, recorded, submitted, GPU done):\n");
+                for (size_t i = first; i < recs.size(); ++i) {
+                    const auto& r = recs[i];
+                    const u64 base = recs[first].seen;
+                    std::printf("   %7.2f %7.2f %7.2f %7.2f %7.2f\n", ms(base, r.seen), ms(base, r.run),
+                                ms(base, r.defer), ms(base, r.flush), ms(base, r.set));
+                }
+                recs.clear();
+            }
+        }
+        if (shared) {
+            continue;
+        }
         (void)device.resetEvent(fence.event);
         std::scoped_lock lock{acb_fence_mutex};
         acb_free_events.push_back(fence.event);
@@ -2804,36 +2919,41 @@ void Rasterizer::AcbDeferFence(Common::UniqueFunction<void>&& write) {
     AcbFlushCopies();
     const vk::Device device = instance.GetDevice();
     vk::Event event{};
-    {
+    const bool grouped = AcbFenceGroups();
+    if (!grouped) {
         std::scoped_lock lock{acb_fence_mutex};
         if (!acb_free_events.empty()) {
             event = acb_free_events.back();
             acb_free_events.pop_back();
         }
     }
-    if (!event) {
-        const auto [result, created] = device.createEvent(vk::EventCreateInfo{});
-        ASSERT_MSG(result == vk::Result::eSuccess, "createEvent: {}", vk::to_string(result));
-        event = created;
+    if (!grouped) {
+        if (!event) {
+            const auto [result, created] = device.createEvent(vk::EventCreateInfo{});
+            ASSERT_MSG(result == vk::Result::eSuccess, "createEvent: {}", vk::to_string(result));
+            event = created;
+        }
+        acb_scheduler->Record([event](vk::CommandBuffer cmdbuf) {
+            cmdbuf.setEvent(event, vk::PipelineStageFlagBits::eAllCommands);
+        });
+        acb_scheduler->MarkCompanionWork();
     }
-    acb_scheduler->Record([event](vk::CommandBuffer cmdbuf) {
-        cmdbuf.setEvent(event, vk::PipelineStageFlagBits::eAllCommands);
-    });
-    acb_scheduler->MarkCompanionWork();
     {
         std::scoped_lock lock{acb_fence_mutex};
-        acb_fences.push_back({event, std::move(write)});
+        acb_fences.push_back({event, std::move(write), g_chain_seen_ns, g_chain_run_ns,
+                              ChainLog() ? clock_gettime_nsec_np(CLOCK_UPTIME_RAW) : 0, 0});
     }
     acb_fence_cv.notify_one();
     // Stage B flushes when it runs out of packets (AcbIdle); under a steady stream of packets, every few
-    // fences. TLG_ACB_FLUSH_FENCES (default 8), 1: a command buffer per fence.
+    // fences. TLG_ACB_FLUSH_FENCES (default 64 with grouped fences, where a flush costs the
+    // fences before it nothing extra; 8 with an event per fence), 1: a command buffer per fence.
     static const u32 flush_fences = [] {
         const char* v = std::getenv("TLG_ACB_FLUSH_FENCES");
-        return v && *v ? u32(std::atoi(v)) : 8u;
+        return v && *v ? u32(std::atoi(v)) : AcbFenceGroups() ? 64u : 8u;
     }();
     if (++acb_fences_since_flush >= flush_fences || !DrawPipe::OnStageB()) {
         acb_fences_since_flush = 0;
-        acb_scheduler->Flush();
+        AcbFlush();
     }
 }
 
@@ -2868,7 +2988,7 @@ void Rasterizer::AcbIdle(void* context) {
     std::scoped_lock lock{self->acb_scheduler->CompanionMutex()};
     self->AcbFlushCopies();
     self->acb_fences_since_flush = 0;
-    self->acb_scheduler->Flush();
+    self->AcbFlush();
 }
 
 bool Rasterizer::AcbCopyMemory(VAddr dst, VAddr src, u32 num_bytes) {

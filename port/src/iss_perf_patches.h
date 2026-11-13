@@ -51,7 +51,10 @@ static int iss_perf_mode(unsigned char *image, uint64_t size) {
     unsigned char row[20], level[4] = {(unsigned char)(low ? 1 : 2), 0, 0, 0}, slots[1] = {(unsigned char)(low ? 2 : 0)};
     memcpy(row, row0, sizeof row);
     const float lod = low ? 0.7f : 0.5f;
-    const int32_t cascades = -1;
+    /* The launcher's "Shadow detail" (TLG_SHADOW_CASCADES=-2/-3) also applies with a mode. */
+    int32_t cascades = -1;
+    { const char *c = getenv("TLG_SHADOW_CASCADES"); const long v = c && *c ? strtol(c, NULL, 10) : 0;
+      if (v < -1 && v >= -4) cascades = (int32_t)v; }
     memcpy(row, &lod, 4);
     memcpy(row + 4, &cascades, 4);
     const IssPerfBytes original[] = {
@@ -70,9 +73,9 @@ static int iss_perf_mode(unsigned char *image, uint64_t size) {
     const unsigned n = office ? 7 : 5;
     if (!iss_perf_matches(image, size, original, n, "TLG_PERF_MODE")) return 0;
     iss_perf_write(image, patched, n);
-    printf("Performance patches: TLG_PERF_MODE=%s: LOD scale %.1f, one sun-shadow cascade less, particles at %s "
+    printf("Performance patches: TLG_PERF_MODE=%s: LOD scale %.1f, sun-shadow cascades %d, particles at %s "
            "resolution, %u high-res texture blocks%s\n",
-           low ? "low" : "office", lod, low ? "half" : "quarter", (unsigned)slots[0], office ? ", half the pedestrians" : "");
+           low ? "low" : "office", lod, (int)cascades, low ? "half" : "quarter", (unsigned)slots[0], office ? ", half the pedestrians" : "");
     return 1;
 }
 
@@ -124,7 +127,7 @@ static void iss_particle_light_one_submit(unsigned char *image, uint64_t size, i
     puts("Performance patches: TLG_PARTICLE_LIGHT_ONE_SUBMIT: one ring submit for the particle lights");
 }
 
-/* TLG_SHADOW_CASCADES=<-1..-4> (diagnostic, without TLG_PERF_MODE): only the sun-shadow cascade
+/* TLG_SHADOW_CASCADES=<-1..-4> (the launcher's "Shadow detail"; without TLG_PERF_MODE): only the sun-shadow cascade
  * offset of quality row 0, everything else as the game ships it. Shadow draws are over half of
  * the truck scene's draws: this measures what fewer cascades give. */
 static int iss_shadow_cascades(unsigned char *image, uint64_t size) {

@@ -907,3 +907,67 @@ Instruments (Shader Timeline option) for per-shader cost.
   TLG_PENDING_PRUNE=0): 69.9 -> 70.3. Dispatch path costs ~3 us per dispatch on each stage (530 a frame);
   stage B's share is the barrier tracker (31%). MoltenVK barriers are NOT no-ops for us: the patched concurrent
   compute encoder orders dispatches by them. Next: a timeline of the particle chain (where its ~5 ms go).
+- 2026-11-13: THE PARTICLE JOIN IS GPU TIME, AND EVERY FENCE ENDED A COMPUTE ENCODER. TLG_CHAIN_LOG=1 (per
+  compute-queue fence: seen by the command thread, run by the recording thread, event recorded, submitted, GPU
+  done): the chain's 28 fences a frame pass our threads in ~1 ms and are submitted at once; the GPU then needs
+  3.5-4 ms (3 ms with half the draws and a quarter of the pixels: ~1 ms is contention with graphics). MoltenVK
+  ends the Metal encoder at every vkCmdSetEvent (MVKCommandEncoder::signalEvent), so the chain restarted 28
+  compute encoders a frame. Now the fences recorded since the compute queue's last flush share one event
+  recorded at the flush (Rasterizer::AcbFlush; runs stay ordered by their memory barriers; TLG_ACB_FENCE_GROUP=0:
+  an event per fence) and TLG_ACB_FLUSH_FENCES defaults to 64 with it: lib_ab truck 70.5 -> 73.1, bridge
+  88.0 -> 91.6, Seattle same. chase-save 240 s at a 30 cap, smoke-save, chase-save clean; truck screenshot same.
+  ACB copies already go as compute dispatches (no blit encoders). The rest of the chain (~3 ms) is ~530
+  one-workgroup dispatches; next idea there: Metal System Trace of the compute queue with grouped fences.
+- 2026-11-13: SHADOW DETAIL (launcher Advanced > Quality: Full / Lower / Lowest -> TLG_SHADOW_CASCADES unset / -2 /
+  -3; also honoured with TLG_PERF_MODE; default Full, presets keep Full). Only scenes with sun-shadow cascades
+  gain: truck 72.8 -> 75.2 (-2) -> 80.0 (-3; 4781 -> 2400 draws), bridge (1467 draws) and Seattle (4519 draws)
+  do not change at all. Screenshots out/agent/shots-cascades/ (truck at -3 looks the same from the benchmark
+  spot). MVK_TLG_CONCURRENT_DISPATCH=0: truck 72.6 -> 52.8 (the concurrent encoder matters a lot);
+  TLG_ACB_UNORDERED=0: no change with grouped fences. Launcher part written by a Sonnet subagent in its own
+  worktree (no builds while measuring), reviewed and built here.
+- 2026-11-13: MOLTENVK PREFILL=2 IS NOW A WIN (run_macos.sh default; 0: off). MVK_CONFIG_PERFORMANCE_TRACKING=1
+  (+ MVK_CONFIG_ACTIVITY_PERFORMANCE_LOGGING_STYLE=0, MVK_CONFIG_PERFORMANCE_LOGGING_FRAME_COUNT=900) showed ~14
+  command buffers a frame encoded for ~0.45 ms each on MoltenVK's queue thread AFTER vkQueueSubmit: a serial
+  stage behind the recording thread (graphics fence latency 4.2 ms with ~5 unfinished submissions). With
+  MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS=2 the encoding happens as the recorder thread records. lib_ab:
+  Seattle 65.0 -> 73.1, bridge 92.3 -> 97.5, truck 72.6 -> 73.4, burning building (chase-save) 78.9 -> 81.0;
+  =1 is slower (56.7 in Seattle). chase-save 240 s at a 30 cap, smoke-save (92.7 -> 97.7), chase-save clean;
+  memory the same. It gave nothing on 2026-10-29 (GPU-bound then). Seattle's frame (TLG_WAIT_PROBE): particle
+  join 26%, frame counter 24%, the main thread's own work ~36% + 8% waiting for its job workers.
+  DAY TOTAL vs the 0.1.10 state (3 x 60 s, switches off vs defaults): truck 70.2 -> 73.4, bridge 87.1 -> 97.2,
+  Seattle 63.3 -> 70.7.
+- 2026-11-13: THE SEATTLE CLOCK-DOWN EXPLAINED AND FIXED (host/gpu_keepalive.m). macOS's GPU performance
+  controller clocks the GPU down when it is in use but not full: ~30-40 s at ~94% active (a CPU-bound scene
+  leaves gaps) -> P13 -> P1 within seconds, and it STAYS at P1 at 98% (Seattle 72 -> 33 FPS). Reproduced at the
+  truck with TLG_STAGE_DELAY_B_NS=1500 (GPU 93-95% active: 52 -> 29.5 FPS at ~50 s); scenes at 99-100% never
+  drop. Not thermal (kernel "Thermal Budget" keeps rising), not power (AC, powermode 0), Game Mode on throughout.
+  With a 30 FPS cap the controller also goes to P1 and the cap is still met (fine, less heat). Fix: one small
+  compute dispatch at a time on a Metal queue of its own in tlggpu-host fills the gaps (GPU reads 100%, stays at
+  P13): Seattle 120 s at 72-74 FPS. Always on it cost FPS where the GPU is full anyway (truck 74.5 -> 72.9), so
+  a thread reads GPUPH residency twice a second (IOReport, as gpu_pstate.c) and fills only while the GPU is
+  50..98% active for 2 s, pausing 1 s every 10 s to look at the game alone: truck 73.8 / 73.7, bridge 97.7 /
+  97.1 (off / on, 3 x 50 s). TLG_GPU_KEEPALIVE=0 off, =2 always, _STEPS (20000), _LOG=1. Test tool:
+  tools/gpu_probes/gpu_fill.swift. Open: whether the filler pulls a GPU that is already at P1 back up.
+- 2026-11-13: GPU-BOUND AGAIN, PASS PROFILE (scripts/macos/pass_profile.sh <scene> <label>: 4 s of Metal System
+  Trace at second 28 with TLG_PASS_LABELS=1, table by trace_passes.py). After prefill + grouped fences the frame
+  counter wait is nearly gone and the particle join is the queue for a full GPU (truck 43%, Seattle 44%, bridge
+  20% of the frame; GPU 99-100% active). Seattle: ~88 Metal encoders and 13.7 ms of GPU work a frame: compute
+  encoders 2.45 ms (19 a frame), main gbuffer pass 1.44, 11 vkCmdCopyImageToBuffer blits 0.39 (the 512x512
+  RGBA16F linear image, copied at every graphics fence). ONE DEFERRED DOWNLOAD PER IMAGE PER FRAME
+  (TLG_READBACK_PER_FRAME=0: at every fence): the first fence after an image's first write of a frame still
+  copies it, later writes go with the next frame's first fence. lib_ab 3 x 50 s: bridge 97.0 -> 98.3, truck
+  74.5 -> 75.1, Seattle 72.4 -> 72.7; chase-save 180 s at a 30 cap, smoke-save clean (readback waits there:
+  21 per 5 s, were 0).
+- 2026-11-13: FPS DECAY OVER A SESSION = vkWaitSemaphores (a 0.1.10 regression from TLG_CMD_PRERESET). A 10 min
+  Seattle soak: 73.7 -> 62 FPS, GPU at P13 all along, no heat warning, GPU process footprint flat (4.0 GB).
+  Two Time Profiler recordings in one run (out/agent/soak_profile.sh, 45 s and 500 s): tlg:CmdReset 510 -> 1871
+  samples in vkWaitSemaphores -> MVKTimelineSemaphoreMTLEvent::registerWait -> [MTLSharedEventListener new] /
+  notifyListener, MoltenVK's queue thread 3988 -> 6635 (CFArray scans, kevent_id), DrawRec waiting in
+  MVKQueue::submit 0 -> 270. MoltenVK builds a listener and a notification on the queue's MTLSharedEvent for
+  EVERY vkWaitSemaphores call; CommandPool::ResetThread made ~4,000 a second (one per submission) and they pile
+  up inside Metal. Now it polls the counter with 250 us sleeps (TLG_CMD_RESET_POLL=0: waits), and Semaphore::Wait
+  polls too on macOS (yield x64, then 20 us sleeps; TLG_SEMAPHORE_POLL=0). Soak after: 73.9 -> 70.5 at 8.5 min
+  (was 70.8 -> 63.2), thread loads flat. lib_ab 3 x 50 s: truck 75.3 -> 76.4, bridge 98.8 -> 99.5, Seattle
+  73.1 -> 72.4. LESSON: 60 s benchmarks hide session decay; soak 8-10 min before a release. Never call
+  vkWaitSemaphores per submission on MoltenVK. The game process's "memory" line in agent_run grows with
+  streaming (388 -> 2150 MiB in 10 min), not a leak in the host.
