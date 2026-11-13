@@ -958,3 +958,16 @@ Instruments (Shader Timeline option) for per-shader cost.
   copies it, later writes go with the next frame's first fence. lib_ab 3 x 50 s: bridge 97.0 -> 98.3, truck
   74.5 -> 75.1, Seattle 72.4 -> 72.7; chase-save 180 s at a 30 cap, smoke-save clean (readback waits there:
   21 per 5 s, were 0).
+- 2026-11-13: FPS DECAY OVER A SESSION = vkWaitSemaphores (a 0.1.10 regression from TLG_CMD_PRERESET). A 10 min
+  Seattle soak: 73.7 -> 62 FPS, GPU at P13 all along, no heat warning, GPU process footprint flat (4.0 GB).
+  Two Time Profiler recordings in one run (out/agent/soak_profile.sh, 45 s and 500 s): tlg:CmdReset 510 -> 1871
+  samples in vkWaitSemaphores -> MVKTimelineSemaphoreMTLEvent::registerWait -> [MTLSharedEventListener new] /
+  notifyListener, MoltenVK's queue thread 3988 -> 6635 (CFArray scans, kevent_id), DrawRec waiting in
+  MVKQueue::submit 0 -> 270. MoltenVK builds a listener and a notification on the queue's MTLSharedEvent for
+  EVERY vkWaitSemaphores call; CommandPool::ResetThread made ~4,000 a second (one per submission) and they pile
+  up inside Metal. Now it polls the counter with 250 us sleeps (TLG_CMD_RESET_POLL=0: waits), and Semaphore::Wait
+  polls too on macOS (yield x64, then 20 us sleeps; TLG_SEMAPHORE_POLL=0). Soak after: 73.9 -> 70.5 at 8.5 min
+  (was 70.8 -> 63.2), thread loads flat. lib_ab 3 x 50 s: truck 75.3 -> 76.4, bridge 98.8 -> 99.5, Seattle
+  73.1 -> 72.4. LESSON: 60 s benchmarks hide session decay; soak 8-10 min before a release. Never call
+  vkWaitSemaphores per submission on MoltenVK. The game process's "memory" line in agent_run grows with
+  streaming (388 -> 2150 MiB in 10 min), not a leak in the host.

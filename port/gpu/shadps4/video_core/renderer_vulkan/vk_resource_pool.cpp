@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <chrono>
+#include <thread>
 #include <cstddef>
 #include <cstdlib>
 #include <optional>
@@ -135,6 +137,26 @@ void CommandPool::ResetThread(std::stop_token stop) {
                 return;
             }
             slot = in_flight.front();
+        }
+        // tlg: polls the counter instead of vkWaitSemaphores (TLG_CMD_RESET_POLL=0: waits, as in
+        // 0.1.10). MoltenVK builds a new MTLSharedEventListener and a notification on the queue's
+        // MTLSharedEvent for every vkWaitSemaphores call; ~4,000 a second from here (one per
+        // submission) piled up inside Metal and every later submission got slower: Seattle
+        // 73 -> 62 FPS over 10 minutes, this thread from 8% to 31% of a core (2026-11-13).
+        // Resetting a finished command buffer is in no hurry: its slot is only needed again
+        // many submissions later.
+        static const bool poll = [] {
+            const char* env = std::getenv("TLG_CMD_RESET_POLL");
+            return !(env && *env == '0');
+        }();
+        while (poll && !work_semaphore->IsFree(slot.tick)) {
+            if (stop.stop_requested()) {
+                return;
+            }
+            work_semaphore->Refresh();
+            if (!work_semaphore->IsFree(slot.tick)) {
+                std::this_thread::sleep_for(std::chrono::microseconds(250));
+            }
         }
         // The oldest one first: its submission is signalled before the later ones.
         while (!work_semaphore->IsFree(slot.tick)) {
