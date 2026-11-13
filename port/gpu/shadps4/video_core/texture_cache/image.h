@@ -157,6 +157,7 @@ public:
     } usage{};
     bool scene_proxy = false; ///< tlg: SceneTargets holds a reduced-size proxy of it
     SubresourceRange sampled_range{}; ///< tlg: the range the current draw samples (feedback stats)
+    u64 download_frame = ~0ULL; ///< tlg: the frame (flip count) of its last deferred download
     VAddr track_addr = 0;
     VAddr track_addr_end = 0;
     VAddr guest_begin = 0; ///< info.guest_address
