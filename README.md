@@ -9,7 +9,7 @@ It is a macOS fork of [iss_pc](https://github.com/HayatoG/iss_pc), the native PC
 
 > **Status: first test version, work in progress.** The story can be played from the start with
 > GPU particles (smoke, rain, sparks). Tested on one Mac (M3 Max, 36 GB) as far as the first missions
-> in Seattle. On that Mac expect about 87 FPS on the opening bridge, about 69 in the heaviest
+> in Seattle. On that Mac expect about 99 FPS on the opening bridge, about 76 in the heaviest
 > fire-and-smoke scene (the launcher's Benchmark) and 25-30 in busy streets. See
 > [Expected performance](#expected-performance) and [Known issues](#known-issues).
 
@@ -151,13 +151,13 @@ outdoor views).
 ## Expected performance
 
 Measured on a **MacBook Pro with M3 Max**, macOS 27, 1080p rendering, default settings, release
-0.1.10 (2026-11-12). Each value is the median of 40 s after loading.
+0.1.11 (2026-11-14). Each value is the median of 40 s after loading.
 
 | Scene | FPS |
 |---|---|
-| Truck crash in the forest (fire, smoke, sparks; the launcher's **Benchmark**), standing | 69 (0.1.9: 65, 0.1.3: 36) |
-| Bridge after the car crash (rain, smoke), standing | 87 (0.1.9: 78, 0.1.5: 60) |
-| First Seattle street after the bridge, standing | 60 (0.1.9: 53) |
+| Truck crash in the forest (fire, smoke, sparks; the launcher's **Benchmark**), standing | 76 (0.1.10: 70, 0.1.3: 36) |
+| Bridge after the car crash (rain, smoke), standing | 99 (0.1.10: 87, 0.1.5: 60) |
+| First Seattle street after the bridge, standing | 72, steady (0.1.10: 63, then ~33 after 40 s) |
 | Bridge, camera turning at a constant speed | 63 (0.1.8: 53, 0.1.5: 49) |
 | Bridge with render scale 50% | about 72 |
 | Frame rate cap 30 | exactly 30 |
@@ -190,6 +190,21 @@ to add yours.
 
 Fixed recently:
 
+- **The frame rate no longer sinks during a session** (0.1.11; a regression of 0.1.10). A helper
+  thread asked MoltenVK to wait for the GPU about 4,000 times a second, and every wait left a
+  listener behind inside Metal: after 10 minutes in Seattle the frame rate had gone from about 74
+  to 62. The thread polls now (74 -> 70.5 after 8.5 minutes).
+- **The frame rate no longer halves after ~40 s in some scenes** (0.1.11). Where the game is
+  limited by the CPU side, the GPU was about 94% busy, and macOS clocked it down to its slowest
+  state and left it there (Seattle 72 -> 33 FPS standing still). The GPU process now fills the
+  short gaps with a tiny compute job, only while needed. `TLG_GPU_KEEPALIVE=0` turns it off.
+- **Faster everywhere** (0.1.11): MoltenVK encodes Metal commands as they are recorded instead of
+  after each submission, the particle chain no longer restarts a GPU encoder at each of its ~28
+  fences a frame, and a 2 MiB image is copied off the GPU once a frame instead of ~11 times.
+  Truck crash 70 -> 76 FPS, bridge 87 -> 99, Seattle 63 -> 72 (M3 Max), same picture.
+- **Launcher: Shadow detail** (0.1.11; Advanced > Quality: Full / Lower / Lowest, default Full).
+  Fewer sun-shadow cascades: about half the draws at Lowest in open sunlit scenes (truck crash
+  73 -> 80 FPS); no effect at night or in the city.
 - **No more GPU hang with a 30 or 45 FPS cap** (0.1.10, issue #11). With the cap, a particle shader
   could walk a 43,000-node tree for every vertex until Metal stopped the GPU (seen in the burning
   building). Its loops are now capped at 1,024 steps: same picture, same FPS, no hang in 240 s.
@@ -253,9 +268,10 @@ Fixed recently:
 
 ## Known issues
 
-- **Frame rate is not a steady 60 everywhere.** The bridge is about 87 standing; the truck crash 69;
-  Seattle about 60 standing, lower while moving. Standing still in Seattle, the GPU can clock down
-  after ~40 s (60 -> 31 FPS) for a reason not found yet; moving play did not show it. Busy streets with thousands of objects are limited by the CPU work per draw
+- **Frame rate is not a steady 60 everywhere.** The bridge is about 99 standing; the truck crash 76;
+  Seattle about 72 standing, lower while moving. All three are limited by the GPU now (1080p, M3 Max);
+  about half of each frame is the game's own code under Rosetta. Long sessions still lose a few FPS
+  (bridge 100 -> 95 over 8 minutes). Busy streets with thousands of objects are limited by the CPU work per draw
   (about 25-30 FPS where the game draws ~7,500 objects a frame). Drops seen while playing on the
   bridge are not explained yet.
 - **The frame rate can halve while the game is not the front app** (seen 49 -> 28 FPS): macOS clocks the
