@@ -197,6 +197,10 @@ to add yours.
 
 Fixed recently:
 
+- **The 60 FPS cap no longer costs frame rate in heavy scenes** (0.1.13). With a cap, scenes that could
+  not reach 60 (fire, cutscenes) ran up to 8% below what they reach uncapped: the GPU keep-alive of 0.1.11
+  started between frames and took GPU time from the game. It now stays off whenever a frame rate cap is
+  set (burning village at a 60 cap: 51.5 -> 56 FPS; Seattle holds 60).
 - **Less CPU work per draw** (0.1.12): the particles' compute dispatches no longer enter the
   graphics queue's barrier tracking, and the GPU command thread no longer wakes thousands of times
   a frame while it waits (30-50% less CPU on that thread). Same FPS on an M3 Max, less heat and
