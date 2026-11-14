@@ -67,9 +67,20 @@ the stability suite, and no FPS change with the feature off. Verify Metal 4 API 
   verified numerically (difference view while standing: marker convention 12.5 vs flipped x 15.7, y 15.9, xy
   18.4). Mean brightness unchanged (<= 1%). Stills for the owner: `out/agent/shots-fsr-native/`.
 
+- 2026-11-14 evening: **MetalFX backend** (`TLG_ISS_UPSCALER=metalfx`, shim/tlg_metalfx.mm via VK_EXT_metal_objects,
+  encoded on MoltenVK's queue after a flush): 0.62 ms GPU at 1080p vs FSR ~1.2 ms. **Flicker fixed**: the GoW3
+  frame logic reset the history every frame; ISS has its own flag (bridge standing, frame diff / sharpness: FXAA
+  6.8/186, FSR 5.7/180, MetalFX 5.3/114). **Upscaling below 1080p works** (`TLG_RENDER_SCALE=75` + FSR or
+  MetalFX): output into the output-size UI image, UI after the marker and the display pass redirected, presenter
+  shows the host buffer. FPS: village native 63.0, 75% spatial 74.8, 75% FSR 69.9, 75% MetalFX 70.5, 67% MetalFX
+  71.9; bridge native 99.6, 75% spatial 103.1, 75% FSR 90.8, 75% MetalFX 90.6 (not pixel-bound: overhead > saving).
+  Stills: `out/agent/shots-temporal-75/`. Open: overhead of the temporal path (~1.3 ms beyond the scaler: flush,
+  motion pass, two blits), scene texture LOD bias, Halton phases for the ratio, owner's eye check.
+
 ## Next steps (stage 0 -> 1)
 
 1. ~~Camera motion vectors for ISS~~ (done, see Progress).
 2. ~~FSR 3 at native size in place of the game's FXAA~~ (done; the owner judges the picture in motion).
 3. MetalFX backend next to FSR 3 (port bloodborne_mac_port `gpu/shim/bbport_metalfx.mm`).
-4. Reduced render size + upscale to 1080p, UI at output size, display override (the FPS gain in fire/cutscenes).
+4. ~~Reduced render size + upscale~~ (works; next: cut the ~1.3 ms overhead so calm scenes gain too, LOD bias,
+   launcher switch once the owner approves the picture).

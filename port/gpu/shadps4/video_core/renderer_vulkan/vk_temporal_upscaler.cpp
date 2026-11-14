@@ -1278,6 +1278,18 @@ void TemporalUpscaler::RunIss(const u32* p, VideoCore::ImageId color_id) {
     auto& color = texture_cache.GetImage(color_id);
     auto& depth = texture_cache.GetImage(depth_id);
     const u32 w = color.info.size.width, h = color.info.size.height;
+    // Below the output size (TLG_RENDER_SCALE): upscale to TLG_ISS_OUTPUT (default 1920x1080) into the
+    // output-size UI image; the UI drawn after the marker and the display pass are redirected there.
+    static const std::array<u32, 2> output_size = [] {
+        std::array<u32, 2> size{1920, 1080};
+        if (const char* env = std::getenv("TLG_ISS_OUTPUT"); env && *env) {
+            unsigned ow = 0, oh = 0;
+            if (std::sscanf(env, "%ux%u", &ow, &oh) == 2 && ow >= 640 && oh >= 360) size = {ow, oh};
+        }
+        return size;
+    }();
+    const bool scaled = w < output_size[0] && h < output_size[1];
+    const u32 ow = scaled ? output_size[0] : w, oh = scaled ? output_size[1] : h;
     const auto depth_format = depth.info.pixel_format;
     if (depth.info.size.width != w || depth.info.size.height != h ||
         (depth_format != vk::Format::eD32Sfloat && depth_format != vk::Format::eD32SfloatS8Uint) ||
@@ -1296,8 +1308,8 @@ void TemporalUpscaler::RunIss(const u32* p, VideoCore::ImageId color_id) {
     // inFAMOUS keeps its own history flag: the GoW3 frame logic (OnFrameStart) sets `reset` every
     // frame here, because Run() never dispatches, which threw the history away each frame (flicker).
     const bool was_ready = resources_ready && context_iss && width == w && height == h &&
-                           out_width == w && out_height == h;
-    if (!EnsureResources(w, h, w, h, false, true)) {
+                           out_width == ow && out_height == oh;
+    if (!EnsureResources(w, h, ow, oh, false, true)) {
         failed = true;
         return;
     }
@@ -1394,8 +1406,8 @@ void TemporalUpscaler::RunIss(const u32* p, VideoCore::ImageId color_id) {
                 .output = vk::Image(output_image),
                 .width = w,
                 .height = h,
-                .out_width = w,
-                .out_height = h,
+                .out_width = ow,
+                .out_height = oh,
                 .jitter_x = sx * jitter_now[0],
                 .jitter_y = sy * jitter_now[1],
                 .motion_scale_x = 1.0f,
@@ -1423,7 +1435,7 @@ void TemporalUpscaler::RunIss(const u32* p, VideoCore::ImageId color_id) {
                                   vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled,
                                   vk::ImageAspectFlagBits::eColor,
                                   FFX_VK_PORTABLE_RESOURCE_STATE_GENERIC_READ);
-    info.output = Describe(vk::Image(output_image), vk::Format::eR16G16B16A16Sfloat, w, h,
+    info.output = Describe(vk::Image(output_image), vk::Format::eR16G16B16A16Sfloat, ow, oh,
                            vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
                                vk::ImageUsageFlagBits::eTransferSrc,
                            vk::ImageAspectFlagBits::eColor,
@@ -1436,7 +1448,7 @@ void TemporalUpscaler::RunIss(const u32* p, VideoCore::ImageId color_id) {
     info.jitterOffset = {jitter_now[0], jitter_now[1]};
     info.motionVectorScale = {1.0f, 1.0f};
     info.renderSize = {w, h};
-    info.outputSize = {w, h};
+    info.outputSize = {ow, oh};
     info.frameTimeMilliseconds = frame_ms;
     info.preExposure = 1.0f;
     info.cameraNear = near_fov[0];
@@ -1451,7 +1463,7 @@ void TemporalUpscaler::RunIss(const u32* p, VideoCore::ImageId color_id) {
     create_info.structSize = sizeof(create_info);
     create_info.flags = FFX_VK_PORTABLE_CONTEXT_DEPTH_INVERTED | FFX_VK_PORTABLE_CONTEXT_DEPTH_INFINITE;
     create_info.maxRenderSize = {w, h};
-    create_info.maxOutputSize = {w, h};
+    create_info.maxOutputSize = {ow, oh};
     if (const u64 issues = ffxVkPortableValidateUpscaleDispatchInfo(&create_info, &info)) {
         PrintIssues("ISS dispatch", issues);
         failed = true;
@@ -1465,6 +1477,50 @@ void TemporalUpscaler::RunIss(const u32* p, VideoCore::ImageId color_id) {
     iss_reset = false;
     }
 
+    if (scaled) {
+        // The result goes into the output-size UI image; the game's draws into its AA output from
+        // here to the display pass are redirected there (RedirectColor), the display pass samples it
+        // (RedirectSampled) and the presenter shows the host display buffer (DisplayOverride).
+        EnsureUiResources(ow, oh, color.info.pixel_format, depth_format);
+        cmdbuf = scheduler.CommandBuffer();
+        barrier(vk::Image(output_image), vk::ImageLayout::eGeneral, all, rw,
+                vk::ImageLayout::eTransferSrcOptimal, vk::PipelineStageFlagBits2::eAllTransfer,
+                vk::AccessFlagBits2::eTransferRead);
+        barrier(vk::Image(ui_image), vk::ImageLayout::eUndefined, all, vk::AccessFlagBits2::eNone,
+                vk::ImageLayout::eTransferDstOptimal, vk::PipelineStageFlagBits2::eAllTransfer,
+                vk::AccessFlagBits2::eTransferWrite);
+        const vk::ImageBlit up{
+            .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+            .srcOffsets = std::array<vk::Offset3D, 2>{vk::Offset3D{0, 0, 0},
+                                                      vk::Offset3D{s32(ow), s32(oh), 1}},
+            .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+            .dstOffsets = std::array<vk::Offset3D, 2>{vk::Offset3D{0, 0, 0},
+                                                      vk::Offset3D{s32(ow), s32(oh), 1}},
+        };
+        cmdbuf.blitImage(vk::Image(output_image), vk::ImageLayout::eTransferSrcOptimal,
+                         vk::Image(ui_image), vk::ImageLayout::eTransferDstOptimal, up,
+                         vk::Filter::eNearest);
+        barrier(vk::Image(ui_image), vk::ImageLayout::eTransferDstOptimal,
+                vk::PipelineStageFlagBits2::eAllTransfer, vk::AccessFlagBits2::eTransferWrite,
+                vk::ImageLayout::eGeneral, all,
+                vk::AccessFlagBits2::eColorAttachmentRead | vk::AccessFlagBits2::eColorAttachmentWrite |
+                    vk::AccessFlagBits2::eShaderRead);
+        PrepareUiDepth(depth_id);
+        ui_phase = true;
+        ui_color = color_id;
+        ui_depth = depth_id;
+        ui_read_barrier = false;
+        done_this_frame = true;
+        iss_ui = true;
+        ++iss_stats.resolved;
+        static bool first_scaled = true;
+        if (first_scaled) {
+            first_scaled = false;
+            std::printf("ISS %s: upscaling %ux%u -> %ux%u, UI at the output size\n",
+                        iss_metalfx ? "MetalFX" : "FSR", w, h, ow, oh);
+        }
+        return;
+    }
     // The result replaces the AA output; grain and the UI are drawn on it afterwards.
     runtime.Transit(&color, vk::ImageLayout::eTransferDstOptimal, vk::PipelineStageFlagBits2::eAllTransfer,
                     vk::AccessFlagBits2::eTransferWrite);

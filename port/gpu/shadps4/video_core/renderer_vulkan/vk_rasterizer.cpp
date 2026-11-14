@@ -3913,7 +3913,7 @@ bool Rasterizer::TexturesBindableOnHelper(const Shader::Info& stage,
         }
         if (image->binding.needs_rebind || !texture_cache.IsUpToDate(image_id) ||
             scene_targets->Tracks(image->image_uid) ||
-            (upscaler->Enabled() && upscaler->RedirectsSampled(image_id))) {
+            (upscaler->Redirects() && upscaler->RedirectsSampled(image_id))) {
             return false;
         }
     }
@@ -5012,7 +5012,7 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
             // no resample to the native size (the native image is not touched).
             if (binding_proxy_ok[binding_index] && !is_storage && !binding.force_general &&
                 !binding.is_target &&
-                !(upscaler->Enabled() && upscaler->RedirectsSampled(image_id))) {
+                !(upscaler->Redirects() && upscaler->RedirectsSampled(image_id))) {
                 if (const auto proxy = scene_targets->SampleProxy(image, desc.view_info)) {
                     image.usage.texture = 1u;
                     image_infos.emplace_back(VK_NULL_HANDLE, proxy->view, proxy->layout);
@@ -5065,7 +5065,7 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
 
             vk::ImageView view = *image_view.image_view;
             vk::ImageLayout layout = image.backing->state.layout;
-            if (upscaler->Enabled()) {
+            if (upscaler->Redirects()) {
                 // tlg: the display pass reads the upscaled frame (scaled presets).
                 upscaler->RedirectSampled(image_id, image_view.info, view, layout);
             }
@@ -5260,7 +5260,7 @@ bool Rasterizer::BindTexturesFromSet(const Shader::Info& stage, const PreparedSt
                                !scene_targets->ProxyCurrent(image, entry.range.base.level,
                                                             entry.range.extent.levels)
                          : image.scene_proxy && proxies_on) ||
-            (upscaler->Enabled() && upscaler->RedirectsSampled(entry.id))) {
+            (upscaler->Redirects() && upscaler->RedirectsSampled(entry.id))) {
             ++texture_set_why[2];
             ++texture_set_misses;
             set.generation = ~0ull;
@@ -5672,7 +5672,7 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
             attachment.image_layout = target.layout;
         }
         image->usage.render_target = 1u;
-        if (cb == 0 && upscaler->Enabled()) {
+        if (cb == 0 && upscaler->Redirects()) {
             color_redirected = upscaler->RedirectColor(image_id, desc.view_info, redirect);
             if (color_redirected) {
                 guest_extent = {image->info.size.width, image->info.size.height};
@@ -5816,7 +5816,7 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
             attachment.image_layout = target.layout;
         }
         image.usage.depth_target = true;
-        if (upscaler->Enabled()) {
+        if (upscaler->Redirects()) {
             VulkanUpscalerTarget depth_redirect;
             depth_redirected = upscaler->RedirectDepth(image_id, depth_redirect);
             if (depth_redirected) {

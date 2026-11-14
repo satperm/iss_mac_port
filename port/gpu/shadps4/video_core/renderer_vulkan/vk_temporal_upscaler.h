@@ -51,6 +51,10 @@ public:
     [[nodiscard]] bool Enabled() const noexcept {
         return enabled;
     }
+    /// The UI/display redirection hooks: the GoW3 upscaler, or the inFAMOUS one below the output size.
+    [[nodiscard]] bool Redirects() const noexcept {
+        return enabled || iss_ui;
+    }
 
     /// A draw into a full-size RGBA16F target with the scene depth: the scene color.
     void OnSceneColor(VideoCore::ImageId color);
@@ -220,6 +224,7 @@ private:
     bool context_hdr = true;
     bool context_iss = false; ///< reversed infinite depth (inFAMOUS)
     bool iss_reset = true;    ///< inFAMOUS: discard the history at the next RunIss
+    bool iss_ui = false;      ///< inFAMOUS: upscaled below the output size (redirection on)
     /// inFAMOUS: TLG_ISS_UPSCALER=metalfx (MetalFX temporal) instead of FSR 3 (fsr, or TLG_ISS_FSR=1).
     bool iss_metalfx = [] {
         const char* env = std::getenv("TLG_ISS_UPSCALER");
