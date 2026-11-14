@@ -184,9 +184,28 @@ static int iss_usleep_spin(unsigned char *image, uint64_t size) {
     return 1;
 }
 
+/* TLG_PARTICLE_LEVEL=1|2 (without TLG_PERF_MODE): only the game's particle resolution level of the quality
+ * ladder (1: half, 2: quarter resolution), everything else as shipped. Fire, smoke and sparks are drawn as
+ * full-screen-sized alpha-blended sprites; in the burning village one pass of them costs ~3.4 ms of GPU a frame. */
+static int iss_particle_level(unsigned char *image, uint64_t size) {
+    const char *env = getenv("TLG_PARTICLE_LEVEL");
+    if (!env || !*env || getenv("TLG_PERF_MODE")) return 0;
+    const long v = strtol(env, NULL, 10);
+    if (v < 1 || v > 2) return 0;
+    static const unsigned char je[2] = {0x74, 0x0f}, nops[2] = {0x90, 0x90}, zero4[4] = {0};
+    unsigned char level[4] = {(unsigned char)v, 0, 0, 0};
+    const IssPerfBytes original[] = {{0x3ed6b0, je, 2}, {0x3ed6b8, zero4, 4}};
+    const IssPerfBytes patched[] = {{0x3ed6b0, nops, 2}, {0x3ed6b8, level, 4}};
+    if (!iss_perf_matches(image, size, original, 2, "TLG_PARTICLE_LEVEL")) return 0;
+    iss_perf_write(image, patched, 2);
+    printf("Performance patches: TLG_PARTICLE_LEVEL=%ld: particles at %s resolution\n", v, v == 1 ? "half" : "quarter");
+    return 1;
+}
+
 static void iss_perf_patches(unsigned char *image, uint64_t size) {
     iss_perf_mode(image, size);
     iss_shadow_cascades(image, size);
+    iss_particle_level(image, size);
     iss_dump_code(image, size);
     iss_usleep_spin(image, size);
     const int late = iss_particle_late_read(image, size);
