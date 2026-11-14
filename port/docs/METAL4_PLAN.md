@@ -36,3 +36,26 @@ the default and the fallback.
 
 Each stage: the four scenes (truck, bridge, Seattle, burning village `out/owner-copy-20261114`), 9-minute soaks,
 the stability suite, and no FPS change with the feature off. Verify Metal 4 API names against the macOS 26 SDK.
+
+## Progress
+
+- 2026-11-14, branch `agent/metal4`: the game-side hooks from `perf-quality-view` are in (CUSA00004 allowed,
+  `TLG_ISS_TEMPORAL=1` + `TLG_ISS_TEMPORAL_READY=1`), and the renderer receives the marker in order with the
+  draws (`Rasterizer::OnIssTemporalMarker`, `TLG_ISS_TEMPORAL_LOG=1`). Verified in the burning village: a marker
+  every frame (2609, 1 gap at start), render 1920x1080, Halton jitter, near 10, far 1e7, reversed depth, the AA
+  output found in the texture cache (1920x1080 RGBA8 render target), FPS unchanged (64.3).
+  `tests/test_iss_temporal_hook.cpp`: host-stub tests pass; the real-eboot checks still read the SELF at the
+  wrong offset (the game itself installs the hooks fine).
+- Upstream (`upstream/developer`) has the renderer side for renderer v2: `port/gpu_v2/gpu/iss_temporal_upscaler.cpp`
+  (FSR 3 backend, motion from depth, UI redirected to output-size twins, presenter override),
+  `host_shaders/iss_camera_motion.comp`, `tests/test_iss_temporal.cpp`. Our renderer is v1, whose
+  `vk_temporal_upscaler.cpp` (GoW3) already has FSR 3, scaled presets, UI redirection and a display override.
+
+## Next steps (stage 0 -> 1)
+
+1. Camera motion vectors for ISS: upstream `iss_camera_motion.comp` + `iss_temporal_math.h` Reproject
+   (prevVP * inverse(curVP)) on the scene depth, in v1's CameraMotion; a debug view to check them.
+2. FSR 3 at native size in place of the game's FXAA (resolve into the AA output): proves jitter and motion with a
+   known upscaler; better AA than FXAA as a side effect (owner judges).
+3. MetalFX backend next to FSR 3 (port bloodborne_mac_port `gpu/shim/bbport_metalfx.mm`).
+4. Reduced render size + upscale to 1080p, UI at output size, display override (the FPS gain in fire/cutscenes).

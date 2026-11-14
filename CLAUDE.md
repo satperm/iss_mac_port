@@ -1049,3 +1049,6 @@ Instruments (Shader Timeline option) for per-shader cost.
   agent/depth-bounds): only ~8 draws a frame ask for it, not the 3.4 ms light pass. TLG_DRAW_TIMING prints nothing with
   the draw pipe (broken there). So for fire and cutscenes a temporal upscaler from ~75% is the lever (~+10% net),
   picture to be judged by the owner.
+- 2026-11-14: METAL 4 / METALFX WORK STARTED (owner-approved plan: port/docs/METAL4_PLAN.md, branch agent/metal4).
+  Stage 0 verified in game: hooks on CUSA00004, marker every frame on the recording thread. Next: ISS camera motion
+  in v1 CameraMotion, FSR 3 at native in place of FXAA, MetalFX backend, reduced render size + UI twins.
