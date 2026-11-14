@@ -971,3 +971,12 @@ Instruments (Shader Timeline option) for per-shader cost.
   73.1 -> 72.4. LESSON: 60 s benchmarks hide session decay; soak 8-10 min before a release. Never call
   vkWaitSemaphores per submission on MoltenVK. The game process's "memory" line in agent_run grows with
   streaming (388 -> 2150 MiB in 10 min), not a leak in the host.
+- 2026-11-14: THE SESSION SLOPE IS THERMAL, FROM THE GAME ALONE. Fair heat A/B (out/agent/heat_ab.sh: bridge 9 min,
+  6 min idle cool-down before each, owner away, 2 rounds alternating): every run holds 100-102 FPS for ~3.5 min,
+  then within a minute the P-cores go from state 21 to ~5 (of 21) and the GPU from 13 to ~10.5 (of 15), and FPS
+  settles at ~83 (kernel "Thermal Budget" in the log falls the whole run; pmset shows no thermal warning;
+  16" M3 Max on AC). Less busy-waiting (branch agent/less-spin: game usleep sleeps, recorder spin 20 us,
+  targeted drain wake-ups; ~0.5 core less) changes nothing: 83.3/82.9 vs 82.7/83.6 after the drop, same timing.
+  Not merged (no measurable gain here; might help fanless Airs, unmeasurable). tools/gpu_probes/cpu_pstate.c:
+  CPU cluster P-state residency. The game's usleep (eboot 0x53b2b0) spins on rdtsc below 501 us
+  (TLG_GUEST_USLEEP_SPIN_US patches the threshold); TLG_DUMP_CODE=<hex>,<n> prints loaded eboot bytes.
