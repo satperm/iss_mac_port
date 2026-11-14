@@ -51,10 +51,18 @@ the stability suite, and no FPS change with the feature off. Verify Metal 4 API 
   `host_shaders/iss_camera_motion.comp`, `tests/test_iss_temporal.cpp`. Our renderer is v1, whose
   `vk_temporal_upscaler.cpp` (GoW3) already has FSR 3, scaled presets, UI redirection and a display override.
 
+- 2026-11-14 later: camera motion vectors for ISS in v1's CameraMotion (`OnIssMarker`, `camera_motion.comp`
+  mode bit 8: prevVP * inverse(curVP) in double, applied to the scene depth). **The marker's matrix was wrong:**
+  camera+0x470 is camera-relative (translation column (0, 0, near, 0)), so reprojection lost the orbiting
+  camera's movement. Dumped matrices (`TLG_ISS_CAMERA_DUMP=1`) show camera+0x240 is the same matrix with the
+  camera position (m200 = m240 + the window offset; rows orthogonal; translation changes in a sweep): the marker
+  now carries m240. Upstream's renderer-v2 code has the same 0x470 choice. Difference view while turning
+  (`TLG_DEBUG_MOTION=1`, mask bit 23): static scenery dark; fire, particles, the character and screen edges
+  remain (expected for camera-only vectors; FSR/MetalFX handle them with reactive masks and clamping).
+
 ## Next steps (stage 0 -> 1)
 
-1. Camera motion vectors for ISS: upstream `iss_camera_motion.comp` + `iss_temporal_math.h` Reproject
-   (prevVP * inverse(curVP)) on the scene depth, in v1's CameraMotion; a debug view to check them.
+1. ~~Camera motion vectors for ISS~~ (done, see Progress).
 2. FSR 3 at native size in place of the game's FXAA (resolve into the AA output): proves jitter and motion with a
    known upscaler; better AA than FXAA as a side effect (owner judges).
 3. MetalFX backend next to FSR 3 (port bloodborne_mac_port `gpu/shim/bbport_metalfx.mm`).
