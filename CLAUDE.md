@@ -1031,3 +1031,10 @@ Instruments (Shader Timeline option) for per-shader cost.
 - 2026-11-14: FOURTH TEST SCENE (owner's request, for particle/smoke/fire work): out/owner-copy-20261114 (a copy of the
   owner's autosave; never his original). Loads in a burning village street full of fire and particles: 55.7 FPS
   uncapped (High Power), GPU-heavy. Use it like the truck/bridge/Seattle saves (agent_run.sh / lib_ab.sh <dir>).
+- 2026-11-14: GPU KEEP-ALIVE OFF UNDER A FRAME CAP (0.1.13; host/gpu_keepalive.m; TLG_GPU_KEEPALIVE=2 forces it). With a
+  60 cap, heavy scenes that miss 60 leave the GPU short of full between frames, the filler started and took GPU
+  time from the game: burning village (out/owner-copy-20261114) 0.1.12 at cap 60: 56 -> 51.5 FPS after ~40 s; without
+  the filler 55.6 (uncapped 56.0). Owner saw it as "the 60 cap is slower than uncapped". After the fix at cap 60:
+  Seattle 60.0 for 150 s (no clock-down), village 56.0, bridge 60.0; cap 30 holds 30.0 in chase-save and the village
+  (the GPU clocks down there, as it may). OBS LEFT OPEN COSTS ~13% even when not recording: its display capture and
+  preview run all the time (OBS ~60% CPU, WindowServer ~47%): smoke-save 97 -> 84.5 FPS. Close OBS for measurements.

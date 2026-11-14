@@ -167,6 +167,15 @@ void tlg_gpu_keepalive_start(void) {
     const char *on = getenv("TLG_GPU_KEEPALIVE");
     if (on && *on == '0') return;
     const bool always = on && *on == '2';
+    /* Not with a frame rate cap (0.1.13): the game then leaves the GPU short of full on purpose, and in
+     * heavy scenes that miss the cap the filler took GPU time from the frames (burning village at a 60 cap:
+     * 55.6 -> 51.5 FPS). macOS paces a capped game sensibly (bridge at a 60 cap without the filler: the GPU
+     * lowered its clock and held 60). TLG_GPU_KEEPALIVE=2 still forces it. */
+    const char *cap = getenv("TLG_FPS_LIMIT");
+    if (!always && cap && *cap && atoi(cap) > 0) {
+        printf("tlggpu-host: GPU keep-alive off (frame rate cap %s)\n", cap);
+        return;
+    }
     const char *env = getenv("TLG_GPU_KEEPALIVE_STEPS");
     uint32_t steps = env && *env ? (uint32_t)strtoul(env, NULL, 10) : 20000u;
     if (!steps) return;
