@@ -123,6 +123,10 @@ public:
     };
     bool DisplayOverride(VAddr address, Display& display);
 
+    /// tlg: inFAMOUS (TLG_ISS_FSR=1): FSR 3 at the game's resolution on its AA output, written back
+    /// into it, at the temporal marker (after CameraMotion::OnIssMarker). `payload` is the marker's.
+    void RunIss(const u32* payload, VideoCore::ImageId color);
+
 private:
     /// tlg: views of guest images the upscaler reads, kept across frames: FSR 4 registers
     /// images by view in a registry of eight (a new view per frame filled it at Native AA).
@@ -160,7 +164,8 @@ private:
     /// Available and switched on (menu setting, toggle 1 << 24).
     [[nodiscard]] bool Active() const;
     [[nodiscard]] bool ReactiveOn() const;
-    bool EnsureResources(u32 width, u32 height, u32 out_width, u32 out_height, bool hdr);
+    bool EnsureResources(u32 width, u32 height, u32 out_width, u32 out_height, bool hdr,
+                         bool iss = false);
     void CreatePipelines();
     /// Records the reactive mask pass; false when there is no snapshot this frame.
     bool RecordReactive(vk::ImageView color_view);
@@ -211,6 +216,7 @@ private:
     u32 width = 0, height = 0;             ///< render size
     u32 out_width = 0, out_height = 0;     ///< output size of the context
     bool context_hdr = true;
+    bool context_iss = false; ///< reversed infinite depth (inFAMOUS)
     u32 target_width = 1920, target_height = 1080; ///< output size of scaled presets
     u64 ui_trigger_vs = 0x34e8a281;
     VideoCore::ImageId ldr_target{};

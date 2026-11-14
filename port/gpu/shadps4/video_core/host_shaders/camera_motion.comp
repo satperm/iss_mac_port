@@ -82,10 +82,19 @@ void main() {
     const vec4 current = imageLoad(color_img, pixel);
     next_frame[pixel.y * int(size.x) + pixel.x] = packUnorm4x8(current);
     if (view_mode == 3u || view_mode == 4u) {
-        const ivec2 prev_pixel = ivec2(floor(uv * size + motion + previous_jitter - jitter));
+        // Bilinear: the previous frame at the sub-pixel position (texel centres at +0.5), so a jitter
+        // sign error shows as a brighter difference even while standing.
+        const vec2 pos = uv * size + motion + previous_jitter - jitter - 0.5;
+        const ivec2 base = ivec2(floor(pos));
+        const vec2 f = pos - vec2(base);
         vec4 prev = vec4(0.0, 0.0, 0.0, 1.0);
-        if (all(greaterThanEqual(prev_pixel, ivec2(0))) && all(lessThan(prev_pixel, ivec2(size)))) {
-            prev = unpackUnorm4x8(prev_frame[prev_pixel.y * int(size.x) + prev_pixel.x]);
+        if (all(greaterThanEqual(base, ivec2(0))) && all(lessThan(base + 1, ivec2(size)))) {
+            const int row = int(size.x);
+            const vec4 p00 = unpackUnorm4x8(prev_frame[base.y * row + base.x]);
+            const vec4 p10 = unpackUnorm4x8(prev_frame[base.y * row + base.x + 1]);
+            const vec4 p01 = unpackUnorm4x8(prev_frame[(base.y + 1) * row + base.x]);
+            const vec4 p11 = unpackUnorm4x8(prev_frame[(base.y + 1) * row + base.x + 1]);
+            prev = mix(mix(p00, p10, f.x), mix(p01, p11, f.x), f.y);
         }
         const vec3 out_color = view_mode == 3u ? prev.rgb : abs(prev.rgb - current.rgb) * 4.0;
         imageStore(color_img, pixel, vec4(out_color, current.a));

@@ -369,7 +369,7 @@ void TemporalUpscaler::OnDispatch(u64 cs_hash) {
     Run();
 }
 
-bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
+bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr, bool iss) {
     // DLSS, like FSR 4, has its own context: no portable FSR 3 context is made.
     const bool use_fsr4 = UseFsr4() || UseDlss();
     const bool use_taa = TlgSettings::Get().upscaler == TlgSettings::UpscalerTaa;
@@ -378,7 +378,8 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
         return false;
     }
     if (resources_ready && w == width && h == height && ow == out_width && oh == out_height &&
-        hdr == context_hdr && use_fsr4 == resources_fsr4 && use_taa == resources_taa) {
+        hdr == context_hdr && iss == context_iss && use_fsr4 == resources_fsr4 &&
+        use_taa == resources_taa) {
         return true;
     }
     const auto device = instance.GetDevice();
@@ -394,6 +395,7 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
     out_width = ow;
     out_height = oh;
     context_hdr = hdr;
+    context_iss = iss;
 
     FfxVkPortableDeviceInfo device_info{};
     device_info.structSize = sizeof(device_info);
@@ -414,6 +416,10 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
     create_info.flags = hdr ? FFX_VK_PORTABLE_CONTEXT_HDR_COLOR_INPUT |
                                   FFX_VK_PORTABLE_CONTEXT_AUTO_EXPOSURE
                             : 0;
+    if (iss) {
+        // inFAMOUS: reversed-Z with an infinite far plane (clip z = near).
+        create_info.flags |= FFX_VK_PORTABLE_CONTEXT_DEPTH_INVERTED | FFX_VK_PORTABLE_CONTEXT_DEPTH_INFINITE;
+    }
     create_info.maxRenderSize = {w, h};
     create_info.maxOutputSize = {ow, oh};
     // FSR 4 has its own model context (vk_fsr4); the images below are shared.
@@ -1226,6 +1232,168 @@ void TemporalUpscaler::Run() {
         cmdbuf.pushConstants(*merge_pipeline_layout, vk::ShaderStageFlagBits::eCompute, 0,
                              sizeof(mode), &mode);
         cmdbuf.dispatch((ow + 7) / 8, (oh + 7) / 8, 1);
+    }
+}
+
+void TemporalUpscaler::RunIss(const u32* p, VideoCore::ImageId color_id) {
+    const VideoCore::ImageId depth_id = camera_motion.Depth();
+    if (failed || !color_id || !depth_id) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            std::printf("ISS FSR: skipped (%s)\n", failed ? "failed before" : !color_id ? "no AA output image"
+                                                                                  : "no scene depth");
+        }
+        return;
+    }
+    auto& color = texture_cache.GetImage(color_id);
+    auto& depth = texture_cache.GetImage(depth_id);
+    const u32 w = color.info.size.width, h = color.info.size.height;
+    const auto depth_format = depth.info.pixel_format;
+    if (depth.info.size.width != w || depth.info.size.height != h ||
+        (depth_format != vk::Format::eD32Sfloat && depth_format != vk::Format::eD32SfloatS8Uint) ||
+        !(color.usage_flags & vk::ImageUsageFlagBits::eSampled) ||
+        !(color.usage_flags & vk::ImageUsageFlagBits::eTransferDst)) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            std::printf("ISS FSR: skipped (colour %ux%u %s, depth %ux%u %s)\n", w, h,
+                        vk::to_string(color.info.pixel_format).c_str(), depth.info.size.width,
+                        depth.info.size.height, vk::to_string(depth_format).c_str());
+        }
+        return;
+    }
+    if (!EnsureResources(w, h, w, h, false, true)) {
+        failed = true;
+        return;
+    }
+    if (!camera_motion.IssValid()) {
+        reset = true;
+    }
+    float near_fov[3];
+    std::memcpy(near_fov, &p[24], sizeof(near_fov)); // near, far, vertical fov
+    const auto jitter_now = camera_motion.IssJitter();
+
+    const auto now = std::chrono::steady_clock::now();
+    float frame_ms = std::chrono::duration<float, std::milli>(now - last_frame).count();
+    if (frame_ms <= 0.0f || frame_ms > 200.0f) {
+        frame_ms = 16.6f;
+    }
+    last_frame = now;
+
+    const auto depth_view = CachedView(depth, depth_format, vk::ImageAspectFlagBits::eDepth);
+    scheduler.EndRendering();
+    runtime.Transit(&depth, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eComputeShader,
+                    vk::AccessFlagBits2::eShaderRead);
+    runtime.Transit(&color, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eComputeShader,
+                    vk::AccessFlagBits2::eShaderRead);
+    runtime.FlushBarriers();
+    const auto cmdbuf = scheduler.CommandBuffer();
+    const auto barrier = [&](vk::Image image, vk::ImageLayout old_layout,
+                             vk::PipelineStageFlags2 src_stage, vk::AccessFlags2 src_access,
+                             vk::ImageLayout new_layout, vk::PipelineStageFlags2 dst_stage,
+                             vk::AccessFlags2 dst_access) {
+        const vk::ImageMemoryBarrier2 b{
+            .srcStageMask = src_stage,
+            .srcAccessMask = src_access,
+            .dstStageMask = dst_stage,
+            .dstAccessMask = dst_access,
+            .oldLayout = old_layout,
+            .newLayout = new_layout,
+            .image = image,
+            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+        };
+        cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &b});
+    };
+    const auto all = vk::PipelineStageFlagBits2::eAllCommands;
+    const auto rw = vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite;
+    barrier(vk::Image(motion_image), vk::ImageLayout::eUndefined, all, vk::AccessFlagBits2::eNone,
+            vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eComputeShader,
+            vk::AccessFlagBits2::eShaderWrite);
+    barrier(vk::Image(output_image), vk::ImageLayout::eUndefined, all, vk::AccessFlagBits2::eNone,
+            vk::ImageLayout::eGeneral, all, rw);
+    camera_motion.RecordMotion(cmdbuf, depth_view, *motion_view, w, h);
+    barrier(vk::Image(motion_image), vk::ImageLayout::eGeneral,
+            vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderWrite,
+            vk::ImageLayout::eGeneral, all, vk::AccessFlagBits2::eShaderRead);
+
+    FfxVkPortableUpscaleDispatchInfo info{};
+    info.structSize = sizeof(info);
+    info.commandBuffer = cmdbuf;
+    info.color = Describe(color.GetImage(), color.info.pixel_format, w, h, color.usage_flags,
+                          vk::ImageAspectFlagBits::eColor, FFX_VK_PORTABLE_RESOURCE_STATE_GENERIC_READ);
+    info.depth = Describe(depth.GetImage(), depth_format, w, h, depth.usage_flags,
+                          vk::ImageAspectFlagBits::eDepth, FFX_VK_PORTABLE_RESOURCE_STATE_GENERIC_READ);
+    info.motionVectors = Describe(vk::Image(motion_image), vk::Format::eR16G16Sfloat, w, h,
+                                  vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled,
+                                  vk::ImageAspectFlagBits::eColor,
+                                  FFX_VK_PORTABLE_RESOURCE_STATE_GENERIC_READ);
+    info.output = Describe(vk::Image(output_image), vk::Format::eR16G16B16A16Sfloat, w, h,
+                           vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
+                               vk::ImageUsageFlagBits::eTransferSrc,
+                           vk::ImageAspectFlagBits::eColor,
+                           FFX_VK_PORTABLE_RESOURCE_STATE_UNORDERED_ACCESS);
+    info.exposure.structSize = sizeof(info.exposure);
+    info.reactiveMask.structSize = sizeof(info.reactiveMask);
+    info.transparencyAndCompositionMask.structSize = sizeof(info.transparencyAndCompositionMask);
+    // The marker's jitter is the displacement of the content (x right, y down), which is FSR's
+    // jitterOffset convention.
+    info.jitterOffset = {jitter_now[0], jitter_now[1]};
+    info.motionVectorScale = {1.0f, 1.0f};
+    info.renderSize = {w, h};
+    info.outputSize = {w, h};
+    info.frameTimeMilliseconds = frame_ms;
+    info.preExposure = 1.0f;
+    info.cameraNear = near_fov[0];
+    info.cameraFar = near_fov[1];
+    info.cameraVerticalFovRadians = near_fov[2];
+    info.viewSpaceToMeters = 1.0f;
+    info.sharpness = std::min(TlgSettings::Get().sharpness.load(), 1.0f);
+    info.enableSharpening = TlgSettings::Get().sharpen ? VK_TRUE : VK_FALSE;
+    info.reset = reset ? VK_TRUE : VK_FALSE;
+    info.frameId = frame_id++;
+    FfxVkPortableUpscaleCreateInfo create_info{};
+    create_info.structSize = sizeof(create_info);
+    create_info.flags = FFX_VK_PORTABLE_CONTEXT_DEPTH_INVERTED | FFX_VK_PORTABLE_CONTEXT_DEPTH_INFINITE;
+    create_info.maxRenderSize = {w, h};
+    create_info.maxOutputSize = {w, h};
+    if (const u64 issues = ffxVkPortableValidateUpscaleDispatchInfo(&create_info, &info)) {
+        PrintIssues("ISS dispatch", issues);
+        failed = true;
+        return;
+    }
+    if (ffxVkPortableUpscaleContextRecordDispatch(context, &info) != FFX_VK_PORTABLE_OK) {
+        std::printf("ISS FSR: dispatch failed\n");
+        failed = true;
+        return;
+    }
+    reset = false;
+
+    // The result replaces the AA output; grain and the UI are drawn on it afterwards.
+    runtime.Transit(&color, vk::ImageLayout::eTransferDstOptimal, vk::PipelineStageFlagBits2::eAllTransfer,
+                    vk::AccessFlagBits2::eTransferWrite);
+    runtime.FlushBarriers();
+    barrier(vk::Image(output_image), vk::ImageLayout::eGeneral, all, rw,
+            vk::ImageLayout::eTransferSrcOptimal, vk::PipelineStageFlagBits2::eAllTransfer,
+            vk::AccessFlagBits2::eTransferRead);
+    const vk::ImageBlit region{
+        .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+        .srcOffsets = std::array<vk::Offset3D, 2>{vk::Offset3D{0, 0, 0},
+                                                  vk::Offset3D{s32(w), s32(h), 1}},
+        .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+        .dstOffsets = std::array<vk::Offset3D, 2>{vk::Offset3D{0, 0, 0},
+                                                  vk::Offset3D{s32(w), s32(h), 1}},
+    };
+    cmdbuf.blitImage(vk::Image(output_image), vk::ImageLayout::eTransferSrcOptimal, color.GetImage(),
+                     vk::ImageLayout::eTransferDstOptimal, region, vk::Filter::eNearest);
+    color.flags |= VideoCore::ImageFlagBits::GpuModified;
+    color.flags &= ~VideoCore::ImageFlagBits::Dirty;
+    static bool first = true;
+    if (first) {
+        first = false;
+        std::printf("ISS FSR: first frame %ux%u, colour %s, depth %s, near %.2f fov %.3f\n", w, h,
+                    vk::to_string(color.info.pixel_format).c_str(), vk::to_string(depth_format).c_str(),
+                    near_fov[0], near_fov[2]);
     }
 }
 

@@ -7363,6 +7363,14 @@ void Rasterizer::OnIssTemporalMarker(const u32* p) {
             }
         });
         camera_motion->OnIssMarker(p, output);
+        // Stage 1 of docs/METAL4_PLAN.md: FSR 3 at native size in place of the game's FXAA.
+        static const bool iss_fsr = [] {
+            const char* env = std::getenv("TLG_ISS_FSR");
+            return env && *env == '1';
+        }();
+        if (iss_fsr && output) {
+            upscaler->RunIss(p, output);
+        }
     }
     // Stage 0 of docs/METAL4_PLAN.md: what the marker carries, and which cached images sit at the
     // colour it names (TLG_ISS_TEMPORAL_LOG=1, every 5 s).

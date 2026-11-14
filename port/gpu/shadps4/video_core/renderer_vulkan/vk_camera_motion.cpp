@@ -58,6 +58,11 @@ CameraMotion::CameraMotion(const Instance& instance_, Scheduler& scheduler_,
     // The upscaler can be switched on from the menu at any time: the camera is always tracked
     // unless TLG_UPSCALER=none.
     for_upscaler = !(upscaler && std::strcmp(upscaler, "none") == 0);
+    // inFAMOUS FSR (TLG_ISS_FSR=1) needs the scene depth and the motion pass even when the
+    // GoW3 upscaler is off.
+    if (const char* iss_fsr = std::getenv("TLG_ISS_FSR"); iss_fsr && *iss_fsr == '1') {
+        for_upscaler = true;
+    }
     const auto device = instance.GetDevice();
     if (for_upscaler) {
         const std::array<vk::DescriptorSetLayoutBinding, 3> motion_bindings = {{
@@ -200,6 +205,19 @@ void CameraMotion::OnIssMarker(const u32* payload, VideoCore::ImageId color) {
     iss_mode = true;
     previous_jitter = jitter;
     jitter = {frame.jitter[0], frame.jitter[1]};
+    // TLG_ISS_JITTER_FLIP=x|y|xy (diagnostic): the other sign convention for the marker's jitter, for
+    // the motion pass and the upscaler alike.
+    static const std::array<float, 2> flip = [] {
+        const char* env = std::getenv("TLG_ISS_JITTER_FLIP");
+        std::array<float, 2> f{1.0f, 1.0f};
+        for (const char* c = env ? env : ""; *c; ++c) {
+            if (*c == 'x') f[0] = -1.0f;
+            if (*c == 'y') f[1] = -1.0f;
+        }
+        return f;
+    }();
+    jitter[0] *= flip[0];
+    jitter[1] *= flip[1];
     render_size = {frame.render_width, frame.render_height};
     std::array<float, 16> view_proj{};
     std::memcpy(view_proj.data(), &frame.view_proj, sizeof(view_proj));

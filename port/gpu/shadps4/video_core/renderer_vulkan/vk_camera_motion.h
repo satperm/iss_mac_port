@@ -74,6 +74,14 @@ public:
     /// each frame and makes the clip-to-clip reprojection; with TLG_DEBUG_MOTION=1 draws the debug
     /// view into `color` right there (before grain and the UI).
     void OnIssMarker(const u32* payload, VideoCore::ImageId color);
+    /// inFAMOUS: the motion of this frame is usable (the previous marker's camera is known, no cut).
+    [[nodiscard]] bool IssValid() const noexcept {
+        return iss_mode && current.valid;
+    }
+    /// inFAMOUS: this frame's jitter as the motion pass uses it (pixels, content x right, y down).
+    [[nodiscard]] std::array<float, 2> IssJitter() const noexcept {
+        return jitter;
+    }
     /// A bound constant buffer of 864 bytes: checks the scene constant signature.
     void OnConstants(const float* data);
 
