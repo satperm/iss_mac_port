@@ -1028,3 +1028,6 @@ Instruments (Shader Timeline option) for per-shader cost.
   accesses for thread-local data) and even then wins <= ~13-35% of the CPU part. Owner: parked; revisit only when
   Apple's macOS 28 Rosetta subset is known (survival, not FPS). Bloodborne's plan: ~/bloodborne_mac_port branch
   static-recompilation, docs/STATIC_RECOMPILATION_PLAN.md (architecture reusable for ISS).
+- 2026-11-14: FOURTH TEST SCENE (owner's request, for particle/smoke/fire work): out/owner-copy-20261114 (a copy of the
+  owner's autosave; never his original). Loads in a burning village street full of fire and particles: 55.7 FPS
+  uncapped (High Power), GPU-heavy. Use it like the truck/bridge/Seattle saves (agent_run.sh / lib_ab.sh <dir>).
