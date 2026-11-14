@@ -995,3 +995,10 @@ Instruments (Shader Timeline option) for per-shader cost.
   per frame (ours per draw and the game's own under Rosetta), not GPU time and not spinning.
 - 2026-11-14: TLG_TEXTURE_HELPER=1 (textures bound on a spinning helper thread) is much worse on the M3 Max: truck
   75.7 -> 59.4, bridge 99.1 -> 84.3 (lib_ab 3 x 50 s). Keep it off.
+- 2026-11-14: COMPUTE-QUEUE DISPATCHES LEAVE THE GRAPHICS BARRIER TRACKER ALONE (Rasterizer::AcbResetBindings;
+  TLG_ACB_MAIN_TRACK=1: as before). ~36,000 compute-queue dispatches a second each entered their buffers into
+  the graphics queue's barrier tracker (tree inserts on the recording thread, and write barriers on the graphics
+  queue for work it never ran; the queues sync at the game's fences). GPU command thread cost per draw -3..8%;
+  lib_ab 3 x 60 s: truck 74.7 / 74.6, bridge 95.4 / 98.1 (means), Seattle 72.8 / 73.2; sustained truck 9 min
+  after cool-down 61.3 -> 62.2. chase-save 180 s at a 30 cap, smoke-save, chase-save clean; smoke screenshots
+  same (the glint by the barrel comes and goes between runs either way). Merged (owner's merge rule).
