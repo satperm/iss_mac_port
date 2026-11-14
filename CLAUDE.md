@@ -993,3 +993,5 @@ Instruments (Shader Timeline option) for per-shader cost.
   rises 1.9 -> 2.4 us (+27%) for -19% FPS. The keep-alive filler is not involved (truck: filler off all run;
   TLG_GPU_KEEPALIVE=0 gives the same 60.8 vs 61.3). So for sustained FPS on a 16" M3 Max what counts is CPU work
   per frame (ours per draw and the game's own under Rosetta), not GPU time and not spinning.
+- 2026-11-14: TLG_TEXTURE_HELPER=1 (textures bound on a spinning helper thread) is much worse on the M3 Max: truck
+  75.7 -> 59.4, bridge 99.1 -> 84.3 (lib_ab 3 x 50 s). Keep it off.
