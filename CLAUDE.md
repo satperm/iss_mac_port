@@ -980,3 +980,10 @@ Instruments (Shader Timeline option) for per-shader cost.
   Not merged (no measurable gain here; might help fanless Airs, unmeasurable). tools/gpu_probes/cpu_pstate.c:
   CPU cluster P-state residency. The game's usleep (eboot 0x53b2b0) spins on rdtsc below 501 us
   (TLG_GUEST_USLEEP_SPIN_US patches the threshold); TLG_DUMP_CODE=<hex>,<n> prints loaded eboot bytes.
+- 2026-11-14: A FRAME CAP DOES NOT AVOID THE THROTTLE (bridge 9 min, cool-down first): cap 90 and 85 drop at the
+  same ~3.5 min to ~83/79-84; cap 75 dips once to 71.5 at ~4 min, then holds 75 with the clocks recovering. The
+  P-cores sit at state ~20 even at a 75 cap: at the cap the game's main thread spends ~62% of a core in its
+  rdtsc usleep spin (eboot 0x53b2b0) and five JobWorkers ~16% each, VkRecorder ~49%. Sending the spin to sleep
+  (TLG_GUEST_USLEEP_SPIN_US=0) did not move the throttle uncapped. Thermal equilibrium on the bridge uncapped
+  is ~83 FPS on a 16" M3 Max; the launcher's quality presets (TLG_PERF_MODE) already cover weaker Macs. Untested
+  (a system setting, the owner's to switch): Energy Mode "High Power" (fans earlier, sustained clocks).
