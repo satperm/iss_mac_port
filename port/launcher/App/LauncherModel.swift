@@ -7,6 +7,8 @@ import Foundation
 @MainActor
 final class LauncherModel: ObservableObject {
     @Published var settings = LaunchSettings()
+    /// macOS Energy Mode advice (Model/PowerMode.swift), refreshed when the window loads and before play.
+    @Published private(set) var powerHint: String?
     @Published private(set) var gameProblem: String?
     @Published private(set) var running = false
     @Published private(set) var stopping = false
@@ -56,6 +58,20 @@ final class LauncherModel: ObservableObject {
     func load() {
         settings = LaunchSettings(contentsOf: layout.launchConf)
         checkGame()
+        refreshPowerHint()
+    }
+
+    func refreshPowerHint() {
+        DispatchQueue.global(qos: .utility).async {
+            let hint = PowerState.current()?.hint
+            DispatchQueue.main.async { self.powerHint = hint }
+        }
+    }
+
+    func openBatterySettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.Battery-Settings.extension") {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     func save() {

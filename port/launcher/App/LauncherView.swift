@@ -50,6 +50,12 @@ struct LauncherView: View {
                         Button("Show Log", action: model.showLog)
                     }
                 }
+                if let hint = model.powerHint, !model.running, model.exitMessage == nil {
+                    Text(hint).font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Battery Settings…") { model.openBatterySettings() }
+                        .controlSize(.small)
+                }
                 if model.running {
                     Text(model.benchmarking ? "Benchmark running (90 s), don't touch the controls…"
                          : model.stopping ? "Stopping…" : "Game running").foregroundStyle(.secondary)
