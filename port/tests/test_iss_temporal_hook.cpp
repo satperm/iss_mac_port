@@ -298,10 +298,15 @@ struct Regs {
 static Regs g_regs;                               // the landing pads know its address
 
 extern "C" __attribute__((sysv_abi)) void iss_test_run_stub(const void* stub, Regs* regs);
+#if defined(__APPLE__)
+#define ISS_TEST_SYM "_iss_test_run_stub" // Mach-O C symbols carry a leading underscore
+#else
+#define ISS_TEST_SYM "iss_test_run_stub"
+#endif
 __asm__(
     ".text\n"
-    ".globl iss_test_run_stub\n"
-    "iss_test_run_stub:\n"
+    ".globl " ISS_TEST_SYM "\n"
+    ISS_TEST_SYM ":\n"
     "    pushq %rbp\n    pushq %rbx\n    pushq %r12\n    pushq %r13\n    pushq %r14\n    pushq %r15\n"
     "    movq %rsi, %rbx\n"
     "    leaq 1f(%rip), %rax\n"
@@ -612,7 +617,11 @@ static std::vector<unsigned char> LoadImage() {
     // segment 0 (text + rodata): virtual address v is at file offset v + 0x4000, up to 0xcc55b8 bytes
     const size_t text = 0xcc55b8;
     image.assign(size_t(ISS_TEMPORAL_CAMERA_POINTER) + 0x10, 0);   // the bss reaches the camera pointer
-    std::fseek(f, 0x4000, SEEK_SET);
+    // A fake-signed SELF (CUSA00004 01.07 as dumped) carries the same ELF after a 0x6f30-byte header.
+    unsigned char magic[4] = {};
+    const bool self = std::fread(magic, 1, 4, f) == 4 && magic[0] == 0x4f && magic[1] == 0x15 &&
+                      magic[2] == 0x3d && magic[3] == 0x1d;
+    std::fseek(f, self ? 0x4000 + 0x6f30 : 0x4000, SEEK_SET);
     const size_t got = std::fread(image.data(), 1, text, f);
     std::fclose(f);
     if (got != text) image.clear();
