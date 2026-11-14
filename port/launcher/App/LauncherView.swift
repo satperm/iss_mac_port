@@ -194,6 +194,12 @@ struct LauncherView: View {
                     .pickerStyle(.segmented)
                     Text("30 FPS is steadier on slower Macs than an uneven 35-50. Render scale draws the game at a part of 1080p (sharp at 100%, softer below) and scales it up: more FPS where the GPU is the limit.")
                         .font(.caption).foregroundStyle(.secondary)
+                    Picker("Upscaler", selection: $model.settings.upscaler) {
+                        ForEach(Upscaler.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    Text("Temporal upscaling in place of the game's anti-aliasing: below 100% it rebuilds a sharp 1080p picture with the HUD at full size. Pays off in heavy scenes (fire, smoke) and on slower Macs; costs about 1 ms a frame.")
+                        .font(.caption).foregroundStyle(.secondary)
                     Picker("Shadow detail", selection: $model.settings.shadowDetail) {
                         ForEach(ShadowDetail.allCases) { Text($0.label).tag($0) }
                     }

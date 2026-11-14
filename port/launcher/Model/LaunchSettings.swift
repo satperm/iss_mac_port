@@ -31,6 +31,20 @@ enum RenderScale: String, CaseIterable, Identifiable {
     var label: String { self == .full ? "100%" : "\(rawValue)%" }
 }
 
+/// Temporal upscaler (TLG_ISS_UPSCALER, with the game-side jitter hooks TLG_ISS_TEMPORAL): replaces the
+/// game's anti-aliasing; below 100% render scale it upscales to 1080p with the HUD drawn at full size.
+enum Upscaler: String, CaseIterable, Identifiable {
+    case off = "", fsr = "fsr", metalfx = "metalfx"
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .off: "Off"
+        case .fsr: "FSR 3"
+        case .metalfx: "MetalFX"
+        }
+    }
+}
+
 /// How many sun-shadow cascades the game draws (TLG_SHADOW_CASCADES): Full leaves the variable unset;
 /// fewer cascades mean far fewer draws in open scenes, with coarser or missing distant shadows.
 enum ShadowDetail: String, CaseIterable, Identifiable {
@@ -149,6 +163,7 @@ struct LaunchSettings: Equatable {
     var quality = QualityPreset.original
     var fpsCap = FrameRateCap.display
     var renderScale = RenderScale.full
+    var upscaler = Upscaler.off
     var shadowDetail = ShadowDetail.full
     var particles = ParticleMode.auto
     var textLanguage = "1"
@@ -201,6 +216,7 @@ struct LaunchSettings: Equatable {
         quality = value("TLG_PERF_MODE").flatMap(QualityPreset.init(rawValue:)) ?? .original
         fpsCap = value("TLG_FPS_LIMIT").flatMap(FrameRateCap.init(rawValue:)) ?? .display
         renderScale = value("TLG_RENDER_SCALE").flatMap(RenderScale.init(rawValue:)) ?? .full
+        upscaler = value("TLG_ISS_UPSCALER").flatMap(Upscaler.init(rawValue:)) ?? .off
         shadowDetail = value("TLG_SHADOW_CASCADES").flatMap(ShadowDetail.init(rawValue:)) ?? .full
         textLanguage = value("TLG_LANGUAGE").flatMap { code in GameLanguage.text.contains { $0.code == code } ? code : nil } ?? "1"
         voiceLanguage = value("TLG_AUDIO_LANGUAGE") ?? ""
@@ -222,6 +238,9 @@ struct LaunchSettings: Equatable {
         set("TLG_PERF_MODE", quality == .original ? nil : quality.rawValue)
         set("TLG_FPS_LIMIT", fpsCap == .display ? nil : fpsCap.rawValue)
         set("TLG_RENDER_SCALE", renderScale == .full ? nil : renderScale.rawValue)
+        set("TLG_ISS_UPSCALER", upscaler == .off ? nil : upscaler.rawValue)
+        set("TLG_ISS_TEMPORAL", upscaler == .off ? nil : "1")
+        set("TLG_ISS_TEMPORAL_READY", upscaler == .off ? nil : "1")
         set("TLG_SHADOW_CASCADES", shadowDetail == .full ? nil : shadowDetail.rawValue)
         set("TLG_PARTICLES", particles == .auto ? nil : particles.rawValue)
         set("TLG_LANGUAGE", textLanguage)
@@ -244,7 +263,7 @@ struct LaunchSettings: Equatable {
     /// For the session log and crash reports.
     var summary: [String] {
         [fullscreen ? "full screen" : "windowed", stretch ? "stretched" : "16:9", "pacing \(pacing.label)",
-         "quality \(quality.label)", "FPS cap \(fpsCap.label)", "render scale \(renderScale.label)", "shadow detail \(shadowDetail.label)",
+         "quality \(quality.label)", "FPS cap \(fpsCap.label)", "render scale \(renderScale.label)", "upscaler \(upscaler.label)", "shadow detail \(shadowDetail.label)",
          "particles \(particles.label)", gpuProcess ? "GPU process" : "single process"]
     }
 
