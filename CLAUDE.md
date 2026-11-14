@@ -1016,3 +1016,7 @@ Instruments (Shader Timeline option) for per-shader cost.
   maps) and fa2ea78e perm 1 have no instruction (spirv-dis: no OpStore/OpKill); leaving 1318ddd4 out of depth-only
   pipelines (TLG_SKIP_FS=<hex>, branch agent/empty-fs, also a generic TLG_SKIP_EMPTY_FS) keeps the shadows and gives
   nothing: truck 76.4 / 76.1, bridge 99.5 / 99.0, Seattle 74.1 / 74.0. Shadow passes are vertex work. Not shipped.
+- 2026-11-14: PARTICLE CEILING: dropping cs 5b1e2375 (590 one-workgroup dispatches a frame; breaks the picture,
+  TLG_MAC_SKIP_CS) gives bridge 98.6 -> 99.0, Seattle 73.0 -> 74.7 (truck: nothing, 2026-11-13). Merging those
+  dispatches could win at most a part of that: not worth it. With High Power the GPU-side easy wins on the M3 Max
+  at 1080p are used up (render scale, empty fragment stages, particles, pass restarts all measured <= 2-5%).
