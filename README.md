@@ -165,6 +165,13 @@ Measured on a **MacBook Pro with M3 Max**, macOS 27, 1080p rendering, default se
 Older scripted runs while moving (0.1.2, 2026-11-02): bridge with rain and the camera turning 50-55
 (dips to about 40), open city view from the bridge 41-46, burning building 29-49.
 
+**Long sessions on a MacBook Pro: set Energy Mode to High Power.** In the default Automatic mode
+macOS lowers the CPU clocks after about 3-4 minutes of play, and the frame rate settles 15-20%
+lower (M3 Max, 9 minutes standing: bridge 101 -> 83 FPS, truck crash 75 -> 61). With **System
+Settings -> Battery -> Energy Mode -> High Power** (on power adapter; Macs that offer it, such as
+the 14"/16" MacBook Pro with a Max or Pro chip) both held for the whole 9 minutes: bridge 102,
+truck crash 75. The fans run louder. The launcher shows a hint when this mode is not on.
+
 What changes it:
 
 - **Render scale** below 100%: about +11% at 67% on an M3 Max, more on Macs with smaller GPUs.
@@ -190,6 +197,12 @@ to add yours.
 
 Fixed recently:
 
+- **Less CPU work per draw** (0.1.12): the particles' compute dispatches no longer enter the
+  graphics queue's barrier tracking, and the GPU command thread no longer wakes thousands of times
+  a frame while it waits (30-50% less CPU on that thread). Same FPS on an M3 Max, less heat and
+  more headroom on Macs with fewer cores.
+- **Launcher: Energy Mode hint** (0.1.12): on a power adapter in Automatic mode it suggests High
+  Power for long sessions; with Low Power Mode on it says the game runs much slower.
 - **The frame rate no longer sinks during a session** (0.1.11; a regression of 0.1.10). A helper
   thread asked MoltenVK to wait for the GPU about 4,000 times a second, and every wait left a
   listener behind inside Metal: after 10 minutes in Seattle the frame rate had gone from about 74
@@ -270,8 +283,8 @@ Fixed recently:
 
 - **Frame rate is not a steady 60 everywhere.** The bridge is about 99 standing; the truck crash 76;
   Seattle about 72 standing, lower while moving. All three are limited by the GPU now (1080p, M3 Max);
-  about half of each frame is the game's own code under Rosetta. Long sessions still lose a few FPS
-  (bridge 100 -> 95 over 8 minutes). Busy streets with thousands of objects are limited by the CPU work per draw
+  about half of each frame is the game's own code under Rosetta. Long sessions lose 15-20% after
+  3-4 minutes unless Energy Mode is High Power (see Expected performance). Busy streets with thousands of objects are limited by the CPU work per draw
   (about 25-30 FPS where the game draws ~7,500 objects a frame). Drops seen while playing on the
   bridge are not explained yet.
 - **The frame rate can halve while the game is not the front app** (seen 49 -> 28 FPS): macOS clocks the
