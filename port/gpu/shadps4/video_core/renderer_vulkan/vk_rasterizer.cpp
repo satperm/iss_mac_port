@@ -3108,6 +3108,29 @@ void Rasterizer::AcbWaitMain() {
     acb_scheduler->WaitNextSubmit(scheduler.GetWorkSemaphore()->Handle(), scheduler.CurrentTick() - 1);
 }
 
+// tlg: after a dispatch on the compute queue (it binds the untracked alias of the unified buffer)
+// its buffers are not entered into the graphics queue's barrier tracker: barriers on one queue
+// order nothing on the other; the queues sync at the game's fences (semaphores and events).
+// Entered, ~36,000 dispatches a second cost the recording thread a tree insert per buffer and gave
+// the graphics queue write barriers for work it never ran. TLG_ACB_MAIN_TRACK=1: entered, as
+// before 0.1.12.
+void Rasterizer::AcbResetBindings() {
+    static const bool main_track = [] {
+        const char* env = std::getenv("TLG_ACB_MAIN_TRACK");
+        return env && *env == '1';
+    }();
+    if (main_track) {
+        ResetBindings(true);
+        return;
+    }
+    for (auto& image_id : bound_images) {
+        texture_cache.GetImage(image_id).binding = {};
+    }
+    bound_images.clear();
+    bound_buffers.clear();
+    needs_barrier = false;
+}
+
 void Rasterizer::AcbBind(Scheduler& acb, const ComputePipeline* pipeline, bool barrier) {
     needs_barrier = false;
     if (barrier) {
@@ -3310,7 +3333,7 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
         });
         acb->MarkCompanionWork();
         DebugState.IncDispatch();
-        ResetBindings(true);
+        AcbResetBindings();
         return;
     }
     if ((dispatch_flags & 2u) && AcbUnordered()) {
@@ -3427,7 +3450,7 @@ void Rasterizer::DispatchIndirectRecord(const ComputePipeline* pipeline, VAddr a
         });
         acb->MarkCompanionWork();
         DebugState.IncDispatch();
-        ResetBindings(true);
+        AcbResetBindings();
         return;
     }
     if ((dispatch_flags & 2u) && AcbUnordered()) {

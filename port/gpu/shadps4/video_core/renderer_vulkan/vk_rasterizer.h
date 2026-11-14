@@ -442,6 +442,7 @@ private:
     void EmitIndexBuffer();
 
     void ResetBindings(bool is_compute);
+    void AcbResetBindings();
 
     bool IsComputeMetaClear(const Pipeline* pipeline);
     bool IsComputeImageCopy(const Pipeline* pipeline);
