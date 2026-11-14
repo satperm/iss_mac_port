@@ -135,6 +135,9 @@ public:
     /// thread while the draw pipeline is in use (PipelinedTasks), else here after a drain.
     using OrderedTask = void (*)(Rasterizer& rasterizer, const u8* data);
     /// Returns true when the task was handed to the recording thread (not run yet).
+    /// tlg: the game's temporal upscaling marker (src/iss_temporal.h), 33 payload dwords, run on
+    /// the recording thread right after the game's AA pass.
+    void OnIssTemporalMarker(const u32* payload);
     bool RunInOrder(OrderedTask task, const void* data, u32 size,
                     u64 toggle = TlgToggle::PipelinedTasks);
     /// tlg: a command another thread sent to the GPU thread (Liverpool::SendCommand in_order),

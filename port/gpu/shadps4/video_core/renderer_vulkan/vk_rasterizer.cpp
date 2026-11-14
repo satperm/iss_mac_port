@@ -7352,4 +7352,44 @@ std::pair<vk::Buffer, u64> Rasterizer::QuadIndirectArgs(VAddr args_address, u32 
     return {out.buffer->Handle(), out.offset};
 }
 
+void Rasterizer::OnIssTemporalMarker(const u32* p) {
+    // Stage 0 of docs/METAL4_PLAN.md: what the marker carries, and which cached images sit at the
+    // colour it names (TLG_ISS_TEMPORAL_LOG=1, every 5 s).
+    static const bool log = [] {
+        const char* env = std::getenv("TLG_ISS_TEMPORAL_LOG");
+        return env && *env == '1';
+    }();
+    static u64 markers = 0;
+    static u32 last_seq = 0, gaps = 0;
+    static auto report = std::chrono::steady_clock::now();
+    ++markers;
+    if (markers > 1 && p[2] != last_seq + 1) {
+        ++gaps;
+    }
+    last_seq = p[2];
+    if (!log) {
+        return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now - report < std::chrono::seconds(5)) {
+        return;
+    }
+    report = now;
+    float jitter[2], vp[16], nf[3];
+    std::memcpy(jitter, &p[6], sizeof(jitter));
+    std::memcpy(vp, &p[8], sizeof(vp));
+    std::memcpy(nf, &p[24], sizeof(nf));
+    const VAddr color = VAddr(p[27]) | (VAddr(p[28]) << 32);
+    std::printf("ISS temporal marker: %llu so far (%u seq gaps), seq %u flags %#x render %ux%u jitter %.3f %.3f "
+                "near %.2f far %.0f fov %.3f colour %#llx vp[0] %.4f vp[5] %.4f vp[10] %.6f vp[14] %.4f\n",
+                (unsigned long long)markers, gaps, p[2], p[3], p[4], p[5], jitter[0], jitter[1], nf[0], nf[1], nf[2],
+                (unsigned long long)color, vp[0], vp[5], vp[10], vp[14]);
+    texture_cache.ForEachImageWithAddress(color, [&](VideoCore::ImageId id, VideoCore::Image& image) {
+        std::printf("  image at the colour: %ux%u %s, levels %u, %s\n", image.info.size.width,
+                    image.info.size.height, vk::to_string(image.info.pixel_format).c_str(),
+                    image.info.resources.levels,
+                    image.usage.render_target ? "render target" : "texture");
+    });
+}
+
 } // namespace Vulkan

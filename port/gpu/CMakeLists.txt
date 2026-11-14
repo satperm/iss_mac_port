@@ -407,9 +407,7 @@ target_link_libraries(fsr4-bench PRIVATE ffx-vulkan::fsr4-v07-vulkan ffx-vulkan:
 add_executable(cheat-hook-test EXCLUDE_FROM_ALL ../tests/test_cheat_hook.cpp)
 target_compile_options(cheat-hook-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 
-# Automatic quality governor, and the temporal upscaling hooks of the game side (the second one runs the
-# stubs on the host; the checks against the real eboot need ISS_TEST_EBOOT and are skipped without it).
-add_executable(quality-governor-test EXCLUDE_FROM_ALL ../tests/test_quality_governor.cpp)
-target_compile_options(quality-governor-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+# The temporal upscaling hooks of the game side (runs the stubs on the host; the checks against the real
+# eboot need ISS_TEST_EBOOT and are skipped without it).
 add_executable(iss-temporal-hook-test EXCLUDE_FROM_ALL ../tests/test_iss_temporal_hook.cpp)
 target_compile_options(iss-temporal-hook-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)

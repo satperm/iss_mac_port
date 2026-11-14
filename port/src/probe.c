@@ -704,8 +704,10 @@ static void install_iss_temporal(const char *app0, Segment *segments, uint64_t c
     snprintf(path, sizeof(path), "%s/sce_sys/param.sfo", app0 ? app0 : ".");
     sfo_value(path, "TITLE_ID", serial, sizeof(serial), NULL);
     sfo_value(path, "APP_VER", version, sizeof(version), NULL);
-    if (strcmp(serial, "CUSA00223") || strcmp(version, "01.07")) {
-        printf("Temporal upscaling: unavailable (title '%s', version '%s'; needs CUSA00223 01.07)\n", serial, version);
+    /* CUSA00004 01.07 has the same code (2026-11-08: every hook signature found); the hooks still compare
+     * their bytes before writing. */
+    if ((strcmp(serial, "CUSA00223") && strcmp(serial, "CUSA00004")) || strcmp(version, "01.07")) {
+        printf("Temporal upscaling: unavailable (title '%s', version '%s'; needs CUSA00223 or CUSA00004 01.07)\n", serial, version);
         return;
     }
     if (!mapped(segments, count, ISS_TEMPORAL_JITTER_SITE, ISS_TEMPORAL_JITTER_LENGTH) ||
@@ -721,6 +723,13 @@ static void install_iss_temporal(const char *app0, Segment *segments, uint64_t c
     }
     protect(stubs, page_size, 5);
     puts("Temporal upscaling: game hooks ready (they run the game's own code until the renderer reports ready)");
+    /* The renderer runs in the GPU process (split mode): it cannot call iss_temporal_set_renderer_ready, so
+     * the launcher says it with TLG_ISS_TEMPORAL_READY=1 when its temporal pass is on. */
+    const char *ready = getenv("TLG_ISS_TEMPORAL_READY");
+    if (ready && *ready == '1') {
+        iss_temporal_set_renderer_ready(1);
+        puts("Temporal upscaling: renderer ready (TLG_ISS_TEMPORAL_READY=1): jitter and markers on");
+    }
 }
 /* The renderer's side of src/iss_temporal.h. */
 int iss_temporal_installed(void) { return iss_temporal_state.installed; }
