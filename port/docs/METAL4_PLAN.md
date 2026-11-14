@@ -77,6 +77,14 @@ the stability suite, and no FPS change with the feature off. Verify Metal 4 API 
   Stills: `out/agent/shots-temporal-75/`. Open: overhead of the temporal path (~1.3 ms beyond the scaler: flush,
   motion pass, two blits), scene texture LOD bias, Halton phases for the ratio, owner's eye check.
 
+- 2026-11-14 late: owner: FSR and MetalFX look sharp enough. Cost split (bridge, 75%, TLG_ISS_DIAG): camera
+  tracking 0, motion pass ~0.1 ms, mid-frame flush ~0.15 ms, the upscale itself ~1.1-1.2 ms of frame time (FSR
+  and MetalFX alike; MetalFX's own command buffer is 0.44 ms GPU, the rest is the bubble around it), copy + UI
+  ~0.3 ms. MetalFX by scale: bridge 75% 90.6, 58% 92.4, 50% 93.7 (native 99.6: not pixel-bound); village 75%
+  70.5, 58% 74.1, 50% 75.1 (native 63.0). So on the M3 Max it pays only in pixel-heavy scenes; weaker
+  (pixel-bound) Macs are the target. Removing the bubble needs MetalFX in the frame's own command buffer, i.e.
+  the native Metal renderer (stage 3; Bloodborne measured no cost there).
+
 ## Next steps (stage 0 -> 1)
 
 1. ~~Camera motion vectors for ISS~~ (done, see Progress).

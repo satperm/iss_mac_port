@@ -1262,6 +1262,13 @@ struct IssStats {
 } // namespace
 
 void TemporalUpscaler::RunIss(const u32* p, VideoCore::ImageId color_id) {
+    // TLG_ISS_DIAG (cost split, diagnostic): 1 returns at once (camera tracking only), 2 after the
+    // motion pass, 3 after the upscale (no copy, no UI redirection), 4 after MetalFX's flush.
+    static const int diag = [] {
+        const char* env = std::getenv("TLG_ISS_DIAG");
+        return env ? std::atoi(env) : 0;
+    }();
+    if (diag == 1) return;
     ++iss_stats.markers;
     iss_stats.Report();
     const VideoCore::ImageId depth_id = camera_motion.Depth();
@@ -1367,6 +1374,7 @@ void TemporalUpscaler::RunIss(const u32* p, VideoCore::ImageId color_id) {
     barrier(vk::Image(motion_image), vk::ImageLayout::eGeneral,
             vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderWrite,
             vk::ImageLayout::eGeneral, all, vk::AccessFlagBits2::eShaderRead);
+    if (diag == 2) return;
 
     if (iss_metalfx) {
         // MetalFX encodes into its own Metal command buffer on MoltenVK's queue: the Vulkan work
@@ -1393,6 +1401,7 @@ void TemporalUpscaler::RunIss(const u32* p, VideoCore::ImageId color_id) {
         const float sx = metalfx_jitter_sign[0] * (alt_on ? alt_flip[0] : 1.0f);
         const float sy = metalfx_jitter_sign[1] * (alt_on ? alt_flip[1] : 1.0f);
         scheduler.Flush();
+        if (diag == 4) return; // the mid-frame flush alone
         bool encoded;
         {
             const auto queue_lock = Scheduler::LockQueue();
@@ -1477,6 +1486,7 @@ void TemporalUpscaler::RunIss(const u32* p, VideoCore::ImageId color_id) {
     iss_reset = false;
     }
 
+    if (diag == 3) return;
     if (scaled) {
         // The result goes into the output-size UI image; the game's draws into its AA output from
         // here to the display pass are redirected there (RedirectColor), the display pass samples it
