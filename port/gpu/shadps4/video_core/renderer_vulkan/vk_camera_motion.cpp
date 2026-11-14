@@ -63,6 +63,9 @@ CameraMotion::CameraMotion(const Instance& instance_, Scheduler& scheduler_,
     if (const char* iss_fsr = std::getenv("TLG_ISS_FSR"); iss_fsr && *iss_fsr == '1') {
         for_upscaler = true;
     }
+    if (const char* iss = std::getenv("TLG_ISS_UPSCALER"); iss && *iss && std::strcmp(iss, "none") != 0) {
+        for_upscaler = true;
+    }
     const auto device = instance.GetDevice();
     if (for_upscaler) {
         const std::array<vk::DescriptorSetLayoutBinding, 3> motion_bindings = {{

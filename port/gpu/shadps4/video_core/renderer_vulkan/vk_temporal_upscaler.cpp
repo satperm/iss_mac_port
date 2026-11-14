@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "video_core/renderer_vulkan/vk_temporal_upscaler.h"
+#include "tlg_metalfx.h"
 #include "video_core/renderer_vulkan/vk_gpu_profiler.h"
 #include "video_core/renderer_vulkan/motion_history.h"
 #include "video_core/renderer_vulkan/vk_scene_resolution.h"
@@ -423,7 +424,7 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr, b
     create_info.maxRenderSize = {w, h};
     create_info.maxOutputSize = {ow, oh};
     // FSR 4 has its own model context (vk_fsr4); the images below are shared.
-    if (!use_fsr4 && !use_taa) {
+    if (!use_fsr4 && !use_taa && !(iss && iss_metalfx)) {
         if (const u64 issues = ffxVkPortableValidateUpscaleCreateInfo(&create_info)) {
             PrintIssues("create info", issues);
             return false;
@@ -460,8 +461,9 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr, b
         .arrayLayers = 1,
         .samples = vk::SampleCountFlagBits::e1,
         .tiling = vk::ImageTiling::eOptimal,
+        // Colour attachment: MetalFX wants its output usable as a render target too.
         .usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
-                 vk::ImageUsageFlagBits::eTransferSrc,
+                 vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eColorAttachment,
         .initialLayout = vk::ImageLayout::eUndefined,
     });
     output_view = Check(device.createImageViewUnique({
@@ -1235,9 +1237,36 @@ void TemporalUpscaler::Run() {
     }
 }
 
+namespace {
+// TLG_ISS_TEMPORAL_STATS=1: every 5 s, markers / resolved frames / skips by reason / history resets,
+// to find frames shown without the temporal resolve (they flicker: jittered, no history).
+struct IssStats {
+    u64 markers = 0, resolved = 0, no_depth = 0, bad_inputs = 0, resets = 0, invalid_motion = 0;
+    std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
+    void Report() {
+        static const bool on = [] {
+            const char* env = std::getenv("TLG_ISS_TEMPORAL_STATS");
+            return env && *env == '1';
+        }();
+        const auto now = std::chrono::steady_clock::now();
+        if (!on || now - last < std::chrono::seconds(5)) return;
+        last = now;
+        std::printf("ISS temporal stats: markers %llu resolved %llu no-depth %llu bad-inputs %llu "
+                    "resets %llu invalid-motion %llu\n",
+                    (unsigned long long)markers, (unsigned long long)resolved, (unsigned long long)no_depth,
+                    (unsigned long long)bad_inputs, (unsigned long long)resets,
+                    (unsigned long long)invalid_motion);
+        *this = IssStats{};
+    }
+} iss_stats;
+} // namespace
+
 void TemporalUpscaler::RunIss(const u32* p, VideoCore::ImageId color_id) {
+    ++iss_stats.markers;
+    iss_stats.Report();
     const VideoCore::ImageId depth_id = camera_motion.Depth();
     if (failed || !color_id || !depth_id) {
+        ++iss_stats.no_depth;
         static bool warned = false;
         if (!warned) {
             warned = true;
@@ -1254,6 +1283,7 @@ void TemporalUpscaler::RunIss(const u32* p, VideoCore::ImageId color_id) {
         (depth_format != vk::Format::eD32Sfloat && depth_format != vk::Format::eD32SfloatS8Uint) ||
         !(color.usage_flags & vk::ImageUsageFlagBits::eSampled) ||
         !(color.usage_flags & vk::ImageUsageFlagBits::eTransferDst)) {
+        ++iss_stats.bad_inputs;
         static bool warned = false;
         if (!warned) {
             warned = true;
@@ -1263,12 +1293,21 @@ void TemporalUpscaler::RunIss(const u32* p, VideoCore::ImageId color_id) {
         }
         return;
     }
+    // inFAMOUS keeps its own history flag: the GoW3 frame logic (OnFrameStart) sets `reset` every
+    // frame here, because Run() never dispatches, which threw the history away each frame (flicker).
+    const bool was_ready = resources_ready && context_iss && width == w && height == h &&
+                           out_width == w && out_height == h;
     if (!EnsureResources(w, h, w, h, false, true)) {
         failed = true;
         return;
     }
+    bool iss_reset_now = iss_reset || !was_ready;
     if (!camera_motion.IssValid()) {
-        reset = true;
+        ++iss_stats.invalid_motion;
+        iss_reset_now = true;
+    }
+    if (iss_reset_now) {
+        ++iss_stats.resets;
     }
     float near_fov[3];
     std::memcpy(near_fov, &p[24], sizeof(near_fov)); // near, far, vertical fov
@@ -1288,7 +1327,7 @@ void TemporalUpscaler::RunIss(const u32* p, VideoCore::ImageId color_id) {
     runtime.Transit(&color, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eComputeShader,
                     vk::AccessFlagBits2::eShaderRead);
     runtime.FlushBarriers();
-    const auto cmdbuf = scheduler.CommandBuffer();
+    auto cmdbuf = scheduler.CommandBuffer(); // MetalFX submits mid-frame
     const auto barrier = [&](vk::Image image, vk::ImageLayout old_layout,
                              vk::PipelineStageFlags2 src_stage, vk::AccessFlags2 src_access,
                              vk::ImageLayout new_layout, vk::PipelineStageFlags2 dst_stage,
@@ -1317,6 +1356,62 @@ void TemporalUpscaler::RunIss(const u32* p, VideoCore::ImageId color_id) {
             vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderWrite,
             vk::ImageLayout::eGeneral, all, vk::AccessFlagBits2::eShaderRead);
 
+    if (iss_metalfx) {
+        // MetalFX encodes into its own Metal command buffer on MoltenVK's queue: the Vulkan work
+        // that wrote colour, depth and motion is submitted first (commit order), and the blit
+        // below goes into the next command buffer.
+        // TLG_METALFX_JITTER_ALT=x|y|xy (diagnostic): that flip on and off every 300 frames within
+        // one run, logged with the shot clock, to compare the two conventions on the same view.
+        static const std::array<float, 2> alt_flip = [] {
+            const char* env = std::getenv("TLG_METALFX_JITTER_ALT");
+            std::array<float, 2> f{1.0f, 1.0f};
+            for (const char* c = env ? env : ""; *c; ++c) {
+                if (*c == 'x') f[0] = -1.0f;
+                if (*c == 'y') f[1] = -1.0f;
+            }
+            return f;
+        }();
+        static u64 alt_frames = 0;
+        const bool alt_on = ((alt_frames++ / 300) & 1) != 0;
+        if (alt_frames % 300 == 1 && (alt_flip[0] < 0.0f || alt_flip[1] < 0.0f)) {
+            std::printf("MetalFX jitter alt %d at %lld ms\n", alt_on ? 1 : 0,
+                        (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now().time_since_epoch()).count());
+        }
+        const float sx = metalfx_jitter_sign[0] * (alt_on ? alt_flip[0] : 1.0f);
+        const float sy = metalfx_jitter_sign[1] * (alt_on ? alt_flip[1] : 1.0f);
+        scheduler.Flush();
+        bool encoded;
+        {
+            const auto queue_lock = Scheduler::LockQueue();
+            encoded = TlgMetalFx::Encode({
+                .device = instance.GetDevice(),
+                .get_device_proc_addr = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetDeviceProcAddr,
+                .queue = instance.GetGraphicsQueue(),
+                .color = color.GetImage(),
+                .depth = depth.GetImage(),
+                .motion = vk::Image(motion_image),
+                .output = vk::Image(output_image),
+                .width = w,
+                .height = h,
+                .out_width = w,
+                .out_height = h,
+                .jitter_x = sx * jitter_now[0],
+                .jitter_y = sy * jitter_now[1],
+                .motion_scale_x = 1.0f,
+                .motion_scale_y = 1.0f,
+                .reset = iss_reset_now,
+                .hdr = false,
+                .depth_reversed = true,
+            });
+        }
+        cmdbuf = scheduler.CommandBuffer();
+        if (!encoded) {
+            failed = true; // logged by TlgMetalFx; the game's FXAA output stays
+            return;
+        }
+        iss_reset = false;
+    } else {
     FfxVkPortableUpscaleDispatchInfo info{};
     info.structSize = sizeof(info);
     info.commandBuffer = cmdbuf;
@@ -1350,7 +1445,7 @@ void TemporalUpscaler::RunIss(const u32* p, VideoCore::ImageId color_id) {
     info.viewSpaceToMeters = 1.0f;
     info.sharpness = std::min(TlgSettings::Get().sharpness.load(), 1.0f);
     info.enableSharpening = TlgSettings::Get().sharpen ? VK_TRUE : VK_FALSE;
-    info.reset = reset ? VK_TRUE : VK_FALSE;
+    info.reset = iss_reset_now ? VK_TRUE : VK_FALSE;
     info.frameId = frame_id++;
     FfxVkPortableUpscaleCreateInfo create_info{};
     create_info.structSize = sizeof(create_info);
@@ -1367,7 +1462,8 @@ void TemporalUpscaler::RunIss(const u32* p, VideoCore::ImageId color_id) {
         failed = true;
         return;
     }
-    reset = false;
+    iss_reset = false;
+    }
 
     // The result replaces the AA output; grain and the UI are drawn on it afterwards.
     runtime.Transit(&color, vk::ImageLayout::eTransferDstOptimal, vk::PipelineStageFlagBits2::eAllTransfer,
@@ -1388,10 +1484,12 @@ void TemporalUpscaler::RunIss(const u32* p, VideoCore::ImageId color_id) {
                      vk::ImageLayout::eTransferDstOptimal, region, vk::Filter::eNearest);
     color.flags |= VideoCore::ImageFlagBits::GpuModified;
     color.flags &= ~VideoCore::ImageFlagBits::Dirty;
+    ++iss_stats.resolved;
     static bool first = true;
     if (first) {
         first = false;
-        std::printf("ISS FSR: first frame %ux%u, colour %s, depth %s, near %.2f fov %.3f\n", w, h,
+        std::printf("ISS %s: first frame %ux%u, colour %s, depth %s, near %.2f fov %.3f\n",
+                    iss_metalfx ? "MetalFX" : "FSR", w, h,
                     vk::to_string(color.info.pixel_format).c_str(), vk::to_string(depth_format).c_str(),
                     near_fov[0], near_fov[2]);
     }

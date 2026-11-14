@@ -7366,7 +7366,8 @@ void Rasterizer::OnIssTemporalMarker(const u32* p) {
         // Stage 1 of docs/METAL4_PLAN.md: FSR 3 at native size in place of the game's FXAA.
         static const bool iss_fsr = [] {
             const char* env = std::getenv("TLG_ISS_FSR");
-            return env && *env == '1';
+            const char* upscaler = std::getenv("TLG_ISS_UPSCALER"); // fsr | metalfx
+            return (env && *env == '1') || (upscaler && *upscaler && std::strcmp(upscaler, "none") != 0);
         }();
         if (iss_fsr && output) {
             upscaler->RunIss(p, output);

@@ -190,6 +190,11 @@ public:
         return depth_clip_enable;
     }
 
+    /// tlg: VK_EXT_metal_objects (macOS): the Metal objects behind Vulkan ones, for MetalFX.
+    bool IsMetalObjectsSupported() const {
+        return metal_objects;
+    }
+
     /// Returns true when VK_EXT_depth_range_unrestricted is supported
     bool IsDepthRangeUnrestrictedSupported() const {
         return depth_range_unrestricted;
@@ -638,6 +643,7 @@ private:
     bool depth_clip_enable{};
     bool dynamic_state_3{};
     bool depth_range_unrestricted{};
+    bool metal_objects{};
     bool vertex_input_dynamic_state{};
     bool list_restart{};
     bool robust_buffer_access2{};

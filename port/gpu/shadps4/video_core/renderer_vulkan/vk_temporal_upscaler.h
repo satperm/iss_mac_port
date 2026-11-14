@@ -13,6 +13,8 @@
 #pragma once
 
 #include <array>
+#include <cstdlib>
+#include <string_view>
 #include <chrono>
 #include <memory>
 #include <mutex>
@@ -217,6 +219,22 @@ private:
     u32 out_width = 0, out_height = 0;     ///< output size of the context
     bool context_hdr = true;
     bool context_iss = false; ///< reversed infinite depth (inFAMOUS)
+    bool iss_reset = true;    ///< inFAMOUS: discard the history at the next RunIss
+    /// inFAMOUS: TLG_ISS_UPSCALER=metalfx (MetalFX temporal) instead of FSR 3 (fsr, or TLG_ISS_FSR=1).
+    bool iss_metalfx = [] {
+        const char* env = std::getenv("TLG_ISS_UPSCALER");
+        return env && std::string_view{env} == "metalfx";
+    }();
+    /// TLG_METALFX_JITTER_SIGN=x|y|xy: MetalFX's jitter convention is checked by eye/measurement.
+    std::array<float, 2> metalfx_jitter_sign = [] {
+        const char* env = std::getenv("TLG_METALFX_JITTER_SIGN");
+        std::array<float, 2> f{1.0f, 1.0f};
+        for (const char* c = env ? env : ""; *c; ++c) {
+            if (*c == 'x') f[0] = -1.0f;
+            if (*c == 'y') f[1] = -1.0f;
+        }
+        return f;
+    }();
     u32 target_width = 1920, target_height = 1080; ///< output size of scaled presets
     u64 ui_trigger_vs = 0x34e8a281;
     VideoCore::ImageId ldr_target{};
