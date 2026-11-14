@@ -40,38 +40,62 @@ void main() {
     const vec2 scene_uv = uv - jitter / size;
     const vec2 ndc = vec2(scene_uv.x * 2.0 - 1.0, 1.0 - scene_uv.y * 2.0);
 
-    // Clip z = zs * z + zo, w = z; depth = zs + zo / z (zo < 0, depth < zs in front).
-    const bool sky = depth >= 1.0;
-    const float denom = min(depth - proj.z, -1e-8);
-    const float z = sky ? 1.0 : proj.w / denom;
-    // Clear depth is an infinite direction: rotate it with the camera, without translation.
-    // A threshold below 1 incorrectly classified distant geometry as motionless sky.
-    const vec4 view = vec4(ndc.x * z / proj.x, ndc.y * z / proj.y, z, sky ? 0.0 : 1.0);
-    const vec3 prev_view =
-        vec3(dot(reproject[0], view), dot(reproject[1], view), dot(reproject[2], view));
-    const vec2 prev_ndc =
-        vec2(prev_view.x * prev_proj.x, prev_view.y * prev_proj.y) / max(prev_view.z, 1e-4);
-    const vec2 prev_uv = vec2(prev_ndc.x * 0.5 + 0.5, 0.5 - prev_ndc.y * 0.5);
-    const vec2 motion = (prev_uv - scene_uv) * size;
+    bool sky;
+    float z;
+    vec2 motion;
+    if ((mode & 8u) != 0u) {
+        // inFAMOUS (mode bit 8): one 4x4 matrix takes this frame's clip space to the previous
+        // frame's (previous view-projection times the inverse of this one, both unjittered, composed
+        // on the CPU; rows in reproject[0..2] and proj). Reversed depth: 0 is the far plane.
+        const vec4 c = vec4(ndc, depth, 1.0);
+        const vec4 prev_clip =
+            vec4(dot(reproject[0], c), dot(reproject[1], c), dot(reproject[2], c), dot(proj, c));
+        sky = depth <= 0.0;
+        z = depth;
+        motion = vec2(0.0);
+        if (prev_clip.w > 1e-6) {
+            const vec2 prev_ndc = prev_clip.xy / prev_clip.w;
+            const vec2 prev_uv = vec2(prev_ndc.x * 0.5 + 0.5, 0.5 - prev_ndc.y * 0.5);
+            motion = (prev_uv - scene_uv) * size;
+        }
+        // Diagnostics (TLG_ISS_MOTION_TEST): bit 16 negates x, bit 32 negates y.
+        if ((mode & 16u) != 0u) motion.x = -motion.x;
+        if ((mode & 32u) != 0u) motion.y = -motion.y;
+    } else {
+        // Clip z = zs * z + zo, w = z; depth = zs + zo / z (zo < 0, depth < zs in front).
+        sky = depth >= 1.0;
+        const float denom = min(depth - proj.z, -1e-8);
+        z = sky ? 1.0 : proj.w / denom;
+        // Clear depth is an infinite direction: rotate it with the camera, without translation.
+        // A threshold below 1 incorrectly classified distant geometry as motionless sky.
+        const vec4 view = vec4(ndc.x * z / proj.x, ndc.y * z / proj.y, z, sky ? 0.0 : 1.0);
+        const vec3 prev_view =
+            vec3(dot(reproject[0], view), dot(reproject[1], view), dot(reproject[2], view));
+        const vec2 prev_ndc =
+            vec2(prev_view.x * prev_proj.x, prev_view.y * prev_proj.y) / max(prev_view.z, 1e-4);
+        const vec2 prev_uv = vec2(prev_ndc.x * 0.5 + 0.5, 0.5 - prev_ndc.y * 0.5);
+        motion = (prev_uv - scene_uv) * size;
+    }
+    const uint view_mode = mode & 7u; // bits 8+ select the inFAMOUS path and its diagnostics
 
 #ifdef DEBUG_OVERLAY
     const vec4 current = imageLoad(color_img, pixel);
     next_frame[pixel.y * int(size.x) + pixel.x] = packUnorm4x8(current);
-    if (mode == 3 || mode == 4) {
+    if (view_mode == 3u || view_mode == 4u) {
         const ivec2 prev_pixel = ivec2(floor(uv * size + motion + previous_jitter - jitter));
         vec4 prev = vec4(0.0, 0.0, 0.0, 1.0);
         if (all(greaterThanEqual(prev_pixel, ivec2(0))) && all(lessThan(prev_pixel, ivec2(size)))) {
             prev = unpackUnorm4x8(prev_frame[prev_pixel.y * int(size.x) + prev_pixel.x]);
         }
-        const vec3 out_color = mode == 3 ? prev.rgb : abs(prev.rgb - current.rgb) * 4.0;
+        const vec3 out_color = view_mode == 3u ? prev.rgb : abs(prev.rgb - current.rgb) * 4.0;
         imageStore(color_img, pixel, vec4(out_color, current.a));
         return;
     }
-    if (mode == 1) {
+    if (view_mode == 1u) {
         // Raw depth visualization
         imageStore(color_img, pixel, vec4(fract(depth * 4.0), depth, depth < 0.0 ? 1.0 : 0.0, 1.0));
         return;
-    } else if (mode == 2) {
+    } else if (view_mode == 2u) {
         // View-space depth visualization (z / 50)
         const float v = z / 50.0;
         imageStore(color_img, pixel, vec4(fract(v * 4.0), v, v < 0.0 ? 1.0 : 0.0, 1.0));
@@ -84,7 +108,7 @@ void main() {
     imageStore(color_img, pixel, vec4(mix(current.rgb, mv_color, 0.75), current.a));
 #else
     vec2 result = motion;
-    if (mode == 1) {
+    if (view_mode == 1u) {
         const vec4 object_motion = texelFetch(object_tex, pixel, 0);
         // A later ordinary draw may have covered this pixel without touching the motion
         // target. Its final depth then differs from the depth stored with the vector.

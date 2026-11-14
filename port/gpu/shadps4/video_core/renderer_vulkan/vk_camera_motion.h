@@ -69,6 +69,11 @@ public:
     void RecordMotion(vk::CommandBuffer cmdbuf, vk::ImageView depth_view, vk::ImageView motion_view,
                       u32 width, u32 height);
 
+    /// tlg: inFAMOUS: the temporal marker of a frame (src/iss_temporal.h payload, 33 dwords) after the
+    /// game's AA, and the image it names (the AA output). Keeps the unjittered view-projection of
+    /// each frame and makes the clip-to-clip reprojection; with TLG_DEBUG_MOTION=1 draws the debug
+    /// view into `color` right there (before grain and the UI).
+    void OnIssMarker(const u32* payload, VideoCore::ImageId color);
     /// A bound constant buffer of 864 bytes: checks the scene constant signature.
     void OnConstants(const float* data);
 
@@ -101,6 +106,12 @@ private:
 
     ObjectMotion* object_motion = nullptr;
     Camera current, previous;
+    bool iss_mode = false;          ///< inFAMOUS: motion from the clip reprojection below
+    bool iss_have_previous = false;
+    std::array<float, 16> iss_view_proj{}; ///< the last frame's, column-major (GLSL memory order)
+    std::array<float, 16> iss_reproject{}; ///< this frame's clip space to the previous frame's
+    std::array<float, 16> iss_view_proj_older{}; ///< two frames back (TLG_ISS_MOTION_TEST=6)
+    u32 iss_test_bits = 0;
     bool frame_has_camera = false;
     std::array<float, 2> jitter{}, previous_jitter{};
     std::array<u32, 2> render_size{};

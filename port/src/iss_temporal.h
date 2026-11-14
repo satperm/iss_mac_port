@@ -56,7 +56,8 @@ extern "C" {
  *       HYPOTHESIS, to confirm with the reprojection test: it is (-jitter[0], +jitter[1]) of the
  *       IssTemporalFrame, which is the shift of the projection window (see there).
  * 8-23  view-projection of this frame WITHOUT jitter, 16 floats in the order a GLSL mat4 has in memory
- *       (the game's row-vector matrices have the same bytes). From camera+0x470 (HYPOTHESIS).
+ *       (the game's row-vector matrices have the same bytes). From camera+0x240, which includes the
+ *       camera position (camera+0x470 is the camera-relative copy without it: not usable across frames).
  *   24  near   25 far   26 vertical fov (camera+0x584, +0x588, +0x590)
  * 27-28  guest address of the colour to upscale: the game's AA OUTPUT image (the AA has run), low dword first
  * 29-30  guest address of the scene depth: 0 = not known by the hook, the renderer finds it
@@ -89,11 +90,11 @@ typedef struct IssTemporalImage {
 typedef struct IssTemporalCamera {
     uint64_t address;
     float proj[16];   /* camera+0x1c0: projection (reversed Z) */
-    float m200[16];   /* camera+0x200: copied to +0x240 by the game's camera update */
-    float m240[16];   /* camera+0x240 */
+    float m200[16];   /* camera+0x200: view-projection with the jitter and the camera position */
+    float m240[16];   /* camera+0x240: the same without the jitter (the marker's matrix) */
     float vec420[4];  /* camera+0x420 */
     float m430[16];   /* camera+0x430..0x46f: the matrix the game copies to +0x470 before the jitter */
-    float m470[16];   /* camera+0x470..0x4af: that copy (HYPOTHESIS: view-projection without jitter) */
+    float m470[16];   /* camera+0x470..0x4af: m240 without the translation (camera-relative) */
     float raw580[16]; /* camera+0x580..0x5bf, scalars below read from it */
     float near_z;     /* camera+0x584 */
     float far_z;      /* camera+0x588 */

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "video_core/renderer_vulkan/vk_camera_motion.h"
+#include "../../../../gpu_v2/gpu/iss_temporal_math.h"
 
 #include <cmath>
 #include <cstdio>
@@ -176,12 +177,70 @@ vk::Image CameraMotion::ObjectMotionImage(u32 width, u32 height) const noexcept 
                                                       : vk::Image{};
 }
 
+namespace {
+/// inFAMOUS: rows of the column-major clip reprojection into the push constants (rows 0-2 in
+/// reproject, row 3 in proj); the shader's mode bit 8 reads them so.
+void PackIssRows(const std::array<float, 16>& m, std::array<float, 12>& rows, std::array<float, 4>& row3) {
+    for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 4; ++c) {
+            rows[r * 4 + c] = m[c * 4 + r];
+        }
+    }
+    for (int c = 0; c < 4; ++c) {
+        row3[c] = m[c * 4 + 3];
+    }
+}
+} // namespace
+
+void CameraMotion::OnIssMarker(const u32* payload, VideoCore::ImageId color) {
+    IssTemporal::Frame frame;
+    if (!IssTemporal::ParseMarker(payload, IssTemporal::kPayloadDwords, frame)) {
+        return;
+    }
+    iss_mode = true;
+    previous_jitter = jitter;
+    jitter = {frame.jitter[0], frame.jitter[1]};
+    render_size = {frame.render_width, frame.render_height};
+    std::array<float, 16> view_proj{};
+    std::memcpy(view_proj.data(), &frame.view_proj, sizeof(view_proj));
+    const bool cut = (frame.flags & IssTemporal::kFlagCameraCut) != 0;
+    bool valid = false;
+    if (iss_have_previous && !cut) {
+        IssTemporal::Mat4 out{};
+        IssTemporal::Mat4 cur{}, prev{};
+        std::memcpy(&cur, view_proj.data(), sizeof(cur));
+        std::memcpy(&prev, iss_view_proj.data(), sizeof(prev));
+        // TLG_ISS_MOTION_TEST (diagnostic): 1/2/3 negate x/y/both in the shader, 4 transposes both
+        // matrices, 5 swaps current and previous, 6 uses the matrix two frames back as "previous".
+        static const int test = [] {
+            const char* env = std::getenv("TLG_ISS_MOTION_TEST");
+            return env ? std::atoi(env) : 0;
+        }();
+        const auto transpose = [](IssTemporal::Mat4& m) {
+            for (int r = 0; r < 4; ++r) for (int c = r + 1; c < 4; ++c) std::swap(m[c * 4 + r], m[r * 4 + c]);
+        };
+        if (test == 4) { transpose(cur); transpose(prev); }
+        if (test == 6) { std::memcpy(&prev, iss_view_proj_older.data(), sizeof(prev)); }
+        valid = test == 5 ? IssTemporal::Reproject(prev, cur, out) : IssTemporal::Reproject(cur, prev, out);
+        iss_test_bits = test == 1 ? 16u : test == 2 ? 32u : test == 3 ? 48u : 0u;
+        std::memcpy(iss_reproject.data(), &out, sizeof(out));
+    }
+    iss_view_proj_older = iss_view_proj;
+    iss_view_proj = view_proj;
+    iss_have_previous = true;
+    current.valid = previous.valid = valid;
+    frame_has_camera = true;
+    if (debug_overlay && color && depth_id && valid) {
+        Overlay(color);
+    }
+}
+
 void CameraMotion::RecordMotion(vk::CommandBuffer cmdbuf, vk::ImageView depth_view,
                                 vk::ImageView motion_view, u32 width, u32 height) {
     bool object_valid = false;
     const vk::ImageView object_view = object_motion && object_motion->Enabled()
         ? object_motion->PrepareRead(cmdbuf, width, height, object_valid) : depth_view;
-    const PushConstants push{
+    PushConstants push{
         .reproject = Multiply(previous.view, current.inv_view),
         .proj = current.proj,
         .prev_proj = previous.proj,
@@ -190,6 +249,10 @@ void CameraMotion::RecordMotion(vk::CommandBuffer cmdbuf, vk::ImageView depth_vi
         .previous_jitter = previous_jitter,
         .mode = object_valid ? 1u : 0u,
     };
+    if (iss_mode) {
+        PackIssRows(iss_reproject, push.reproject, push.proj);
+        push.mode |= 8u | iss_test_bits;
+    }
     const vk::DescriptorImageInfo depth_info{.imageView = depth_view,
                                              .imageLayout = vk::ImageLayout::eGeneral};
     const vk::DescriptorImageInfo motion_info{.imageView = motion_view,
@@ -245,7 +308,9 @@ void CameraMotion::OnGBufferPass(VideoCore::ImageId depth) {
 }
 
 void CameraMotion::OnDisplayPass(VideoCore::ImageId frame) {
-    if (debug_overlay && frame && depth_id && current.valid && previous.valid) {
+    // inFAMOUS draws its debug view at the temporal marker (OnIssMarker), not here: twice a frame
+    // the previous-frame buffer of the reprojection views would hold the overlaid frame.
+    if (debug_overlay && !iss_mode && frame && depth_id && current.valid && previous.valid) {
         Overlay(frame);
     }
     if (!frame_has_camera) InvalidateHistory();
@@ -293,7 +358,7 @@ void CameraMotion::Overlay(VideoCore::ImageId frame) {
                     vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite);
     runtime.FlushBarriers();
 
-    const PushConstants push{
+    PushConstants push{
         .reproject = Multiply(previous.view, current.inv_view),
         .proj = current.proj,
         .prev_proj = previous.proj,
@@ -306,6 +371,10 @@ void CameraMotion::Overlay(VideoCore::ImageId frame) {
                 : TlgToggle::Disabled(1u << 23) ? 4u
                                                : 0u,
     };
+    if (iss_mode) {
+        PackIssRows(iss_reproject, push.reproject, push.proj);
+        push.mode |= 8u | iss_test_bits;
+    }
     static u32 log_counter = 0;
     if (++log_counter % 200 == 0) {
         const auto& m = push.reproject;

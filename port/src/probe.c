@@ -698,6 +698,7 @@ static int iss_temporal_requested(void) {
     fclose(f);
     return on;
 }
+static void iss_start_camera_dump(void);
 static void install_iss_temporal(const char *app0, Segment *segments, uint64_t count, uint64_t size) {
     if (!iss_temporal_requested()) return;
     char path[4096], serial[32] = "", version[32] = "";
@@ -730,6 +731,45 @@ static void install_iss_temporal(const char *app0, Segment *segments, uint64_t c
         iss_temporal_set_renderer_ready(1);
         puts("Temporal upscaling: renderer ready (TLG_ISS_TEMPORAL_READY=1): jitter and markers on");
     }
+    iss_start_camera_dump();
+}
+/* Diagnostic (TLG_ISS_CAMERA_DUMP=1): every 500 ms, the camera blocks of the two newest complete
+ * frames, to identify the view-projection offline. Reads the snapshot ring only (no guest thread). */
+static void iss_print_floats(const char *name, const float *f, int n) {
+    printf("  %s", name);
+    for (int i = 0; i < n; ++i) printf(" %.9g", f[i]);
+    putchar('\n');
+}
+static void *iss_camera_dump_thread(void *arg) {
+    (void)arg;
+    for (int round = 0; round < 2000; ++round) {
+        usleep(500000);
+        const uint32_t latest = iss_temporal_latest_seq();
+        if (latest < 3) continue;
+        for (uint32_t seq = latest - 2; seq <= latest - 1; ++seq) {
+            IssTemporalFrame f;
+            if (!iss_temporal_copy_frame(seq, &f)) continue;
+            printf("ISS camera seq %u phase %u jitter %.6f %.6f size %u %u reset %u\n", f.seq, f.phase, f.jitter[0],
+                   f.jitter[1], f.render_width, f.render_height, f.reset);
+            iss_print_floats("window", f.window, 4);
+            iss_print_floats("proj", f.camera.proj, 16);
+            iss_print_floats("m200", f.camera.m200, 16);
+            iss_print_floats("m240", f.camera.m240, 16);
+            iss_print_floats("v420", f.camera.vec420, 4);
+            iss_print_floats("m430", f.camera.m430, 16);
+            iss_print_floats("m470", f.camera.m470, 16);
+            iss_print_floats("raw580", f.camera.raw580, 16);
+            iss_print_floats("camwindow", f.camera.window, 4);
+        }
+        fflush(stdout);
+    }
+    return NULL;
+}
+static void iss_start_camera_dump(void) {
+    const char *env = getenv("TLG_ISS_CAMERA_DUMP");
+    if (!env || *env != '1') return;
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, iss_camera_dump_thread, NULL) == 0) pthread_detach(thread);
 }
 /* The renderer's side of src/iss_temporal.h. */
 int iss_temporal_installed(void) { return iss_temporal_state.installed; }

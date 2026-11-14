@@ -91,7 +91,8 @@ static void TestMarker() {
     frame.render_height = 1080;
     frame.jitter[0] = 0.25f;
     frame.jitter[1] = -1.0f / 6.0f;
-    for (int i = 0; i < 16; ++i) frame.camera.m470[i] = 0.5f + float(i);
+    for (int i = 0; i < 16; ++i) frame.camera.m240[i] = 0.5f + float(i);
+    for (int i = 0; i < 16; ++i) frame.camera.m470[i] = -1.0f; // must not reach the marker
     frame.camera.near_z = 10.0f;
     frame.camera.far_z = 1.0e7f;
     frame.camera.fov = 0.9f;

@@ -7353,6 +7353,17 @@ std::pair<vk::Buffer, u64> Rasterizer::QuadIndirectArgs(VAddr args_address, u32 
 }
 
 void Rasterizer::OnIssTemporalMarker(const u32* p) {
+    {
+        // The AA output the marker names: the render-target image at that address.
+        const VAddr address = VAddr(p[27]) | (VAddr(p[28]) << 32);
+        VideoCore::ImageId output{};
+        texture_cache.ForEachImageWithAddress(address, [&](VideoCore::ImageId id, VideoCore::Image& image) {
+            if (!output && image.usage.render_target) {
+                output = id;
+            }
+        });
+        camera_motion->OnIssMarker(p, output);
+    }
     // Stage 0 of docs/METAL4_PLAN.md: what the marker carries, and which cached images sit at the
     // colour it names (TLG_ISS_TEMPORAL_LOG=1, every 5 s).
     static const bool log = [] {

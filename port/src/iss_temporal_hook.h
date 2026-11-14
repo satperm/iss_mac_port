@@ -276,7 +276,11 @@ static inline void iss_temporal_build_marker(const IssTemporalFrame *frame, uint
      * game's clip y, which is up, and the image's y is down, so the content moves down: no flip. */
     const float jitter[2] = {-frame->jitter[0], frame->jitter[1]};
     memcpy(&p[6], jitter, sizeof(jitter));
-    memcpy(&p[8], frame->camera.m470, sizeof(frame->camera.m470));
+    /* camera+0x240: the unjittered view-projection WITH the camera position (verified 2026-11-14 from
+     * dumped matrices: m200 = m240 plus the window offset, rows orthogonal, |w row| = 1). +0x470 is the
+     * same matrix without the translation (camera-relative): reprojection with it loses the camera's
+     * movement and breaks while the third-person camera orbits. */
+    memcpy(&p[8], frame->camera.m240, sizeof(frame->camera.m240));
     memcpy(&p[24], &frame->camera.near_z, 4);
     memcpy(&p[25], &frame->camera.far_z, 4);
     memcpy(&p[26], &frame->camera.fov, 4);
