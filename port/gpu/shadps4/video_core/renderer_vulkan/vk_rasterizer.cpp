@@ -6472,6 +6472,44 @@ void Rasterizer::UnmapMemory(VAddr addr, u64 size) {
 void Rasterizer::UpdateDynamicState(const GraphicsPipeline* pipeline, const bool is_indexed) const {
     UpdateViewportScissorState();
     UpdateDepthStencilState();
+    // tlg: TLG_DEPTH_BOUNDS_STATS=1: draws that ask for the depth bounds test (MoltenVK has none: it is
+    // dropped and the draw shades every covered pixel), per pixel shader, every 5 s.
+    static const bool bounds_stats = [] {
+        const char* env = std::getenv("TLG_DEPTH_BOUNDS_STATS");
+        return env && *env == '1';
+    }();
+    if (bounds_stats) {
+        static std::mutex m;
+        static std::map<u64, std::array<u64, 3>> per; // ps -> draws with bounds, depth target bound, total
+        static u64 total = 0;
+        static auto report = std::chrono::steady_clock::now();
+        std::scoped_lock lock{m};
+        const auto& r = Regs();
+        const auto* ps = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
+        const u64 key = ps ? (ps->pgm_hash & 0xffffffffull) : 0;
+        ++total;
+        if (r.depth_control.depth_bounds_enable) {
+            auto& e = per[key];
+            ++e[0];
+            e[1] += r.depth_buffer.DepthValid();
+            e[2] = (u64(std::bit_cast<u32>(r.depth_bounds_min)) << 32) | std::bit_cast<u32>(r.depth_bounds_max);
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (now - report >= std::chrono::seconds(5)) {
+            report = now;
+            u64 with = 0;
+            for (const auto& [k, v] : per) with += v[0];
+            std::printf("Depth bounds (5 s): %llu of %llu draws ask for it (dropped on MoltenVK)\n",
+                        (unsigned long long)with, (unsigned long long)total);
+            for (const auto& [k, v] : per) {
+                std::printf("  ps %08llx: %llu draws, %llu with a depth target, last bounds %.6f..%.6f\n",
+                            (unsigned long long)k, (unsigned long long)v[0], (unsigned long long)v[1],
+                            std::bit_cast<float>(u32(v[2] >> 32)), std::bit_cast<float>(u32(v[2])));
+            }
+            per.clear();
+            total = 0;
+        }
+    }
     UpdatePrimitiveState(is_indexed);
     UpdateRasterizationState();
     UpdateColorBlendingState(pipeline);
