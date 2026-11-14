@@ -63,7 +63,9 @@ done
 wait $runner; status=$?
 if [[ -d $dir/shots ]]; then
     for f in "$dir"/shots/*.ppm; do
-        [[ -e $f ]] && sips -s format jpeg -Z "${SHOT_SIZE:-960}" "$f" --out "${f%.ppm}.jpg" >/dev/null 2>&1 && rm -f "$f"
+        # SHOT_FORMAT=png keeps every pixel (picture comparisons); SHOT_SIZE=1920 keeps the size.
+        ext=jpg; [[ ${SHOT_FORMAT:-jpeg} == png ]] && ext=png
+        [[ -e $f ]] && sips -s format "${SHOT_FORMAT:-jpeg}" -Z "${SHOT_SIZE:-960}" "$f" --out "${f%.ppm}.$ext" >/dev/null 2>&1 && rm -f "$f"
     done
 fi
 {

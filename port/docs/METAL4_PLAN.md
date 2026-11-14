@@ -60,10 +60,16 @@ the stability suite, and no FPS change with the feature off. Verify Metal 4 API 
   (`TLG_DEBUG_MOTION=1`, mask bit 23): static scenery dark; fire, particles, the character and screen edges
   remain (expected for camera-only vectors; FSR/MetalFX handle them with reactive masks and clamping).
 
+- 2026-11-14 later: **FSR 3 at native size in place of FXAA works** (`TLG_ISS_FSR=1`, off by default;
+  `TemporalUpscaler::RunIss` at the marker: AA output + scene depth (D32S8, reversed infinite) + camera motion,
+  result blitted back into the AA output before grain/UI). Cost ~1.5 ms a frame on the M3 Max at 1080p (bridge
+  99.6 -> 86.4, village 64.6 -> 59.1): a quality option only; FPS needs the reduced render (step 4). Jitter sign
+  verified numerically (difference view while standing: marker convention 12.5 vs flipped x 15.7, y 15.9, xy
+  18.4). Mean brightness unchanged (<= 1%). Stills for the owner: `out/agent/shots-fsr-native/`.
+
 ## Next steps (stage 0 -> 1)
 
 1. ~~Camera motion vectors for ISS~~ (done, see Progress).
-2. FSR 3 at native size in place of the game's FXAA (resolve into the AA output): proves jitter and motion with a
-   known upscaler; better AA than FXAA as a side effect (owner judges).
+2. ~~FSR 3 at native size in place of the game's FXAA~~ (done; the owner judges the picture in motion).
 3. MetalFX backend next to FSR 3 (port bloodborne_mac_port `gpu/shim/bbport_metalfx.mm`).
 4. Reduced render size + upscale to 1080p, UI at output size, display override (the FPS gain in fire/cutscenes).
