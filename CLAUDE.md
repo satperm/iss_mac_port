@@ -987,3 +987,9 @@ Instruments (Shader Timeline option) for per-shader cost.
   (TLG_GUEST_USLEEP_SPIN_US=0) did not move the throttle uncapped. Thermal equilibrium on the bridge uncapped
   is ~83 FPS on a 16" M3 Max; the launcher's quality presets (TLG_PERF_MODE) already cover weaker Macs. Untested
   (a system setting, the owner's to switch): Energy Mode "High Power" (fans earlier, sustained clocks).
+- 2026-11-14: SUSTAINED NUMBERS (9 min, cool-down first, owner away): truck 75 -> 60-61, bridge 101 -> 83,
+  Seattle 74 -> 63, all from ~3.5-4 min on. After the drop the scenes are CPU-BOUND: P-cores ~7-9 of 21, GPU
+  stays at P13 (its "active" residency stays 100%, power 25 -> 20 W), the GPU command thread's cost per draw
+  rises 1.9 -> 2.4 us (+27%) for -19% FPS. The keep-alive filler is not involved (truck: filler off all run;
+  TLG_GPU_KEEPALIVE=0 gives the same 60.8 vs 61.3). So for sustained FPS on a 16" M3 Max what counts is CPU work
+  per frame (ours per draw and the game's own under Rosetta), not GPU time and not spinning.
