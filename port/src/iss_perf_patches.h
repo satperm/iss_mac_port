@@ -148,9 +148,47 @@ static int iss_shadow_cascades(unsigned char *image, uint64_t size) {
     return 1;
 }
 
+/* TLG_DUMP_CODE=<hex eboot address>,<bytes> (diagnostic): prints those bytes of the loaded image in hex
+ * (after the patches above), to disassemble a game function: llvm-mc --disassemble -triple=x86_64. */
+static void iss_dump_code(const unsigned char *image, uint64_t size) {
+    const char *env = getenv("TLG_DUMP_CODE");
+    if (!env || !*env) return;
+    char *end = NULL;
+    const unsigned long long at = strtoull(env, &end, 16);
+    const unsigned long long n = end && *end == ',' ? strtoull(end + 1, NULL, 10) : 256;
+    if (at >= size || n > 65536) return;
+    printf("Code at eboot+0x%llx:", at);
+    for (unsigned long long i = 0; i < n && at + i < size; ++i) printf(" 0x%02x", image[at + i]);
+    printf("\n");
+}
+
+/* TLG_GUEST_USLEEP_SPIN_US=<n> (default: 501, the game's own): the game's usleep (eboot 0x53b2b0) busy-waits
+ * on rdtsc for waits below 501 us and calls sceKernelUsleep for longer ones. Its main thread waits for the
+ * GPU with usleep(50) in a loop (0x1f2700, 0x1695e0): under Rosetta that spin kept a performance core at
+ * full clock for 40-60% of every frame, heat taken from the GPU's budget. A smaller n sends shorter waits
+ * to the real sleep (0: every wait sleeps). */
+static int iss_usleep_spin(unsigned char *image, uint64_t size) {
+    const char *env = getenv("TLG_GUEST_USLEEP_SPIN_US");
+    if (!env || !*env) return 0;
+    const unsigned long n = strtoul(env, NULL, 10);
+    if (n >= 501) return 0;
+    static const unsigned char cmp_old[6] = {0x81, 0xfb, 0xf5, 0x01, 0x00, 0x00}; /* cmp ebx, 501 */
+    unsigned char cmp_new[6] = {0x81, 0xfb, 0, 0, 0, 0};
+    const uint32_t imm = (uint32_t)n;
+    memcpy(cmp_new + 2, &imm, 4);
+    const IssPerfBytes original[] = {{0x53b2b8, cmp_old, 6}};
+    const IssPerfBytes patched[] = {{0x53b2b8, cmp_new, 6}};
+    if (!iss_perf_matches(image, size, original, 1, "TLG_GUEST_USLEEP_SPIN_US")) return 0;
+    iss_perf_write(image, patched, 1);
+    printf("Performance patches: TLG_GUEST_USLEEP_SPIN_US=%lu: the game's usleep sleeps for waits of %lu us and more\n", n, n);
+    return 1;
+}
+
 static void iss_perf_patches(unsigned char *image, uint64_t size) {
     iss_perf_mode(image, size);
     iss_shadow_cascades(image, size);
+    iss_dump_code(image, size);
+    iss_usleep_spin(image, size);
     const int late = iss_particle_late_read(image, size);
     iss_particle_light_one_submit(image, size, late);
 }

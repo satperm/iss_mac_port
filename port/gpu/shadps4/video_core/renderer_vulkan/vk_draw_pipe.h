@@ -201,7 +201,9 @@ private:
                 return;
             }
             // Counted before the check, and stage B reads the count after its store: one of
-            // the two sees the other, so no wake-up is lost.
+            // the two sees the other, so no wake-up is lost. The target is stored first, so
+            // stage B sees it with the count.
+            drain_target.store(head, std::memory_order_seq_cst);
             drain_waiters.fetch_add(1, std::memory_order_seq_cst);
             if (consumed.load(std::memory_order_seq_cst) == seen) {
                 consumed.wait(seen, std::memory_order_seq_cst);
@@ -210,9 +212,21 @@ private:
         }
     }
     /// Stage B, after advancing `consumed`.
-    void NotifyDrain() {
-        if (drain_waiters.load(std::memory_order_seq_cst) != 0 ||
-            space_waiters.load(std::memory_order_seq_cst) != 0) {
+    /// tlg: a drain is woken once stage B has reached the position it waits for, not after every
+    /// packet (TLG_DRAIN_TARGET=0: every packet, as before 0.1.12). Woken per packet, the GPU
+    /// command thread re-armed libc++'s atomic wait each time, which polls the clock for tens of
+    /// microseconds before it sleeps: ~40% of a core spent waiting (mach_continuous_time).
+    void NotifyDrain(u64 at) {
+        static const bool targeted = [] {
+            const char* env = std::getenv("TLG_DRAIN_TARGET");
+            return !(env && *env == '0');
+        }();
+        if (space_waiters.load(std::memory_order_seq_cst) != 0) {
+            consumed.notify_all();
+            return;
+        }
+        if (drain_waiters.load(std::memory_order_seq_cst) != 0 &&
+            (!targeted || at >= drain_target.load(std::memory_order_seq_cst))) {
             consumed.notify_all();
         }
     }
@@ -325,7 +339,7 @@ private:
             if (header->size == 0) {
                 at += Capacity - at % Capacity;
                 consumed.store(at, std::memory_order_seq_cst);
-                NotifyDrain();
+                NotifyDrain(at);
                 continue;
             }
             const u64 start = Common::CpuCycles();
@@ -333,7 +347,7 @@ private:
             busy_cycles.fetch_add(Common::CpuCycles() - start, std::memory_order_relaxed);
             at += header->size;
             consumed.store(at, std::memory_order_seq_cst);
-            NotifyDrain();
+            NotifyDrain(at);
         }
     }
 
@@ -347,6 +361,7 @@ private:
     alignas(64) std::atomic<u64> consumed{0};
     alignas(64) std::atomic<u32> wake{0};
     alignas(64) std::atomic<u32> drain_waiters{0}; ///< stage A threads asleep in a drain
+    std::atomic<u64> drain_target{0}; ///< tlg: the position a sleeping drain waits for
     alignas(64) std::atomic<u32> space_waiters{0}; ///< stage A threads asleep waiting for room
     std::atomic<bool> sleeping{false};
     std::atomic<u32> stage_b_tid{0};

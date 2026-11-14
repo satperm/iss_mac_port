@@ -1002,3 +1002,10 @@ Instruments (Shader Timeline option) for per-shader cost.
   lib_ab 3 x 60 s: truck 74.7 / 74.6, bridge 95.4 / 98.1 (means), Seattle 72.8 / 73.2; sustained truck 9 min
   after cool-down 61.3 -> 62.2. chase-save 180 s at a 30 cap, smoke-save, chase-save clean; smoke screenshots
   same (the glint by the barrel comes and goes between runs either way). Merged (owner's merge rule).
+- 2026-11-14: TARGETED DRAIN WAKE-UPS MERGED (vk_draw_pipe.h NotifyDrain: a sleeping drain is woken when stage B
+  reaches its target, not after every packet; TLG_DRAIN_TARGET=0: as before). The GPU command thread spent ~22% of
+  a core re-arming libc++ atomic::wait (its poll reads the clock: mach_continuous_time) after each per-packet
+  wake. CPU per draw on that thread: truck 1.85 -> 1.29 us, Seattle 2.07 -> 1.01, bridge 3.2 -> 2.33; lib_ab
+  3 x 60 s FPS: truck 75.5 / 75.6, bridge 99.0 / 98.7, Seattle 72.3 / 73.4; sustained truck 9 min 62.3 / 62.3
+  (the thermal limit does not move). Stability suite clean. The same commit brings TLG_GUEST_USLEEP_SPIN_US,
+  TLG_RECORDER_SPIN_US and TLG_DUMP_CODE as switches (defaults unchanged).
