@@ -1020,3 +1020,11 @@ Instruments (Shader Timeline option) for per-shader cost.
   TLG_MAC_SKIP_CS) gives bridge 98.6 -> 99.0, Seattle 73.0 -> 74.7 (truck: nothing, 2026-11-13). Merging those
   dispatches could win at most a part of that: not worth it. With High Power the GPU-side easy wins on the M3 Max
   at 1080p are used up (render scale, empty fragment stages, particles, pass restarts all measured <= 2-5%).
+- 2026-11-14: STATIC RECOMPILATION RISK MEASURED (tools/recomp_probe/tso_bench.c, game-like kernels, M3 Max, 3 runs):
+  x86-64 under Rosetta 1.12 s, native arm64 0.98 s (-13%), native arm64 with x86 ordering emulated (every load
+  LDAPR/acquire, every store STLR/release, as a recompiler must do without hardware TSO) 1.72 s (+53% vs Rosetta;
+  4x0x4 matrix kernel 0.21 -> 0.84 s: acquire/release blocks vectorization and reordering). Rosetta runs x86 with
+  the chip's hardware TSO, which macOS does not expose. So recompiling only pays with escape analysis (plain
+  accesses for thread-local data) and even then wins <= ~13-35% of the CPU part. Owner: parked; revisit only when
+  Apple's macOS 28 Rosetta subset is known (survival, not FPS). Bloodborne's plan: ~/bloodborne_mac_port branch
+  static-recompilation, docs/STATIC_RECOMPILATION_PLAN.md (architecture reusable for ISS).
