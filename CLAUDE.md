@@ -1052,3 +1052,9 @@ Instruments (Shader Timeline option) for per-shader cost.
 - 2026-11-14: METAL 4 / METALFX WORK STARTED (owner-approved plan: port/docs/METAL4_PLAN.md, branch agent/metal4).
   Stage 0 verified in game: hooks on CUSA00004, marker every frame on the recording thread. Next: ISS camera motion
   in v1 CameraMotion, FSR 3 at native in place of FXAA, MetalFX backend, reduced render size + UI twins.
+- 2026-11-14: ISS CAMERA MOTION WORKS (agent/metal4 d5b9170). The marker's VP must be camera+0x240 (unjittered,
+  WITH the camera position); camera+0x470 is the camera-relative copy (translation (0,0,near,0)) and broke every
+  orbiting-camera frame. Found by dumping matrices (TLG_ISS_CAMERA_DUMP=1), not by eye: "dark difference view while
+  standing" proves nothing (any matrix gives identity then). Upstream renderer v2 has the same 0x470 bug.
+- Game Mode banner (GameOverlayUI, every full-screen entry) costs FPS for a few seconds; no user switch to hide it
+  (Notifications settings don't cover it). lib_ab medians over 60 s are barely affected.
