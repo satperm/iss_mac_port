@@ -1038,3 +1038,9 @@ Instruments (Shader Timeline option) for per-shader cost.
   Seattle 60.0 for 150 s (no clock-down), village 56.0, bridge 60.0; cap 30 holds 30.0 in chase-save and the village
   (the GPU clocks down there, as it may). OBS LEFT OPEN COSTS ~13% even when not recording: its display capture and
   preview run all the time (OBS ~60% CPU, WindowServer ~47%): smoke-save 97 -> 84.5 FPS. Close OBS for measurements.
+- 2026-11-14: BURNING VILLAGE GPU PROFILE (pass_profile.sh, 20.5 ms of GPU work a frame at ~59 FPS with OBS open; 63.5 FPS
+  with OBS closed): compute 4.1 ms (9.6 encoders), one 1920x1080 RGBA16F pass without depth (first draw vs bbd2d927 ps
+  24dad4be, a light shader with 6 samples and no loop) 3.4 ms (0.7 in Seattle, 1.0 at the truck: it grows with the
+  fire, likely the many fire lights blended into the light buffer), gbuffer 2.2, shadow map 1.5. TLG_PARTICLE_LEVEL=1|2
+  (src/iss_perf_patches.h, branch agent/particle-level: only the game's particle resolution level) gives nothing:
+  63.7 / 63.6 / 63.4 in the first round. Not shipped. The fire cost is not particle fill.
