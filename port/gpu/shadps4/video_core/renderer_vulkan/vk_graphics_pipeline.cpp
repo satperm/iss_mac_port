@@ -410,7 +410,50 @@ GraphicsPipeline::GraphicsPipeline(
         });
     }
     stage = u32(Shader::SwStage::Fragment);
-    if (infos[stage]) {
+    // tlg (diagnostic first): TLG_SKIP_FS=<hex pixel shader hashes>: those fragment stages are left
+    // out of pipelines without colour targets (depth-only passes), so the GPU writes depth without
+    // running a pixel shader. ISS's shadow draws (ps 1318ddd4, 57% of the truck's draws) have an
+    // empty one (no instruction, no output, no discard).
+    static const std::vector<u64> skip_fs = [] {
+        std::vector<u64> list;
+        if (const char* env = std::getenv("TLG_SKIP_FS")) {
+            for (const char* p = env; *p;) {
+                char* end = nullptr;
+                const u64 v = std::strtoull(p, &end, 16);
+                if (end == p) break;
+                list.push_back(v);
+                p = *end == ',' ? end + 1 : end;
+            }
+        }
+        return list;
+    }();
+    // tlg: TLG_SKIP_EMPTY_FS=1: every fragment stage without an observable effect (nothing stored,
+    // no discard, no storage write) is left out of depth-only pipelines.
+    static const bool skip_empty = [] {
+        const char* env = std::getenv("TLG_SKIP_EMPTY_FS");
+        return env && *env == '1';
+    }();
+    const auto empty_fragment = [](const Shader::Info& fs) {
+        if (fs.has_discard || fs.has_storage_images) return false;
+        for (u32 i = 0; i < Shader::IR::NumAttributes; ++i) {
+            if (fs.stores.GetAny(Shader::IR::Attribute(i))) return false;
+        }
+        for (const auto& buffer : fs.buffers) {
+            if (buffer.is_written) return false;
+        }
+        for (const auto& image : fs.images) {
+            if (image.is_written || image.is_atomic) return false;
+        }
+        return true;
+    };
+    const bool skip_fragment =
+        infos[stage] && key.num_color_attachments == 0 &&
+        ((skip_empty && empty_fragment(*infos[stage])) ||
+         (!skip_fs.empty() &&
+          std::ranges::find(skip_fs, infos[stage]->pgm_hash & 0xffffffffull) != skip_fs.end()));
+    if (skip_fragment) {
+        // no fragment stage
+    } else if (infos[stage]) {
         shader_stages.emplace_back(vk::PipelineShaderStageCreateInfo{
             .stage = vk::ShaderStageFlagBits::eFragment,
             .module = modules[stage],
