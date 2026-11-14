@@ -1044,3 +1044,8 @@ Instruments (Shader Timeline option) for per-shader cost.
   fire, likely the many fire lights blended into the light buffer), gbuffer 2.2, shadow map 1.5. TLG_PARTICLE_LEVEL=1|2
   (src/iss_perf_patches.h, branch agent/particle-level: only the game's particle resolution level) gives nothing:
   63.7 / 63.6 / 63.4 in the first round. Not shipped. The fire cost is not particle fill.
+- 2026-11-14: THE FIRE SCENE IS PIXEL-BOUND (unlike the three standing scenes): burning village 100% 62.4, render scale
+  75% 71.9 (+15%), 50% 76.8 (+23%) (OBS closed). Depth bounds (dropped by MoltenVK, TLG_DEPTH_BOUNDS_STATS on branch
+  agent/depth-bounds): only ~8 draws a frame ask for it, not the 3.4 ms light pass. TLG_DRAW_TIMING prints nothing with
+  the draw pipe (broken there). So for fire and cutscenes a temporal upscaler from ~75% is the lever (~+10% net),
+  picture to be judged by the owner.
