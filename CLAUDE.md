@@ -1009,3 +1009,10 @@ Instruments (Shader Timeline option) for per-shader cost.
   3 x 60 s FPS: truck 75.5 / 75.6, bridge 99.0 / 98.7, Seattle 72.3 / 73.4; sustained truck 9 min 62.3 / 62.3
   (the thermal limit does not move). Stability suite clean. The same commit brings TLG_GUEST_USLEEP_SPIN_US,
   TLG_RECORDER_SPIN_US and TLG_DUMP_CODE as switches (defaults unchanged).
+- 2026-11-14: RENDER-SCALE CEILING WITH HIGH POWER (lib_ab 2 x 60 s, plain resize, no upscaler cost): truck 74.8 /
+  80.1 (67%) / 81.9 (50%), bridge 97.8 / 98.6 / 106.4, Seattle 72.0 / 71.2 / 72.3. A temporal upscaler would net
+  ~0-5% on the M3 Max (it costs 0-8% itself): parked for weaker Macs (sharpness at a lower scale), owner agreed.
+  Seattle is not pixel-bound at all. EMPTY FRAGMENT STAGES: ps 1318ddd4 (shadow draws), ebb91ff5 (2048/1024 shadow
+  maps) and fa2ea78e perm 1 have no instruction (spirv-dis: no OpStore/OpKill); leaving 1318ddd4 out of depth-only
+  pipelines (TLG_SKIP_FS=<hex>, branch agent/empty-fs, also a generic TLG_SKIP_EMPTY_FS) keeps the shadows and gives
+  nothing: truck 76.4 / 76.1, bridge 99.5 / 99.0, Seattle 74.1 / 74.0. Shadow passes are vertex work. Not shipped.
