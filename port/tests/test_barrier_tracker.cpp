@@ -313,10 +313,10 @@ void RunSequence(Rng& rng, u64 sequence, bool strict, BarrierTracker& tree,
 }
 
 int Test(u64 sequences) {
-    assert(Vulkan::IsBarrierVectorEnabled(nullptr));
+    assert(!Vulkan::IsBarrierVectorEnabled(nullptr));
     assert(Vulkan::IsBarrierVectorEnabled("1"));
-    assert(Vulkan::IsBarrierVectorEnabled(""));
-    assert(Vulkan::IsBarrierVectorEnabled("00"));
+    assert(!Vulkan::IsBarrierVectorEnabled(""));
+    assert(!Vulkan::IsBarrierVectorEnabled("11"));
     assert(!Vulkan::IsBarrierVectorEnabled("0"));
 
     // The trackers live through all sequences, like the one in Runtime: Clear() has to

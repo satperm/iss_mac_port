@@ -165,10 +165,11 @@ private:
     std::vector<u32> table = std::vector<u32>(128); ///< Index into resources plus one, 0 if empty.
 };
 
-/// tlg: TLG_BARRIER_VECTOR=0 keeps the red-black tree, to measure one against the other in
-/// the same build. Anything else, or unset: the sorted vectors.
+/// tlg: TLG_BARRIER_VECTOR=1 selects the sorted vectors; unset or anything else keeps the red-black
+/// tree. Measured 2026-11-16 (M3 Max, 3 x 60 s; tree / vectors): truck 75.6 / 75.1, bridge 98.9 /
+/// 99.3, Seattle 74.2 / 74.4: no gain here, so the proven container stays the default.
 inline bool IsBarrierVectorEnabled(const char* env) {
-    return !(env && env[0] == '0' && env[1] == '\0');
+    return env && env[0] == '1' && env[1] == '\0';
 }
 
 /**
@@ -220,8 +221,8 @@ public:
     static bool UseVector() {
         static const bool on = [] {
             const bool value = IsBarrierVectorEnabled(std::getenv("TLG_BARRIER_VECTOR"));
-            if (!value) {
-                std::printf("GPU: barrier tracker on the red-black tree (TLG_BARRIER_VECTOR=0)\n");
+            if (value) {
+                std::printf("GPU: barrier tracker on sorted vectors (TLG_BARRIER_VECTOR=1)\n");
             }
             return value;
         }();
