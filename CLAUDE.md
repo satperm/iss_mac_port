@@ -1058,3 +1058,20 @@ Instruments (Shader Timeline option) for per-shader cost.
   standing" proves nothing (any matrix gives identity then). Upstream renderer v2 has the same 0x470 bug.
 - Game Mode banner (GameOverlayUI, every full-screen entry) costs FPS for a few seconds; no user switch to hide it
   (Notifications settings don't cover it). lib_ab medians over 60 s are barely affected.
+- 2026-11-16 (autonomous day, branch agent/day-1116; plan port/docs/PLAN_2026-11-16.md). Survey of the neighbours
+  (upstream iss_pc, bloodborne_mac_port, shadPS4 PRs, MoltenVK): nearly every cheap win is already here.
+  - FAST SHADER MATH (`TLG_FAST_SHADER_MATH=1`, launcher toggle, off): no SignedZeroInfNanPreserve execution mode
+    (shadPS4 #5455). With the mode SPIRV-Cross writes precise float forms for the whole shader. Precise / fast:
+    village 63.7 / 69.7, truck 74.7 / 77.1, bridge 98.8 / 102.5, Seattle 73.6 / 73.3. NOT the same as
+    MVK_CONFIG_FAST_MATH_ENABLED=1 (village 64.5; rejected 11-10 on truck/bridge). Own cache folder "-fm".
+    Does not add to MetalFX scaling (village fm+67% 72.2, fm+50% 74.0: ~75 is the CPU limit there).
+  - QUALITY GOVERNOR (upstream View commits + split-mode counters host_flips/host_draws; `TLG_QUALITY_TARGET_FPS`,
+    `TLG_QUALITY_FLOOR`, `TLG_VIEW_LOG=1`; launcher "Hold frame rate"): village floor 8 = 78 FPS, target 90 climbs
+    to level 12 = 85 FPS (63 native); trees/grass/fires visibly sparser. Our change: under a cap equal to the
+    target it gives a level back after 30 s at the target (upstream needed 130% of the target, never reached).
+    The floor stub (eboot 0x1f1b68) is installed always; equivalent at floor 0 (reviewed by disassembly).
+  - No gain here (M3 Max): barrier tracker on sorted vectors (opt-in `TLG_BARRIER_VECTOR=1`), unnamed pooled
+    command buffers (kept; `TLG_CMDBUF_NAMES=1` names them). Primitive restart off: not applicable (Metal).
+  - Input: launcher Controls page writes `TLG_KEY_MAP`; sticks, spray-can keys (T/G/Y) and the swipe modifier are
+    named actions now (move_*, look_*, can_left/right/shake, swipe); parser buffer 4096.
+  - Agents: four parallel agents exhausted the 5-hour API limit at 10:00 (4 h lost). Keep to two at a time.
