@@ -664,6 +664,15 @@ void SetupInfNanPreserveMode(EmitContext& ctx, const Profile& profile,
         ctx.AddCapability(spv::Capability::SignedZeroInfNanPreserve);
     }
 
+    // tlg: TLG_NAN_PRESERVE=0 (A/B, shadPS4 #5455): without the mode Metal may use its fast float
+    // paths. Changes the SPIR-V: use a separate shader cache for such a run.
+    static const bool preserve = [] {
+        const char* env = std::getenv("TLG_NAN_PRESERVE");
+        return !env || *env != '0';
+    }();
+    if (!preserve) {
+        return;
+    }
     if (profile.support_fp32_signed_zero_inf_nan_preserve) {
         ctx.AddExecutionMode(main_func, spv::ExecutionMode::SignedZeroInfNanPreserve, 32U);
     } else {
