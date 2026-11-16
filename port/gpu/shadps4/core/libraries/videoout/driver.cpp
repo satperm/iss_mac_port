@@ -711,6 +711,7 @@ void VideoOutDriver::Flip(const Request& req) {
                                         flip_status.process_time,
                                         flip_status.tsc};
             TlgSplit::Post(&event);
+            __atomic_store_n(&TlgSplit::Shared()->host_draws, TlgStats::draws.load(std::memory_order_relaxed), __ATOMIC_RELAXED);
             __atomic_fetch_add(&TlgSplit::Shared()->host_flips, 1, __ATOMIC_RELAXED);
         }
     }

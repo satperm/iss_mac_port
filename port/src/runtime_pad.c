@@ -1,7 +1,9 @@
 /* libScePad on SDL3 gamepads, with a keyboard fallback. SDL events are pumped
  * by the window thread (gpu/shim/window.cpp); here state is only sampled.
  *
- * Default keyboard layout (TLG_KEY_MAP changes the buttons, see apply_button_map):
+ * Default keyboard layout (TLG_KEY_MAP changes the buttons and the actions move_up/down/left/right,
+ * look_up/down/left/right, can_left (T), can_right (G), can_shake (Y) and swipe (default: the keys
+ * of the left touchpad click), see apply_button_map):
  *   WASD left stick, arrow keys right stick, Space Cross, LShift Circle,
  *   E Square, Q Triangle, 1 L1, 3 R1, R L2, F R2, Z L3, C R3,
  *   Enter Options, Tab left touchpad (photo mode), Backspace right touchpad (pause menu),
@@ -225,8 +227,24 @@ static const struct { const char *name; int source; } mouse_names[]={
     {"Mouse X1",MOUSE_X1}, {"Mouse X2",MOUSE_X2}, {"Wheel Up",WHEEL_UP}, {"Wheel Down",WHEEL_DOWN},
     {"Wheel Left",WHEEL_LEFT}, {"Wheel Right",WHEEL_RIGHT},
 };
+/* Keyboard actions (sticks, spray can, swipe) go through the same map: an entry whose `ps` has
+ * ACTION_FLAG set is an action (ACTION_FLAG | index), not a PS4 button. */
+enum { ACTION_FLAG=0x80000000u };
+enum { ACT_MOVE_UP, ACT_MOVE_DOWN, ACT_MOVE_LEFT, ACT_MOVE_RIGHT, ACT_LOOK_UP, ACT_LOOK_DOWN, ACT_LOOK_LEFT,
+       ACT_LOOK_RIGHT, ACT_CAN_LEFT, ACT_CAN_RIGHT, ACT_CAN_SHAKE, ACT_SWIPE, ACT_COUNT };
+#define ACTION(a) (ACTION_FLAG|(uint32_t)(a))
+static const struct { const char *name; uint32_t ps; } action_names[]={
+    {"move_up",ACTION(ACT_MOVE_UP)}, {"move_down",ACTION(ACT_MOVE_DOWN)},
+    {"move_left",ACTION(ACT_MOVE_LEFT)}, {"move_right",ACTION(ACT_MOVE_RIGHT)},
+    {"look_up",ACTION(ACT_LOOK_UP)}, {"look_down",ACTION(ACT_LOOK_DOWN)},
+    {"look_left",ACTION(ACT_LOOK_LEFT)}, {"look_right",ACTION(ACT_LOOK_RIGHT)},
+    {"can_left",ACTION(ACT_CAN_LEFT)}, {"can_right",ACTION(ACT_CAN_RIGHT)},
+    {"can_shake",ACTION(ACT_CAN_SHAKE)}, {"swipe",ACTION(ACT_SWIPE)},
+};
 typedef struct { int source; uint32_t ps; } ButtonSource;
-typedef struct { ButtonSource entries[48]; size_t count; } ButtonMap;
+/* swipe_set: the swipe action was named (even as none); otherwise the swipe modifier follows the
+ * sources of the left touchpad click. */
+typedef struct { ButtonSource entries[96]; size_t count; bool swipe_set; } ButtonMap;
 static ButtonMap pad_map={{
     {SDL_GAMEPAD_BUTTON_SOUTH,BTN_CROSS}, {SDL_GAMEPAD_BUTTON_EAST,BTN_CIRCLE},
     {SDL_GAMEPAD_BUTTON_WEST,BTN_SQUARE}, {SDL_GAMEPAD_BUTTON_NORTH,BTN_TRIANGLE},
@@ -236,7 +254,7 @@ static ButtonMap pad_map={{
     {SDL_GAMEPAD_BUTTON_TOUCHPAD,BTN_TOUCHPAD},
     {SDL_GAMEPAD_BUTTON_DPAD_UP,BTN_UP}, {SDL_GAMEPAD_BUTTON_DPAD_DOWN,BTN_DOWN},
     {SDL_GAMEPAD_BUTTON_DPAD_LEFT,BTN_LEFT}, {SDL_GAMEPAD_BUTTON_DPAD_RIGHT,BTN_RIGHT},
-},15};
+},15,false};
 static ButtonMap key_map={{
     {SDL_SCANCODE_SPACE,BTN_CROSS}, {SDL_SCANCODE_LSHIFT,BTN_CIRCLE}, {SDL_SCANCODE_E,BTN_SQUARE},
     {SDL_SCANCODE_Q,BTN_TRIANGLE}, {SDL_SCANCODE_1,BTN_L1}, {SDL_SCANCODE_3,BTN_R1},
@@ -244,7 +262,13 @@ static ButtonMap key_map={{
     {SDL_SCANCODE_RETURN,BTN_OPTIONS}, {SDL_SCANCODE_TAB,CLICK_LEFT}, {SDL_SCANCODE_BACKSPACE,CLICK_RIGHT},
     {SDL_SCANCODE_I,BTN_UP}, {SDL_SCANCODE_K,BTN_DOWN}, {SDL_SCANCODE_J,BTN_LEFT}, {SDL_SCANCODE_L,BTN_RIGHT},
     {MOUSE_LEFT,BTN_R2}, {MOUSE_RIGHT,BTN_L2}, {MOUSE_MIDDLE,BTN_R3},
-},20};
+    {SDL_SCANCODE_W,ACTION(ACT_MOVE_UP)}, {SDL_SCANCODE_S,ACTION(ACT_MOVE_DOWN)},
+    {SDL_SCANCODE_A,ACTION(ACT_MOVE_LEFT)}, {SDL_SCANCODE_D,ACTION(ACT_MOVE_RIGHT)},
+    {SDL_SCANCODE_UP,ACTION(ACT_LOOK_UP)}, {SDL_SCANCODE_DOWN,ACTION(ACT_LOOK_DOWN)},
+    {SDL_SCANCODE_LEFT,ACTION(ACT_LOOK_LEFT)}, {SDL_SCANCODE_RIGHT,ACTION(ACT_LOOK_RIGHT)},
+    {SDL_SCANCODE_T,ACTION(ACT_CAN_LEFT)}, {SDL_SCANCODE_G,ACTION(ACT_CAN_RIGHT)},
+    {SDL_SCANCODE_Y,ACTION(ACT_CAN_SHAKE)},
+},31,false};
 
 static char *trim(char *text) {
     while (*text==' ' || *text=='\t') ++text;
@@ -269,7 +293,7 @@ static int source_from_name(const char *name, bool keyboard) {
  * logged and skipped, so their PS4 button keeps its default. */
 static int apply_button_map(ButtonMap *map, const char *spec, bool keyboard) {
     if (!spec || !*spec) return 0;
-    char copy[1024];
+    char copy[4096]; /* a full custom map: 29 names of up to 8 sources */
     snprintf(copy,sizeof(copy),"%s",spec);
     int used=0;
     char *entry=copy;
@@ -287,6 +311,8 @@ static int apply_button_map(ButtonMap *map, const char *spec, bool keyboard) {
         entry=next;
         uint32_t ps=0;
         for (size_t i=0;i<sizeof(ps_names)/sizeof(*ps_names);++i) if (!SDL_strcasecmp(button,ps_names[i].name)) ps=ps_names[i].ps;
+        if (!ps && keyboard)
+            for (size_t i=0;i<sizeof(action_names)/sizeof(*action_names);++i) if (!SDL_strcasecmp(button,action_names[i].name)) ps=action_names[i].ps;
         const bool none=!SDL_strcasecmp(names,"none");
         int sources[8], count=0;
         for (char *name=names, *bar; name && !none; name=bar) {
@@ -304,10 +330,32 @@ static int apply_button_map(ButtonMap *map, const char *spec, bool keyboard) {
         map->count=kept;
         for (int i=0;i<count;++i)
             if (map->count<sizeof(map->entries)/sizeof(*map->entries)) map->entries[map->count++]=(ButtonSource){sources[i],ps};
+        if (ps==ACTION(ACT_SWIPE)) map->swipe_set=true;
         ++used;
     }
     return used;
 }
+
+/* Held keyboard actions, one bit per ACT_*: `k` is the keyboard, `mouse` the mouse source bits
+ * (buttons and wheel pulses, 1 << (source - MOUSE_SOURCE)). No allocation, a scan of the map. */
+static bool source_down(int source, const bool *k, uint32_t mouse) {
+    return source>=MOUSE_SOURCE ? source<MOUSE_SOURCE_END && (mouse>>(source-MOUSE_SOURCE) & 1)
+                                : source<SDL_SCANCODE_COUNT && k && k[source];
+}
+static uint32_t action_bits(const ButtonMap *map, const bool *k, uint32_t mouse) {
+    uint32_t bits=0;
+    for (size_t i=0;i<map->count;++i) {
+        const uint32_t ps=map->entries[i].ps;
+        if ((ps & ACTION_FLAG) && source_down(map->entries[i].source,k,mouse)) bits|=1u<<(ps & ~(uint32_t)ACTION_FLAG);
+        else if (!(ps & ACTION_FLAG) && ps==CLICK_LEFT && !map->swipe_set && source_down(map->entries[i].source,k,mouse))
+            bits|=1u<<ACT_SWIPE; /* swipe defaults to the left touchpad click's sources */
+    }
+    return bits;
+}
+#define HELD(bits,a) (((bits)>>(a)) & 1u)
+/* Actions held in the current sample: from the keys and the previous sample's mouse bits first
+ * (sample_motion runs before the mouse is read), then refreshed in read_pad. */
+static uint32_t actions_held, actions_mouse;
 
 static void load_button_maps(void) {
     static bool loaded;
@@ -374,6 +422,7 @@ static float aim_curve(float v) {
     return v<0 ? -t*t : t*t;
 }
 static void sample_motion(PadData *d, SDL_Gamepad *g, const bool *k) {
+    (void)k; /* the keys come in through actions_held */
     const uint64_t now=now_us();
     float dt=motion.last_us ? (float)(now-motion.last_us)*1e-6f : 0.f;
     if (dt>0.1f) dt=0.1f;
@@ -393,16 +442,16 @@ static void sample_motion(PadData *d, SDL_Gamepad *g, const bool *k) {
     /* Simulated tilt: target roll/pitch from keys or the modifier + right stick. */
     float roll=0, pitch=0;
     int shake=0, simulated=0;
-    if ((k && k[SDL_SCANCODE_T]) || (injected_motion & 1)) { roll=1.5708f; simulated=1; }
-    if ((k && k[SDL_SCANCODE_G]) || (injected_motion & 2)) { roll=-1.5708f; simulated=1; }
-    if ((k && k[SDL_SCANCODE_Y]) || (injected_motion & 4) || mouse_shaking) { shake=1; simulated=1; }
+    if (HELD(actions_held,ACT_CAN_LEFT) || (injected_motion & 1)) { roll=1.5708f; simulated=1; }
+    if (HELD(actions_held,ACT_CAN_RIGHT) || (injected_motion & 2)) { roll=-1.5708f; simulated=1; }
+    if (HELD(actions_held,ACT_CAN_SHAKE) || (injected_motion & 4) || mouse_shaking) { shake=1; simulated=1; }
     /* Keyboard: while T or G holds the can on its side, the arrow keys point it (they leave the
      * camera alone meanwhile, see read_pad). */
-    const int key_can=k && (k[SDL_SCANCODE_T] || k[SDL_SCANCODE_G]);
+    const int key_can=(int)(HELD(actions_held,ACT_CAN_LEFT) | HELD(actions_held,ACT_CAN_RIGHT));
     if (key_can) {
         const float speed=0.6f*tlggpu_sensor_aim_scale();
-        motion.yaw-=(float)(k[SDL_SCANCODE_RIGHT]-k[SDL_SCANCODE_LEFT])*speed*dt;
-        motion.aim_pitch+=(float)(k[SDL_SCANCODE_UP]-k[SDL_SCANCODE_DOWN])*speed*dt;
+        motion.yaw-=(float)((int)HELD(actions_held,ACT_LOOK_RIGHT)-(int)HELD(actions_held,ACT_LOOK_LEFT))*speed*dt;
+        motion.aim_pitch+=(float)((int)HELD(actions_held,ACT_LOOK_UP)-(int)HELD(actions_held,ACT_LOOK_DOWN))*speed*dt;
         motion.yaw=fminf(fmaxf(motion.yaw,-1.4f),1.4f);
         motion.aim_pitch=fminf(fmaxf(motion.aim_pitch,-1.2f),1.2f);
     }
@@ -490,7 +539,7 @@ static void sample_motion(PadData *d, SDL_Gamepad *g, const bool *k) {
     d->orientation[0]=motion.q.x; d->orientation[1]=motion.q.y; d->orientation[2]=motion.q.z; d->orientation[3]=motion.q.w;
 }
 /* Touchpad swipes for controllers without a touchpad ("Open Door": swipe right): hold View/
- * Select/- (gamepad) or Tab (keyboard) and push the right stick (arrow keys): a finger moves
+ * Select/- (gamepad) or the swipe key (keyboard, default the left touchpad click's: Tab) and push the right stick (look keys): a finger moves
  * from the middle of the pad toward that side. A quick tap without moving still clicks. */
 static struct { int active; } swipe;
 static void apply_swipe(PadData *d, SDL_Gamepad *g, const bool *k) {
@@ -501,12 +550,12 @@ static void apply_swipe(PadData *d, SDL_Gamepad *g, const bool *k) {
         x=(float)SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_RIGHTX)/32767.f;
         y=(float)SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_RIGHTY)/32767.f;
     }
-    if (k && k[SDL_SCANCODE_TAB]) {
+    if (k && HELD(actions_held,ACT_SWIPE)) {
         held=1;
-        if (k[SDL_SCANCODE_LEFT]) x=-1;
-        if (k[SDL_SCANCODE_RIGHT]) x=1;
-        if (k[SDL_SCANCODE_UP]) y=-1;
-        if (k[SDL_SCANCODE_DOWN]) y=1;
+        if (HELD(actions_held,ACT_LOOK_LEFT)) x=-1;
+        if (HELD(actions_held,ACT_LOOK_RIGHT)) x=1;
+        if (HELD(actions_held,ACT_LOOK_UP)) y=-1;
+        if (HELD(actions_held,ACT_LOOK_DOWN)) y=1;
     }
     if (!held) { swipe.active=0; return; }
     if (!swipe.active && x*x+y*y<0.09f) return; /* not moved yet: still a click */
@@ -768,24 +817,26 @@ static void sample_host(PadData *d) {
             }
         }
     }
+    actions_held=k ? action_bits(&key_map,k,actions_mouse) : 0;
     sample_motion(d,g,k);
     /* The keyboard works with or without a gamepad: its buttons add to the pad's, and a stick
      * follows the keys only while one of them is held. */
     if (!k) return;
-    const uint32_t mouse=sample_mouse(d,motion.mode || k[SDL_SCANCODE_T] || k[SDL_SCANCODE_G],k); /* adds to the right stick */
+    const bool can_held=HELD(actions_held,ACT_CAN_LEFT) || HELD(actions_held,ACT_CAN_RIGHT);
+    const uint32_t mouse=sample_mouse(d,motion.mode || can_held,k); /* adds to the right stick */
+    actions_mouse=mouse;
+    actions_held=action_bits(&key_map,k,mouse);
     for (size_t i=0;i<key_map.count;++i) {
-        const int source=key_map.entries[i].source;
-        const bool down=source>=MOUSE_SOURCE ? source<MOUSE_SOURCE_END && (mouse>>(source-MOUSE_SOURCE) & 1)
-                                             : source<SDL_SCANCODE_COUNT && k[source];
-        if (down) d->buttons|=key_map.entries[i].ps;
+        if (key_map.entries[i].ps & ACTION_FLAG) continue;
+        if (source_down(key_map.entries[i].source,k,mouse)) d->buttons|=key_map.entries[i].ps;
     }
     if (d->buttons & BTN_L2) d->l2=255;
     if (d->buttons & BTN_R2) d->r2=255;
-    key_axis(&d->left_x,k[SDL_SCANCODE_A],k[SDL_SCANCODE_D]);
-    key_axis(&d->left_y,k[SDL_SCANCODE_W],k[SDL_SCANCODE_S]);
-    key_axis(&d->right_x,k[SDL_SCANCODE_LEFT],k[SDL_SCANCODE_RIGHT]);
-    key_axis(&d->right_y,k[SDL_SCANCODE_UP],k[SDL_SCANCODE_DOWN]);
-    if (k[SDL_SCANCODE_T] || k[SDL_SCANCODE_G]) d->right_x=d->right_y=128; /* the arrows point the can */
+    key_axis(&d->left_x,HELD(actions_held,ACT_MOVE_LEFT),HELD(actions_held,ACT_MOVE_RIGHT));
+    key_axis(&d->left_y,HELD(actions_held,ACT_MOVE_UP),HELD(actions_held,ACT_MOVE_DOWN));
+    key_axis(&d->right_x,HELD(actions_held,ACT_LOOK_LEFT),HELD(actions_held,ACT_LOOK_RIGHT));
+    key_axis(&d->right_y,HELD(actions_held,ACT_LOOK_UP),HELD(actions_held,ACT_LOOK_DOWN));
+    if (can_held) d->right_x=d->right_y=128; /* the arrows point the can */
     apply_swipe(d,g,k);
     apply_mouse_touch(d);
 }

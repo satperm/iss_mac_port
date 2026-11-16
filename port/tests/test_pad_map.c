@@ -68,5 +68,91 @@ int main(void) {
     ButtonMap sides=key_map;
     assert(apply_button_map(&sides,"touchpad_right=Delete",true)==1);
     assert(pressed_by(&sides,SDL_SCANCODE_BACKSPACE)==0 && pressed_by(&sides,SDL_SCANCODE_DELETE)==CLICK_RIGHT);
+
+    /* Actions: the defaults are the old hard-coded keys. */
+    static bool kb[SDL_SCANCODE_COUNT];
+    static const struct { int key; int action; } old_keys[]={
+        {SDL_SCANCODE_W,ACT_MOVE_UP}, {SDL_SCANCODE_S,ACT_MOVE_DOWN}, {SDL_SCANCODE_A,ACT_MOVE_LEFT},
+        {SDL_SCANCODE_D,ACT_MOVE_RIGHT}, {SDL_SCANCODE_UP,ACT_LOOK_UP}, {SDL_SCANCODE_DOWN,ACT_LOOK_DOWN},
+        {SDL_SCANCODE_LEFT,ACT_LOOK_LEFT}, {SDL_SCANCODE_RIGHT,ACT_LOOK_RIGHT}, {SDL_SCANCODE_T,ACT_CAN_LEFT},
+        {SDL_SCANCODE_G,ACT_CAN_RIGHT}, {SDL_SCANCODE_Y,ACT_CAN_SHAKE}, {SDL_SCANCODE_TAB,ACT_SWIPE},
+    };
+    assert(action_bits(&key_map,kb,0)==0);
+    for (size_t i=0;i<sizeof(old_keys)/sizeof(*old_keys);++i) {
+        kb[old_keys[i].key]=true;
+        assert(action_bits(&key_map,kb,0)==1u<<old_keys[i].action);
+        kb[old_keys[i].key]=false;
+    }
+    assert(action_bits(&key_map,kb,1u<<(MOUSE_LEFT-MOUSE_SOURCE))==0); /* mouse left is R2 only */
+    assert(key_map.count==31 && !key_map.swipe_set);
+
+    /* Each action can be remapped; it loses its default; buttons are untouched. */
+    for (size_t i=0;i<sizeof(action_names)/sizeof(*action_names);++i) {
+        ButtonMap m=key_map;
+        char spec[64];
+        snprintf(spec,sizeof(spec),"%s=F5",action_names[i].name);
+        assert(apply_button_map(&m,spec,true)==1);
+        kb[SDL_SCANCODE_F5]=true;
+        assert(action_bits(&m,kb,0)==1u<<(action_names[i].ps & ~(uint32_t)ACTION_FLAG));
+        kb[SDL_SCANCODE_F5]=false;
+        assert(pressed_by(&m,SDL_SCANCODE_SPACE)==BTN_CROSS);
+    }
+    /* Several sources, a mouse button and the wheel, none. */
+    ButtonMap act=key_map;
+    assert(apply_button_map(&act,"move_up=Up|Mouse X1,can_shake=Wheel Up,can_left=none",true)==3);
+    kb[SDL_SCANCODE_W]=true;
+    assert(action_bits(&act,kb,0)==0);                       /* W lost move_up */
+    kb[SDL_SCANCODE_W]=false;
+    assert(action_bits(&act,kb,1u<<(MOUSE_X1-MOUSE_SOURCE))==1u<<ACT_MOVE_UP);
+    assert(action_bits(&act,kb,1u<<(WHEEL_UP-MOUSE_SOURCE))==1u<<ACT_CAN_SHAKE);
+    kb[SDL_SCANCODE_T]=true;
+    assert(action_bits(&act,kb,0)==0);                       /* T no longer holds the can */
+    kb[SDL_SCANCODE_T]=false;
+    /* Actions are keyboard-only: not accepted in the gamepad map. */
+    ButtonMap padact=pad_map;
+    assert(apply_button_map(&padact,"move_up=a",false)==0);
+    /* Unknown action or key names are rejected (a log line each) and change nothing. */
+    ButtonMap unk=key_map;
+    assert(apply_button_map(&unk,"move_forward=W,look_up=NotAKey,swipe=,can_shake=Bogus|Nope",true)==0);
+    assert(unk.count==key_map.count && !unk.swipe_set);
+
+    /* Swipe follows the left touchpad click unless it is set. */
+    ButtonMap sw=key_map;
+    assert(apply_button_map(&sw,"touchpad_left=Delete",true)==1);
+    kb[SDL_SCANCODE_TAB]=true;
+    assert(action_bits(&sw,kb,0)==0);
+    kb[SDL_SCANCODE_TAB]=false; kb[SDL_SCANCODE_DELETE]=true;
+    assert(action_bits(&sw,kb,0)==1u<<ACT_SWIPE);
+    kb[SDL_SCANCODE_DELETE]=false;
+    assert(apply_button_map(&sw,"swipe=Left Alt",true)==1 && sw.swipe_set);
+    kb[SDL_SCANCODE_DELETE]=true;
+    assert(action_bits(&sw,kb,0)==0);
+    kb[SDL_SCANCODE_DELETE]=false; kb[SDL_SCANCODE_LALT]=true;
+    assert(action_bits(&sw,kb,0)==1u<<ACT_SWIPE);
+    kb[SDL_SCANCODE_LALT]=false;
+    assert(apply_button_map(&sw,"swipe=none",true)==1);
+    kb[SDL_SCANCODE_TAB]=true; kb[SDL_SCANCODE_DELETE]=true;
+    assert(action_bits(&sw,kb,0)==0);
+    kb[SDL_SCANCODE_TAB]=false; kb[SDL_SCANCODE_DELETE]=false;
+
+    /* A long map (every button and action with three sources, well over the old 1024 bytes) parses. */
+    char big[4096]="";
+    int entries=0;
+    for (size_t i=0;i<sizeof(ps_names)/sizeof(*ps_names);++i) {
+        if (!strcmp(ps_names[i].name,"touchpad")) continue;
+        size_t n=strlen(big);
+        snprintf(big+n,sizeof(big)-n,"%s%s=Keypad 1|Keypad 2|Mouse Left",entries++ ? "," : "",ps_names[i].name);
+    }
+    for (size_t i=0;i<sizeof(action_names)/sizeof(*action_names);++i) {
+        size_t n=strlen(big);
+        snprintf(big+n,sizeof(big)-n,",%s=Keypad 3|Keypad 4|Wheel Down",action_names[i].name);
+        ++entries;
+    }
+    assert(strlen(big)>1024 && strlen(big)<4096);
+    ButtonMap lng=key_map;
+    assert(apply_button_map(&lng,big,true)==entries);
+    kb[SDL_SCANCODE_KP_4]=true;
+    assert(action_bits(&lng,kb,0)==((1u<<ACT_COUNT)-1));
+    kb[SDL_SCANCODE_KP_4]=false;
     puts("PASS: pad and key maps");
 }

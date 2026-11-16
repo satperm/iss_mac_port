@@ -16,6 +16,24 @@
 
 namespace Vulkan {
 
+namespace {
+/// tlg: MoltenVK formats a label for every Metal encoder from its command buffer's debug name
+/// (~4% of the recording thread in the Bloodborne port, 64d6bfba), so pooled command buffers stay
+/// unnamed unless a labelled diagnostic run asks for them (TLG_CMDBUF_NAMES=1, or the draw/pass
+/// label switches the hung-encoder diagnostics use).
+bool NameCommandBuffers() {
+    static const bool named = [] {
+        const auto on = [](const char* name) {
+            const char* env = std::getenv(name);
+            return env && *env && *env != '0';
+        };
+        return on("TLG_CMDBUF_NAMES") || on("TLG_DRAW_LABELS") || on("TLG_PASS_LABELS");
+    }();
+    return named;
+}
+} // namespace
+
+
 ResourcePool::ResourcePool(Semaphore* work_semaphore_, std::size_t grow_step_)
     : work_semaphore{work_semaphore_}, grow_step{grow_step_} {}
 
@@ -119,7 +137,9 @@ CommandPool::Slot CommandPool::NewSlot() {
     const auto result = device.allocateCommandBuffers(&buffer_alloc_info, &slot.buffer);
     ASSERT(result == vk::Result::eSuccess);
     std::scoped_lock lock{slot_mutex};
-    SetObjectName(device, slot.buffer, "CommandPool: Command Buffer {}", slot_pools.size());
+    if (NameCommandBuffers()) {
+        SetObjectName(device, slot.buffer, "CommandPool: Command Buffer {}", slot_pools.size());
+    }
     slot_pools.push_back(pool);
     return slot;
 }
@@ -193,7 +213,7 @@ void CommandPool::Allocate(std::size_t begin, std::size_t end) {
         device.allocateCommandBuffers(&buffer_alloc_info, cmd_buffers.data() + begin);
     ASSERT(result == vk::Result::eSuccess);
 
-    for (std::size_t i = begin; i < end; ++i) {
+    for (std::size_t i = begin; NameCommandBuffers() && i < end; ++i) {
         SetObjectName(device, cmd_buffers[i], "CommandPool: Command Buffer {}", i);
     }
 }

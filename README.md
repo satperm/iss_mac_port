@@ -21,6 +21,7 @@ It is a macOS fork of [iss_pc](https://github.com/HayatoG/iss_pc), the native PC
 - [Build](#build)
 - [Play](#play)
 - [Settings and shortcuts](#settings-and-shortcuts)
+- [Controls](#controls)
 - [Expected performance](#expected-performance)
 - [Status](#status)
 - [Known issues](#known-issues)
@@ -136,6 +137,9 @@ In the launcher:
 | Detail | Original (as on the PS4), Lower, Lowest (the game's own lower settings: particles, high-resolution textures, pedestrians; for slower Macs) |
 | Frame rate cap | Display (the display's refresh rate, at most 120; default), 60, 30 (steadier on slower Macs) |
 | Render scale | 100% (default) down to 50%: the game draws a smaller picture and scales it up; more FPS where the GPU is the limit, softer image |
+| Fast shader math | Off (default) or on: lets Metal use its faster float arithmetic in the game's shaders; up to 9% more FPS in heavy scenes. Shaders compile again on the first start after a change |
+| Upscaler | Off (default), FSR 3 or MetalFX: temporal upscaling in place of the game's anti-aliasing; with a render scale below 100% it rebuilds a sharp 1080p picture with the HUD at full size |
+| Hold frame rate | Off (default), 30, 45 or 60: when the game runs slower than this, it draws less far and with fewer objects (the game's own dynamic quality levels) until the rate is back, and restores the detail when there is room |
 | Frame pacing | Smooth (even frame times, default), 60 Hz steps |
 | Window | Full screen (needed for macOS Game Mode) or windowed; fill 16:10 screens without black bars |
 | Native GPU process | On by default: runs the renderer as a native Apple Silicon process. Turn it off to run everything under Rosetta |
@@ -147,6 +151,36 @@ directly.
 
 The port menu's **LOD distance** below 1.0x trades distant detail for speed (0.5x: about +8% on open
 outdoor views).
+
+## Controls
+
+A PlayStation or Xbox controller is recommended; the keyboard and mouse also work, with or without a controller.
+
+| Input | PS4 button |
+|---|---|
+| W A S D | Left stick |
+| Arrow keys | Right stick |
+| Mouse movement | Camera (the game takes the mouse while it has focus; Esc gives it back, a click takes it again) |
+| Space | Cross |
+| Left Shift | Circle |
+| E | Square |
+| Q | Triangle |
+| 1 / 3 | L1 / R1 |
+| R or right mouse button | L2 (aim) |
+| F or left mouse button | R2 (use the power) |
+| Z | L3 |
+| C or middle mouse button | R3 |
+| Return | Options |
+| I / K / J / L | D-pad up / down / left / right |
+| Tab / Backspace | Touchpad click, left side (photo mode) / right side (pause menu) |
+
+**Spray can without a gamepad.** Hold T or G to hold the controller sideways. Move the arrow keys or the mouse to aim. Press Y, or wiggle the mouse or spin the wheel, to shake the can. Hold F or the left mouse button to spray.
+
+**Touchpad.** Tab and Backspace click the left and right side of the touchpad. To swipe (for example Open Door), hold Tab and press an arrow key, or hold Left Ctrl (or Mouse X1) and drag with the mouse.
+
+**Remapping.** The launcher's **Controls…** window lists the buttons above. Click a key, then press the new key or mouse button (Esc cancels); **Clear** leaves a button without keys, **Default** restores one button and **Reset All** restores everything. A button you change loses its default keys, and up to three keys or mouse inputs can share one button. A warning mark shows a key that is used twice. Mouse buttons (Left, Middle, Right, X1, X2) and the wheel can be bound too. Cmd and Esc cannot. Movement (WASD), the camera keys (arrow keys), the spray-can keys (T, G, Y) and the touchpad swipe key (default: the left touchpad click's key, Tab) are remappable the same way, in the second block of the window; only the mouse camera, Left Ctrl / Mouse X1 (touchpad mouse mode) and Esc stay fixed.
+
+The launcher saves the choice as `TLG_KEY_MAP` in `launch.conf` (only the buttons you changed, for example `cross=Left Ctrl,r2=Mouse X1|F`; the names `move_up`, `move_down`, `move_left`, `move_right`, `look_up`, `look_down`, `look_left`, `look_right`, `can_left`, `can_right`, `can_shake` and `swipe` take the same values; no line when everything is default). It can also be set by hand, in the launcher's environment or in `tlg.ini` as `key_map=`; the environment variable wins.
 
 ## Expected performance
 
@@ -174,6 +208,12 @@ truck crash 75. The fans run louder. The launcher shows a hint when this mode is
 
 What changes it:
 
+- **Fast shader math**: burning village 63.7 -> 69.7 FPS, truck crash 74.7 -> 77.1, bridge 98.8 -> 102.5
+  on an M3 Max; no visible difference in our screenshots.
+- **Hold frame rate**: the largest lever in heavy scenes. In the burning village the game's quality
+  level 8 gives 78 FPS and level 12 gives 85 against 63, with visibly sparser trees, grass and fires.
+- **Upscaler: MetalFX** with **Render scale** 67%: burning village 63 -> 72 FPS. It costs about 1 ms a
+  frame, so calm scenes on a fast Mac get slower with it (bridge 99.6 -> 90.6 at 75%).
 - **Render scale** below 100%: about +11% at 67% on an M3 Max, more on Macs with smaller GPUs.
 - **Smoke and sparks: Off**: faster in effect-heavy scenes, but powers show no smoke and there is no
   rain.
@@ -325,7 +365,7 @@ Near term:
 
 1. **CPU work per draw** in busy streets (profile where the game draws ~7,500 objects a frame).
 2. **Fewer GPU submissions a frame** (each leaves the GPU idle for a moment).
-3. **Automatic updates** in the launcher (as bloodborne_mac_port), keyboard and mouse remapping.
+3. **Automatic updates** in the launcher (as bloodborne_mac_port).
 4. **HUD**: find the missing objective text.
 
 Later:

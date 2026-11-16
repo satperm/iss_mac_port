@@ -17,6 +17,11 @@
 #define TLG_VIEW_LOD_TABLE 0xda08c0u /* 21 rows of 0x14 bytes: float lod, int shadow cascades
                                         delta, float max distance, float, int */
 #define TLG_VIEW_LOD_ROWS 21u
+#define TLG_VIEW_CULL_OFFSET 0x10u    /* int in each row: objects/particles dropped at random, value / 1025
+                                         (FUN_003fbb30, FUN_0043d590); 0 until level 14, then 8..0x3e0 */
+#define TLG_VIEW_STATE 0xf1bcd0u      /* the frame object FUN_001f14e0 works on: the level is its +0x1dca8; the two draw lists'
+                                         write pointers are +0xc8 / +0xf8, their starts +0xb8 + [+0xe0] * 8 / +0xe8 + [+0x110] * 8 */
+#define TLG_VIEW_LEVEL 0xf39978u     /* the game's current dynamic quality level (0..20), read by 11 sites */
 #define TLG_VIEW_LOD_STRIDE 0x14u
 #define TLG_VIEW_BANDS 0xdfaa34u      /* 6 floats: LOD band distances (a 7th, FLT_MAX, follows) */
 #define TLG_VIEW_BAND_COUNT 6u
@@ -29,6 +34,11 @@ static const float tlg_view_lod_original[TLG_VIEW_LOD_ROWS] = {
     0.2f, 0.2f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f};
 static const float tlg_view_band_original[TLG_VIEW_BAND_COUNT] = {400.0f, 750.0f, 1500.0f,
                                                                    3500.0f, 6000.0f, 15000.0f};
+/* Column +0x10 as shipped, and the "performance" curve (drops start at level 11). */
+static const int32_t tlg_view_cull_original[TLG_VIEW_LOD_ROWS] = {
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x8, 0x20, 0x80, 0x200, 0x300, 0x3e0};
+static const int32_t tlg_view_cull_performance[TLG_VIEW_LOD_ROWS] = {
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x20, 0x80, 0x100, 0x200, 0x2c0, 0x300, 0x340, 0x380, 0x3a0, 0x3e0};
 #define TLG_VIEW_NEAR_ORIGINAL 10.0f
 #define TLG_VIEW_FAR_ORIGINAL 1.0e7f
 
@@ -55,6 +65,11 @@ static inline int tlg_view_signature_match(const unsigned char *image, uint64_t 
     }
     for (unsigned r = 0; r < TLG_VIEW_LOD_ROWS; ++r)
         if (!tlg_view_float_is(image, TLG_VIEW_LOD_TABLE + r * TLG_VIEW_LOD_STRIDE, tlg_view_lod_original[r])) return 0;
+    for (unsigned r = 0; r < TLG_VIEW_LOD_ROWS; ++r) {
+        int32_t v;
+        memcpy(&v, image + TLG_VIEW_LOD_TABLE + r * TLG_VIEW_LOD_STRIDE + TLG_VIEW_CULL_OFFSET, 4);
+        if (v != tlg_view_cull_original[r]) return 0;
+    }
     for (unsigned b = 0; b < TLG_VIEW_BAND_COUNT; ++b)
         if (!tlg_view_float_is(image, TLG_VIEW_BANDS + 4 * b, tlg_view_band_original[b])) return 0;
     return tlg_view_float_is(image, TLG_VIEW_NEAR_CLIP, TLG_VIEW_NEAR_ORIGINAL) &&
@@ -104,6 +119,69 @@ static inline unsigned tlg_view_build_fade_stub(unsigned char *out, uintptr_t in
     unsigned n = 0;
     memcpy(out + n, head, sizeof(head)); n += sizeof(head);
     memcpy(out + n, &inverse_scale, 8); n += 8;
+    memcpy(out + n, tail, sizeof(tail)); n += sizeof(tail);
+    return n + tlg_view_jump_back(out + n, resume);
+}
+/* Draw list budget (FUN_001f14e0, called once a frame by FUN_001f1e30): the game raises its dynamic
+ * quality level when the frame's two command lists pass 24 MB / 10 MB (0x1800000 / 0xa00000) and
+ * lowers it again below 95% of them (0x1466666 / 0x880000 are 95% of the budgets, capped).
+ * All eight immediates are scaled together; scaling only the compares makes the level yo-yo and
+ * every overflow rebuilds the frame. Lowering is always safe (the lists keep their real size). */
+#define TLG_VIEW_BUDGET_SITES 8u
+static const uint32_t tlg_view_budget_at[TLG_VIEW_BUDGET_SITES] = {
+    0x1f1736u, 0x1f1746u, 0x1f1b19u, 0x1f1b32u, 0x1f1b46u, 0x1f1b50u, 0x1f1b7au, 0x1f1b85u};
+static const uint32_t tlg_view_budget_stock[TLG_VIEW_BUDGET_SITES] = {
+    0x1800000u, 0xa00000u, 0x1466666u, 0x1466666u, 0x880000u, 0x880000u, 0x1800000u, 0xa00000u};
+#define TLG_VIEW_BUDGET_MIN_PERCENT 10u
+
+/* Scales the budgets to percent/100 of the game's; 1 when applied (or already 100), 0 when the
+ * bytes are not this eboot's. */
+static inline int tlg_view_apply_draw_budget(unsigned char *image, unsigned percent) {
+    if (percent >= 100u) return 1;
+    if (percent < TLG_VIEW_BUDGET_MIN_PERCENT) percent = TLG_VIEW_BUDGET_MIN_PERCENT;
+    for (unsigned i = 0; i < TLG_VIEW_BUDGET_SITES; ++i) {
+        uint32_t v;
+        memcpy(&v, image + tlg_view_budget_at[i], 4);
+        if (v != tlg_view_budget_stock[i]) return 0;
+    }
+    for (unsigned i = 0; i < TLG_VIEW_BUDGET_SITES; ++i) {
+        const uint32_t v = (uint32_t)(((uint64_t)tlg_view_budget_stock[i] * percent) / 100u);
+        memcpy(image + tlg_view_budget_at[i], &v, 4);
+    }
+    return 1;
+}
+/* Quality floor: FUN_001f14e0 lowers the dynamic quality level by one on every frame that fits the
+ * draw lists ("lea edx,[r8-1]; mov [r13+0x1dca8],edx" at 0x1f1b68). The stub clamps the new level
+ * to *floor, so a level raised on purpose (a frame-time governor, the menu) is not eaten at one
+ * level a frame. The level itself is raised by tlg_view.cpp. The stub keeps the 128 bytes below
+ * rsp (red zone) and rax. */
+#define TLG_VIEW_LOWER_SITE 0x1f1b68u
+#define TLG_VIEW_LOWER_LENGTH 11u
+static const unsigned char tlg_view_lower_code[TLG_VIEW_LOWER_LENGTH] = {
+    0x41, 0x8d, 0x50, 0xff,                         /* lea -0x1(%r8),%edx */
+    0x41, 0x89, 0x95, 0xa8, 0xdc, 0x01, 0x00};      /* mov %edx,0x1dca8(%r13) */
+
+static inline int tlg_view_lower_signature(const unsigned char *image, uint64_t size) {
+    return size > TLG_VIEW_LOWER_SITE + TLG_VIEW_LOWER_LENGTH &&
+           !memcmp(image + TLG_VIEW_LOWER_SITE, tlg_view_lower_code, TLG_VIEW_LOWER_LENGTH);
+}
+
+static inline unsigned tlg_view_build_lower_stub(unsigned char *out, uintptr_t floor_address, uintptr_t resume) {
+    static const unsigned char head[] = {
+        0x48, 0x8d, 0xa4, 0x24, 0x80, 0xff, 0xff, 0xff, /* lea -0x80(%rsp),%rsp */
+        0x50,                                           /* push %rax */
+        0x48, 0xb8};                                    /* movabs $floor,%rax */
+    static const unsigned char tail[] = {
+        0x8b, 0x00,                                     /* mov (%rax),%eax */
+        0x41, 0x8d, 0x50, 0xff,                         /* lea -0x1(%r8),%edx */
+        0x39, 0xc2,                                     /* cmp %eax,%edx */
+        0x0f, 0x4c, 0xd0,                               /* cmovl %eax,%edx */
+        0x58,                                           /* pop %rax */
+        0x48, 0x8d, 0xa4, 0x24, 0x80, 0, 0, 0,          /* lea 0x80(%rsp),%rsp */
+        0x41, 0x89, 0x95, 0xa8, 0xdc, 0x01, 0x00};      /* mov %edx,0x1dca8(%r13) */
+    unsigned n = 0;
+    memcpy(out + n, head, sizeof(head)); n += sizeof(head);
+    memcpy(out + n, &floor_address, 8); n += 8;
     memcpy(out + n, tail, sizeof(tail)); n += sizeof(tail);
     return n + tlg_view_jump_back(out + n, resume);
 }

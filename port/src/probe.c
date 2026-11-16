@@ -647,15 +647,26 @@ static void install_stat_multipliers(const char *app0, Segment *segments, uint64
 }
 extern uintptr_t tlg_view_region_params(void);
 extern uintptr_t tlg_view_fade_inverse(void);
+extern uintptr_t tlg_view_floor_address(void);
 extern void tlg_view_attach(unsigned char *guest_image);
+extern void tlg_view_start(void);
 
 /* Draw distance, LOD and clip planes (src/view_hook.h): the menu's values reach the game's data
  * through tlg_view_attach; the regions' LOD_ADJUST and FADE_DISTANCE go through four stubs. */
-static void install_view_tuning(Segment *segments, uint64_t count, uint64_t size) {
+static void install_view_tuning(const char *app0, Segment *segments, uint64_t count, uint64_t size) {
+    /* inFAMOUS Second Son 01.07 only (CUSA00004 has the same code); the byte signature below still decides. */
+    char path[4096], serial[32] = "", version[32] = "";
+    snprintf(path, sizeof(path), "%s/sce_sys/param.sfo", app0 ? app0 : ".");
+    sfo_value(path, "TITLE_ID", serial, sizeof(serial), NULL);
+    sfo_value(path, "APP_VER", version, sizeof(version), NULL);
+    if ((strcmp(serial, "CUSA00223") && strcmp(serial, "CUSA00004")) || strcmp(version, "01.07")) return;
     if (!mapped(segments, count, TLG_VIEW_LOD_TABLE, TLG_VIEW_LOD_ROWS * TLG_VIEW_LOD_STRIDE) ||
         !mapped(segments, count, TLG_VIEW_BANDS, 4 * TLG_VIEW_BAND_COUNT) ||
         !mapped(segments, count, TLG_VIEW_NEAR_CLIP, 8) ||
+        size < TLG_VIEW_LEVEL + 4 || /* the level word is in the bss: inside the image, past the file-backed segments */
+        !mapped(segments, count, tlg_view_budget_at[0], tlg_view_budget_at[TLG_VIEW_BUDGET_SITES - 1] + 4 - tlg_view_budget_at[0]) ||
         !mapped(segments, count, tlg_view_region_sites[1], sizeof(tlg_view_region_code)) ||
+        !mapped(segments, count, TLG_VIEW_LOWER_SITE, TLG_VIEW_LOWER_LENGTH) ||
         !tlg_view_signature_match(image, size)) {
         return; /* another game or build: silent, like the other hooks of other games */
     }
@@ -675,10 +686,20 @@ static void install_view_tuning(Segment *segments, uint64_t count, uint64_t size
             else tlg_view_build_fade_stub(stub, tlg_view_fade_inverse(), resume);
         }
     }
+    /* Quality floor (view_hook.h): the stub that stops the game from lowering its dynamic quality level
+     * under the floor. Optional: without it the floor still raises the level, only not for long. */
+    unsigned char *lower_stub = stubs + 4 * 128;
+    const int64_t lower_delta = (int64_t)(uintptr_t)lower_stub - (int64_t)(uintptr_t)(image + TLG_VIEW_LOWER_SITE + 5);
+    const int lower = tlg_view_lower_signature(image, size) && lower_delta >= INT32_MIN && lower_delta <= INT32_MAX;
+    if (lower)
+        tlg_view_build_lower_stub(lower_stub, tlg_view_floor_address(),
+                                  (uintptr_t)(image + TLG_VIEW_LOWER_SITE + TLG_VIEW_LOWER_LENGTH));
     protect(stubs, page_size, 5);
     for (unsigned kind = 0; kind < 2; ++kind)
         for (unsigned i = 0; i < 2; ++i)
             install_jump(sites[kind][i], TLG_VIEW_SITE_LENGTH, stubs + (kind * 2 + i) * 128);
+    if (lower) install_jump(TLG_VIEW_LOWER_SITE, TLG_VIEW_LOWER_LENGTH, lower_stub);
+    else puts("Quality floor: unavailable (code differs)");
     tlg_view_attach(image);
     printf("Draw distance: ready (LOD scale, LOD bands, region LOD_ADJUST and FADE_DISTANCE, near/far clip)\n");
 }
@@ -1560,7 +1581,7 @@ int main(int argc, char **argv) {
     if (gpu_enabled) install_cheats(app0, segments, ns, size);
     if (gpu_enabled) install_actor_watch(app0, segments, ns, size);
     if (gpu_enabled) install_stat_multipliers(app0, segments, ns, size);
-    if (gpu_enabled) install_view_tuning(segments, ns, size);
+    if (gpu_enabled) install_view_tuning(app0, segments, ns, size);
     if (gpu_enabled) install_iss_temporal(app0, segments, ns, size);
     if (isa_table) {
         isa_table->protect_red_zone = red_zone_on;
@@ -1607,6 +1628,7 @@ int main(int argc, char **argv) {
     if (!executable_entry) fail("entry is not executable");
     printf("Mapped %" PRIu64 " bytes, %" PRIu64 " segments; applied %" PRIu64 " relocations\n", size, ns, nr);
     boot_step("image mapped and relocated");
+    if (gpu_enabled) tlg_view_start(); /* its thread reads the image: only now that it is mapped again */
     if (native_libc) {
         for (uint64_t m=0;m<module_count;++m) {
             int init_executable=0;
