@@ -77,8 +77,9 @@ struct KeyMap: Equatable {
 
     static let mouseNames = ["Mouse Left", "Mouse Middle", "Mouse Right", "Mouse X1", "Mouse X2",
                              "Wheel Up", "Wheel Down", "Wheel Left", "Wheel Right"]
-    /// Cmd belongs to the Mac (shortcuts), Esc gives the mouse back: neither is offered.
-    static let reserved = ["Left GUI", "Right GUI", "Escape"]
+    /// Cmd belongs to the Mac (shortcuts), Esc gives the mouse back, and the comma separates the
+    /// entries of the map string (the game would read "cross=," as an empty binding): none is offered.
+    static let reserved = ["Left GUI", "Right GUI", "Escape", ","]
 
     /// Read directly by the game: Esc (gpu/shim/window.cpp), mouse movement and the touchpad mode keys.
     static let fixed: [FixedKey] = [

@@ -40,6 +40,13 @@ public:
         } else {
             slow_ = fast_ = 0;
         }
+        // tlg (macOS): with a frame cap or vsync at the target the rate never passes FastFactor, and
+        // the floor would only ever climb. Holding the target counts as room to try one level back
+        // after HoldSeconds; a try that fails is not repeated for a doubling time (flap_block_).
+        hold_ = fps >= target_fps * HoldFactor ? hold_ + 1 : 0;
+        if (hold_ >= HoldSeconds && fast_ < FastSeconds) {
+            fast_ = FastSeconds;
+        }
         if (slow_ >= SlowSeconds && raise_cooldown_ <= 0.0) {
             const int step = fps < target_fps * VerySlowFactor ? 3 : 1;
             level_ = level_ + step < MaxLevel ? level_ + step : MaxLevel;
@@ -48,12 +55,15 @@ public:
             slow_ = 0;
             // A level we just gave back made the frame slow again: do not try again for a while.
             if (since_lowered_ < FlapSeconds) {
-                blocked_ = FlapBlock;
+                blocked_ = flap_block_;
+                flap_block_ = flap_block_ * 2.0 < MaxFlapBlock ? flap_block_ * 2.0 : MaxFlapBlock;
             }
+            hold_ = 0;
         } else if (fast_ >= FastSeconds && lower_cooldown_ <= 0.0 && blocked_ <= 0.0 && level_ > 0) {
             --level_;
             lower_cooldown_ = LowerCooldown;
             fast_ = 0;
+            hold_ = 0;
             since_lowered_ = 0.0;
         }
         return level_;
@@ -71,6 +81,9 @@ public:
     static constexpr double LowerCooldown = 6.0;
     static constexpr double FlapSeconds = 10.0;
     static constexpr double FlapBlock = 40.0;
+    static constexpr double MaxFlapBlock = 640.0;
+    static constexpr double HoldFactor = 0.97;      ///< at least 97% of the target: holding it
+    static constexpr int HoldSeconds = 30;
 
 private:
     int level_ = 0;
@@ -79,6 +92,8 @@ private:
     double raise_cooldown_ = 0.0;   ///< after a climb, until the next climb
     double lower_cooldown_ = 0.0;   ///< after any change, until a level may be given back
     double blocked_ = 0.0;
+    double flap_block_ = FlapBlock;
+    int hold_ = 0;
     double since_lowered_ = 1.0e9;
 };
 

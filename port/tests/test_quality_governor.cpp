@@ -57,6 +57,22 @@ int main() {
         Run(g, 40, 30, 55.0);
         CHECK(g.Level() == 0);
     }
+    {   // Held at a frame cap (never over 130%): a level comes back after 30 s at the target, and a
+        // try that makes the frame slow again waits longer each time.
+        Governor g;
+        Run(g, 2, 60, 40.0);
+        CHECK(g.Level() == 3);
+        Run(g, 20, 60, 60.0);
+        CHECK(g.Level() == 3);                    // 20 s at the cap is not long enough
+        Run(g, 12, 60, 60.0);
+        CHECK(g.Level() == 2);
+        Run(g, 3, 60, 50.0);                      // slow again right after: back up, blocked for 40 s
+        CHECK(g.Level() == 3);
+        Run(g, 35, 60, 60.0);
+        CHECK(g.Level() == 3);
+        Run(g, 30, 60, 60.0);
+        CHECK(g.Level() == 2);
+    }
     {   // Giving a level back and being slow again soon blocks further attempts for a while.
         Governor g;
         Run(g, 2, 30, 15.0);                      // level 3
