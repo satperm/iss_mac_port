@@ -45,6 +45,14 @@ enum Upscaler: String, CaseIterable, Identifiable {
     }
 }
 
+/// Hold frame rate (TLG_QUALITY_TARGET_FPS): the game's own dynamic quality levels, raised when the frame
+/// rate stays under the target and given back after a few seconds of spare time (gpu/shim/tlg_quality.h).
+enum HoldFrameRate: String, CaseIterable, Identifiable {
+    case off = "", fps30 = "30", fps45 = "45", fps60 = "60"
+    var id: String { rawValue }
+    var label: String { self == .off ? "Off" : rawValue }
+}
+
 /// How many sun-shadow cascades the game draws (TLG_SHADOW_CASCADES): Full leaves the variable unset;
 /// fewer cascades mean far fewer draws in open scenes, with coarser or missing distant shadows.
 enum ShadowDetail: String, CaseIterable, Identifiable {
@@ -164,6 +172,7 @@ struct LaunchSettings: Equatable {
     var fpsCap = FrameRateCap.display
     var renderScale = RenderScale.full
     var upscaler = Upscaler.off
+    var holdFrameRate = HoldFrameRate.off
     var shadowDetail = ShadowDetail.full
     var particles = ParticleMode.auto
     var textLanguage = "1"
@@ -217,6 +226,7 @@ struct LaunchSettings: Equatable {
         fpsCap = value("TLG_FPS_LIMIT").flatMap(FrameRateCap.init(rawValue:)) ?? .display
         renderScale = value("TLG_RENDER_SCALE").flatMap(RenderScale.init(rawValue:)) ?? .full
         upscaler = value("TLG_ISS_UPSCALER").flatMap(Upscaler.init(rawValue:)) ?? .off
+        holdFrameRate = value("TLG_QUALITY_TARGET_FPS").flatMap(HoldFrameRate.init(rawValue:)) ?? .off
         shadowDetail = value("TLG_SHADOW_CASCADES").flatMap(ShadowDetail.init(rawValue:)) ?? .full
         textLanguage = value("TLG_LANGUAGE").flatMap { code in GameLanguage.text.contains { $0.code == code } ? code : nil } ?? "1"
         voiceLanguage = value("TLG_AUDIO_LANGUAGE") ?? ""
@@ -241,6 +251,7 @@ struct LaunchSettings: Equatable {
         set("TLG_ISS_UPSCALER", upscaler == .off ? nil : upscaler.rawValue)
         set("TLG_ISS_TEMPORAL", upscaler == .off ? nil : "1")
         set("TLG_ISS_TEMPORAL_READY", upscaler == .off ? nil : "1")
+        set("TLG_QUALITY_TARGET_FPS", holdFrameRate == .off ? nil : holdFrameRate.rawValue)
         set("TLG_SHADOW_CASCADES", shadowDetail == .full ? nil : shadowDetail.rawValue)
         set("TLG_PARTICLES", particles == .auto ? nil : particles.rawValue)
         set("TLG_LANGUAGE", textLanguage)
@@ -263,7 +274,7 @@ struct LaunchSettings: Equatable {
     /// For the session log and crash reports.
     var summary: [String] {
         [fullscreen ? "full screen" : "windowed", stretch ? "stretched" : "16:9", "pacing \(pacing.label)",
-         "quality \(quality.label)", "FPS cap \(fpsCap.label)", "render scale \(renderScale.label)", "upscaler \(upscaler.label)", "shadow detail \(shadowDetail.label)",
+         "quality \(quality.label)", "FPS cap \(fpsCap.label)", "render scale \(renderScale.label)", "upscaler \(upscaler.label)", "hold frame rate \(holdFrameRate.label)", "shadow detail \(shadowDetail.label)",
          "particles \(particles.label)", gpuProcess ? "GPU process" : "single process"]
     }
 
