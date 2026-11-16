@@ -89,7 +89,9 @@ void PruneOtherRevisions(const std::filesystem::path& cache_path) {
     std::error_code ec;
     for (const auto& entry : std::filesystem::directory_iterator(cache_path.parent_path(), ec)) {
         const auto other = entry.path().filename().string();
-        if (entry.is_directory(ec) && other != name &&
+        // The precise and the fast-math cache of this revision both stay (a setting, not a revision).
+        const std::string revision = serial + "-" + TLG_SHADER_CACHE_KEY;
+        if (entry.is_directory(ec) && other != name && other != revision && other != revision + "-fm" &&
             (other == serial || other.rfind(serial + "-", 0) == 0)) {
             LOG_INFO(Render, "Removing shader cache of another recompiler revision: {}", other);
             std::filesystem::remove_all(entry.path(), ec);
@@ -105,8 +107,13 @@ namespace Storage {
 std::filesystem::path GameCacheDir() {
     const std::string serial{Common::ElfInfo::Instance().GameSerial()};
 #ifdef TLG_SHADER_CACHE_KEY
+    // tlg: TLG_FAST_SHADER_MATH=1 changes the SPIR-V of every shader: its own folder ("-fm").
+    static const bool fast = [] {
+        const char* env = std::getenv("TLG_FAST_SHADER_MATH");
+        return env && *env == '1';
+    }();
     return Common::FS::GetUserPath(Common::FS::PathType::CacheDir) /
-           (serial + "-" + TLG_SHADER_CACHE_KEY);
+           (serial + "-" + TLG_SHADER_CACHE_KEY + (fast ? "-fm" : ""));
 #else
     return Common::FS::GetUserPath(Common::FS::PathType::CacheDir) / serial;
 #endif

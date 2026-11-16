@@ -664,13 +664,16 @@ void SetupInfNanPreserveMode(EmitContext& ctx, const Profile& profile,
         ctx.AddCapability(spv::Capability::SignedZeroInfNanPreserve);
     }
 
-    // tlg: TLG_NAN_PRESERVE=0 (A/B, shadPS4 #5455): without the mode Metal may use its fast float
-    // paths. Changes the SPIR-V: use a separate shader cache for such a run.
-    static const bool preserve = [] {
-        const char* env = std::getenv("TLG_NAN_PRESERVE");
-        return !env || *env != '0';
+    // tlg: TLG_FAST_SHADER_MATH=1 leaves out the SignedZeroInfNanPreserve execution mode (as
+    // shadPS4 #5455): with it SPIRV-Cross writes every float operation of the shader in Metal's
+    // precise form. M3 Max 2026-11-16, precise / fast: burning village 63.7 / 69.7 FPS, truck
+    // 74.7 / 77.1, bridge 98.8 / 102.5, Seattle 73.6 / 73.3; MVK_CONFIG_FAST_MATH_ENABLED=1 alone
+    // gave 64.5 in the village. The shader cache folder differs (cache_storage.cpp).
+    static const bool fast = [] {
+        const char* env = std::getenv("TLG_FAST_SHADER_MATH");
+        return env && *env == '1';
     }();
-    if (!preserve) {
+    if (fast) {
         return;
     }
     if (profile.support_fp32_signed_zero_inf_nan_preserve) {
