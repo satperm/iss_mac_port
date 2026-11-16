@@ -653,7 +653,13 @@ extern void tlg_view_start(void);
 
 /* Draw distance, LOD and clip planes (src/view_hook.h): the menu's values reach the game's data
  * through tlg_view_attach; the regions' LOD_ADJUST and FADE_DISTANCE go through four stubs. */
-static void install_view_tuning(Segment *segments, uint64_t count, uint64_t size) {
+static void install_view_tuning(const char *app0, Segment *segments, uint64_t count, uint64_t size) {
+    /* inFAMOUS Second Son 01.07 only (CUSA00004 has the same code); the byte signature below still decides. */
+    char path[4096], serial[32] = "", version[32] = "";
+    snprintf(path, sizeof(path), "%s/sce_sys/param.sfo", app0 ? app0 : ".");
+    sfo_value(path, "TITLE_ID", serial, sizeof(serial), NULL);
+    sfo_value(path, "APP_VER", version, sizeof(version), NULL);
+    if ((strcmp(serial, "CUSA00223") && strcmp(serial, "CUSA00004")) || strcmp(version, "01.07")) return;
     if (!mapped(segments, count, TLG_VIEW_LOD_TABLE, TLG_VIEW_LOD_ROWS * TLG_VIEW_LOD_STRIDE) ||
         !mapped(segments, count, TLG_VIEW_BANDS, 4 * TLG_VIEW_BAND_COUNT) ||
         !mapped(segments, count, TLG_VIEW_NEAR_CLIP, 8) ||
@@ -1575,7 +1581,7 @@ int main(int argc, char **argv) {
     if (gpu_enabled) install_cheats(app0, segments, ns, size);
     if (gpu_enabled) install_actor_watch(app0, segments, ns, size);
     if (gpu_enabled) install_stat_multipliers(app0, segments, ns, size);
-    if (gpu_enabled) install_view_tuning(segments, ns, size);
+    if (gpu_enabled) install_view_tuning(app0, segments, ns, size);
     if (gpu_enabled) install_iss_temporal(app0, segments, ns, size);
     if (isa_table) {
         isa_table->protect_red_zone = red_zone_on;
