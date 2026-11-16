@@ -20,9 +20,6 @@ struct ControlsView: View {
         var id: String { "\(button.key)/\(slot)" }
     }
 
-    static let sprayHelp = "Spray can without a gamepad: hold T or G to hold the controller sideways. Move the arrow keys or the mouse to aim. Press Y, or wiggle the mouse or spin the wheel, to shake the can. Hold F or the left mouse button to spray."
-    static let touchpadHelp = "Touchpad: Tab and Backspace click the left and right side of the touchpad. To swipe (for example Open Door), hold Tab and press an arrow key, or hold Left Ctrl (or Mouse X1) and drag with the mouse."
-
     private var keys: KeyMap { model.settings.keys }
 
     var body: some View {
@@ -39,8 +36,8 @@ struct ControlsView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     table
                     fixedTable
-                    helpBox(Self.sprayHelp)
-                    helpBox(Self.touchpadHelp)
+                    helpBox(keys.sprayHelp(label: KeyLabel.text))
+                    helpBox(keys.touchpadHelp(label: KeyLabel.text))
                 }
                 .padding(.trailing, 8)
             }
@@ -81,6 +78,10 @@ struct ControlsView: View {
             }
             Divider().gridCellColumns(3)
             ForEach(KeyMap.buttons) { button in
+                row(button)
+            }
+            Divider().gridCellColumns(3)
+            ForEach(KeyMap.actions) { button in
                 row(button)
             }
         }
@@ -129,7 +130,7 @@ struct ControlsView: View {
 
     private var fixedTable: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Fixed (cannot be changed yet)").font(.caption.bold()).foregroundStyle(.secondary)
+            Text("Fixed").font(.caption.bold()).foregroundStyle(.secondary)
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 3) {
                 ForEach(KeyMap.fixed) { item in
                     GridRow {
