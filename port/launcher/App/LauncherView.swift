@@ -37,6 +37,7 @@ struct LauncherView: View {
                     .disabled(model.running)
                     .help("Off: the app starts the game at once. Hold \u{2325} (Option) while opening it to see this window.")
                 Button("Saves…") { model.showingSaves = true }
+                Button("Controls…") { model.showingControls = true }
                 Button("Logs") { model.openLogsFolder() }
                 Button("Benchmark") { model.runBenchmark() }
                     .disabled(!model.canBenchmark)
@@ -101,6 +102,9 @@ struct LauncherView: View {
         // (A second .sheet on the same view would never show: SwiftUI presents one per view.)
         .background {
             Color.clear.sheet(isPresented: $model.showingSaves) { SavesView(model: model) }
+        }
+        .background {
+            Color.clear.sheet(isPresented: $model.showingControls) { ControlsView(model: model) }
         }
     }
 
