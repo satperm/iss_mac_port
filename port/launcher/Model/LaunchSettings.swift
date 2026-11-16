@@ -173,7 +173,7 @@ struct LaunchSettings: Equatable {
     var renderScale = RenderScale.full
     var upscaler = Upscaler.off
     /// TLG_FAST_SHADER_MATH: shaders without Metal's precise float forms (more FPS where the GPU is the limit).
-    var fastShaderMath = false
+    var fastShaderMath = true
     var holdFrameRate = HoldFrameRate.off
     var shadowDetail = ShadowDetail.full
     var particles = ParticleMode.auto
@@ -230,7 +230,7 @@ struct LaunchSettings: Equatable {
         fpsCap = value("TLG_FPS_LIMIT").flatMap(FrameRateCap.init(rawValue:)) ?? .display
         renderScale = value("TLG_RENDER_SCALE").flatMap(RenderScale.init(rawValue:)) ?? .full
         upscaler = value("TLG_ISS_UPSCALER").flatMap(Upscaler.init(rawValue:)) ?? .off
-        fastShaderMath = flag("TLG_FAST_SHADER_MATH", false)
+        fastShaderMath = flag("TLG_FAST_SHADER_MATH", true)
         holdFrameRate = value("TLG_QUALITY_TARGET_FPS").flatMap(HoldFrameRate.init(rawValue:)) ?? .off
         shadowDetail = value("TLG_SHADOW_CASCADES").flatMap(ShadowDetail.init(rawValue:)) ?? .full
         textLanguage = value("TLG_LANGUAGE").flatMap { code in GameLanguage.text.contains { $0.code == code } ? code : nil } ?? "1"
@@ -255,7 +255,7 @@ struct LaunchSettings: Equatable {
         set("TLG_FPS_LIMIT", fpsCap == .display ? nil : fpsCap.rawValue)
         set("TLG_RENDER_SCALE", renderScale == .full ? nil : renderScale.rawValue)
         set("TLG_ISS_UPSCALER", upscaler == .off ? nil : upscaler.rawValue)
-        set("TLG_FAST_SHADER_MATH", fastShaderMath ? "1" : nil)
+        set("TLG_FAST_SHADER_MATH", fastShaderMath ? "1" : "0")
         set("TLG_ISS_TEMPORAL", upscaler == .off ? nil : "1")
         set("TLG_ISS_TEMPORAL_READY", upscaler == .off ? nil : "1")
         set("TLG_QUALITY_TARGET_FPS", holdFrameRate == .off ? nil : holdFrameRate.rawValue)

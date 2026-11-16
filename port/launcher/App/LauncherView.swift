@@ -199,7 +199,7 @@ struct LauncherView: View {
                     Text("30 FPS is steadier on slower Macs than an uneven 35-50. Render scale draws the game at a part of 1080p (sharp at 100%, softer below) and scales it up: more FPS where the GPU is the limit.")
                         .font(.caption).foregroundStyle(.secondary)
                     Toggle("Fast shader math", isOn: $model.settings.fastShaderMath)
-                    Text("Lets Metal use its faster float arithmetic in the game's shaders: up to 9% more FPS in heavy scenes (fire, smoke). The first start after a change compiles the shaders again.")
+                    Text("Lets Metal use its faster float arithmetic in the game's shaders: up to 9% more FPS in heavy scenes (fire, smoke). On by default; the first start after a change compiles the shaders again.")
                         .font(.caption).foregroundStyle(.secondary)
                     Picker("Upscaler", selection: $model.settings.upscaler) {
                         ForEach(Upscaler.allCases) { Text($0.label).tag($0) }

@@ -107,10 +107,11 @@ namespace Storage {
 std::filesystem::path GameCacheDir() {
     const std::string serial{Common::ElfInfo::Instance().GameSerial()};
 #ifdef TLG_SHADER_CACHE_KEY
-    // tlg: TLG_FAST_SHADER_MATH=1 changes the SPIR-V of every shader: its own folder ("-fm").
+    // tlg: fast shader math (the default; TLG_FAST_SHADER_MATH=0 turns it off) changes the SPIR-V
+    // of every shader: its own folder ("-fm").
     static const bool fast = [] {
         const char* env = std::getenv("TLG_FAST_SHADER_MATH");
-        return env && *env == '1';
+        return !(env && *env == '0');
     }();
     return Common::FS::GetUserPath(Common::FS::PathType::CacheDir) /
            (serial + "-" + TLG_SHADER_CACHE_KEY + (fast ? "-fm" : ""));
