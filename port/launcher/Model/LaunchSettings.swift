@@ -169,6 +169,8 @@ struct LaunchSettings: Equatable {
     var textLanguage = "1"
     var voiceLanguage = ""
     var gpuProcess = true
+    /// Keyboard and mouse bindings (TLG_KEY_MAP; Controls… page).
+    var keys = KeyMap()
 
     /// Show FPS and the Metal HUD as one choice; a file with both on reads as the Metal HUD.
     var counter: FrameCounter {
@@ -222,6 +224,7 @@ struct LaunchSettings: Equatable {
         voiceLanguage = value("TLG_AUDIO_LANGUAGE") ?? ""
         particles = value("TLG_PARTICLES").flatMap(ParticleMode.init(rawValue:)) ?? .auto
         gpuProcess = flag("TLG_GPU_PROCESS", true)
+        keys = KeyMap(string: value(KeyMap.variable))
     }
 
     /// The file's text with the settings written in.
@@ -246,6 +249,7 @@ struct LaunchSettings: Equatable {
         set("TLG_LANGUAGE", textLanguage)
         set("TLG_AUDIO_LANGUAGE", voiceLanguage.isEmpty ? nil : voiceLanguage)
         set("TLG_GPU_PROCESS", gpuProcess ? nil : "0")
+        set(KeyMap.variable, keys.fits ? keys.string : nil)
         return out.text
     }
 
@@ -262,9 +266,11 @@ struct LaunchSettings: Equatable {
 
     /// For the session log and crash reports.
     var summary: [String] {
-        [fullscreen ? "full screen" : "windowed", stretch ? "stretched" : "16:9", "pacing \(pacing.label)",
+        var items = [fullscreen ? "full screen" : "windowed", stretch ? "stretched" : "16:9", "pacing \(pacing.label)",
          "quality \(quality.label)", "FPS cap \(fpsCap.label)", "render scale \(renderScale.label)", "upscaler \(upscaler.label)", "shadow detail \(shadowDetail.label)",
          "particles \(particles.label)", gpuProcess ? "GPU process" : "single process"]
+        if !keys.isDefault { items.append("custom keys") }
+        return items
     }
 
     static func == (a: LaunchSettings, b: LaunchSettings) -> Bool { a.text == b.text }

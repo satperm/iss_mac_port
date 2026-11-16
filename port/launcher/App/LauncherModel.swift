@@ -19,6 +19,7 @@ final class LauncherModel: ObservableObject {
     @Published private(set) var preparingCrashBundle = false
     @Published private(set) var sessionLog: URL?
     @Published var showingSaves = false
+    @Published var showingControls = false
     /// This start lists and compiles the shaders first (run_macos.sh): minutes, once.
     @Published private(set) var preparingShaders = false
     /// A benchmark run is in progress (Benchmark.swift).
