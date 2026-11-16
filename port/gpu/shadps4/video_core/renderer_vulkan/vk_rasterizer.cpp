@@ -3913,7 +3913,7 @@ bool Rasterizer::TexturesBindableOnHelper(const Shader::Info& stage,
         }
         if (image->binding.needs_rebind || !texture_cache.IsUpToDate(image_id) ||
             scene_targets->Tracks(image->image_uid) ||
-            (upscaler->Enabled() && upscaler->RedirectsSampled(image_id))) {
+            (upscaler->Redirects() && upscaler->RedirectsSampled(image_id))) {
             return false;
         }
     }
@@ -5012,7 +5012,7 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
             // no resample to the native size (the native image is not touched).
             if (binding_proxy_ok[binding_index] && !is_storage && !binding.force_general &&
                 !binding.is_target &&
-                !(upscaler->Enabled() && upscaler->RedirectsSampled(image_id))) {
+                !(upscaler->Redirects() && upscaler->RedirectsSampled(image_id))) {
                 if (const auto proxy = scene_targets->SampleProxy(image, desc.view_info)) {
                     image.usage.texture = 1u;
                     image_infos.emplace_back(VK_NULL_HANDLE, proxy->view, proxy->layout);
@@ -5065,7 +5065,7 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
 
             vk::ImageView view = *image_view.image_view;
             vk::ImageLayout layout = image.backing->state.layout;
-            if (upscaler->Enabled()) {
+            if (upscaler->Redirects()) {
                 // tlg: the display pass reads the upscaled frame (scaled presets).
                 upscaler->RedirectSampled(image_id, image_view.info, view, layout);
             }
@@ -5260,7 +5260,7 @@ bool Rasterizer::BindTexturesFromSet(const Shader::Info& stage, const PreparedSt
                                !scene_targets->ProxyCurrent(image, entry.range.base.level,
                                                             entry.range.extent.levels)
                          : image.scene_proxy && proxies_on) ||
-            (upscaler->Enabled() && upscaler->RedirectsSampled(entry.id))) {
+            (upscaler->Redirects() && upscaler->RedirectsSampled(entry.id))) {
             ++texture_set_why[2];
             ++texture_set_misses;
             set.generation = ~0ull;
@@ -5672,7 +5672,7 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
             attachment.image_layout = target.layout;
         }
         image->usage.render_target = 1u;
-        if (cb == 0 && upscaler->Enabled()) {
+        if (cb == 0 && upscaler->Redirects()) {
             color_redirected = upscaler->RedirectColor(image_id, desc.view_info, redirect);
             if (color_redirected) {
                 guest_extent = {image->info.size.width, image->info.size.height};
@@ -5816,7 +5816,7 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
             attachment.image_layout = target.layout;
         }
         image.usage.depth_target = true;
-        if (upscaler->Enabled()) {
+        if (upscaler->Redirects()) {
             VulkanUpscalerTarget depth_redirect;
             depth_redirected = upscaler->RedirectDepth(image_id, depth_redirect);
             if (depth_redirected) {
@@ -7350,6 +7350,66 @@ std::pair<vk::Buffer, u64> Rasterizer::QuadIndirectArgs(VAddr args_address, u32 
     runtime.AccessBuffer(out.buffer, out.offset, out_bytes, vk::PipelineStageFlagBits2::eDrawIndirect,
                          vk::AccessFlagBits2::eIndirectCommandRead);
     return {out.buffer->Handle(), out.offset};
+}
+
+void Rasterizer::OnIssTemporalMarker(const u32* p) {
+    {
+        // The AA output the marker names: the render-target image at that address.
+        const VAddr address = VAddr(p[27]) | (VAddr(p[28]) << 32);
+        VideoCore::ImageId output{};
+        texture_cache.ForEachImageWithAddress(address, [&](VideoCore::ImageId id, VideoCore::Image& image) {
+            if (!output && image.usage.render_target) {
+                output = id;
+            }
+        });
+        camera_motion->OnIssMarker(p, output);
+        // Stage 1 of docs/METAL4_PLAN.md: FSR 3 at native size in place of the game's FXAA.
+        static const bool iss_fsr = [] {
+            const char* env = std::getenv("TLG_ISS_FSR");
+            const char* upscaler = std::getenv("TLG_ISS_UPSCALER"); // fsr | metalfx
+            return (env && *env == '1') || (upscaler && *upscaler && std::strcmp(upscaler, "none") != 0);
+        }();
+        if (iss_fsr && output) {
+            upscaler->RunIss(p, output);
+        }
+    }
+    // Stage 0 of docs/METAL4_PLAN.md: what the marker carries, and which cached images sit at the
+    // colour it names (TLG_ISS_TEMPORAL_LOG=1, every 5 s).
+    static const bool log = [] {
+        const char* env = std::getenv("TLG_ISS_TEMPORAL_LOG");
+        return env && *env == '1';
+    }();
+    static u64 markers = 0;
+    static u32 last_seq = 0, gaps = 0;
+    static auto report = std::chrono::steady_clock::now();
+    ++markers;
+    if (markers > 1 && p[2] != last_seq + 1) {
+        ++gaps;
+    }
+    last_seq = p[2];
+    if (!log) {
+        return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now - report < std::chrono::seconds(5)) {
+        return;
+    }
+    report = now;
+    float jitter[2], vp[16], nf[3];
+    std::memcpy(jitter, &p[6], sizeof(jitter));
+    std::memcpy(vp, &p[8], sizeof(vp));
+    std::memcpy(nf, &p[24], sizeof(nf));
+    const VAddr color = VAddr(p[27]) | (VAddr(p[28]) << 32);
+    std::printf("ISS temporal marker: %llu so far (%u seq gaps), seq %u flags %#x render %ux%u jitter %.3f %.3f "
+                "near %.2f far %.0f fov %.3f colour %#llx vp[0] %.4f vp[5] %.4f vp[10] %.6f vp[14] %.4f\n",
+                (unsigned long long)markers, gaps, p[2], p[3], p[4], p[5], jitter[0], jitter[1], nf[0], nf[1], nf[2],
+                (unsigned long long)color, vp[0], vp[5], vp[10], vp[14]);
+    texture_cache.ForEachImageWithAddress(color, [&](VideoCore::ImageId id, VideoCore::Image& image) {
+        std::printf("  image at the colour: %ux%u %s, levels %u, %s\n", image.info.size.width,
+                    image.info.size.height, vk::to_string(image.info.pixel_format).c_str(),
+                    image.info.resources.levels,
+                    image.usage.render_target ? "render target" : "texture");
+    });
 }
 
 } // namespace Vulkan

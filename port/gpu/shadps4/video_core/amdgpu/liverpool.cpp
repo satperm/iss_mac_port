@@ -428,6 +428,10 @@ void RunDmaData(Vulkan::Rasterizer& rasterizer, const u8* data) {
     }
 }
 
+void RunIssTemporalMarker(Vulkan::Rasterizer& rasterizer, const u8* data) {
+    rasterizer.OnIssTemporalMarker(reinterpret_cast<const u32*>(data));
+}
+
 void SignalFlip(Vulkan::Rasterizer& rasterizer, const u8*) {
     rasterizer.WaitDeferredSignals();
     rasterizer.LogFrameDraws();
@@ -1104,6 +1108,14 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
             case PM4ItOpcode::Nop: {
                 const auto* nop = reinterpret_cast<const PM4CmdNop*>(header);
                 if (nop->header.count.Value() == 0) {
+                    break;
+                }
+                // tlg: the temporal upscaling marker the game's AA hook writes (src/iss_temporal.h:
+                // 'ITT' magic, 33 payload dwords), handed to the recording thread in order with the
+                // draws (after the AA pass, before grain and the UI).
+                if ((nop->data_block[0] & 0xffffff00u) == 0x49545400u &&
+                    nop->header.count.Value() + 1 >= 33 && rasterizer) {
+                    rasterizer->RunInOrder(&RunIssTemporalMarker, nop->data_block, 33 * sizeof(u32));
                     break;
                 }
 

@@ -379,6 +379,9 @@ bool Instance::CreateDevice() {
         }
     }
     depth_range_unrestricted = add_extension(VK_EXT_DEPTH_RANGE_UNRESTRICTED_EXTENSION_NAME);
+#ifdef __APPLE__
+    metal_objects = add_extension(VK_EXT_METAL_OBJECTS_EXTENSION_NAME); // tlg: MetalFX
+#endif
     dynamic_state_3 = add_extension(VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME);
     if (dynamic_state_3) {
         dynamic_state_3_features =
