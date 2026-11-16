@@ -137,7 +137,7 @@ In the launcher:
 | Detail | Original (as on the PS4), Lower, Lowest (the game's own lower settings: particles, high-resolution textures, pedestrians; for slower Macs) |
 | Frame rate cap | Display (the display's refresh rate, at most 120; default), 60, 30 (steadier on slower Macs) |
 | Render scale | 100% (default) down to 50%: the game draws a smaller picture and scales it up; more FPS where the GPU is the limit, softer image |
-| Fast shader math | Off (default) or on: lets Metal use its faster float arithmetic in the game's shaders; up to 9% more FPS in heavy scenes. Shaders compile again on the first start after a change |
+| Fast shader math | On (default) or off: lets Metal use its faster float arithmetic in the game's shaders; up to 9% more FPS in heavy scenes. Shaders compile again on the first start after a change |
 | Upscaler | Off (default), FSR 3 or MetalFX: temporal upscaling in place of the game's anti-aliasing; with a render scale below 100% it rebuilds a sharp 1080p picture with the HUD at full size |
 | Hold frame rate | Off (default), 30, 45 or 60: when the game runs slower than this, it draws less far and with fewer objects (the game's own dynamic quality levels) until the rate is back, and restores the detail when there is room |
 | Frame pacing | Smooth (even frame times, default), 60 Hz steps |
@@ -208,7 +208,7 @@ truck crash 75. The fans run louder. The launcher shows a hint when this mode is
 
 What changes it:
 
-- **Fast shader math**: burning village 63.7 -> 69.7 FPS, truck crash 74.7 -> 77.1, bridge 98.8 -> 102.5
+- **Fast shader math** (on by default since 0.1.14): burning village 63.7 -> 69.7 FPS, truck crash 74.7 -> 77.1, bridge 98.8 -> 102.5
   on an M3 Max; no visible difference in our screenshots.
 - **Hold frame rate**: the largest lever in heavy scenes. In the burning village the game's quality
   level 8 gives 78 FPS and level 12 gives 85 against 63, with visibly sparser trees, grass and fires.
@@ -237,6 +237,11 @@ to add yours.
 
 Fixed recently:
 
+- **0.1.14: more FPS in heavy scenes and new options.** Fast shader math is on by default (burning
+  village 63.7 -> 69.7 FPS, a chase 79.2 -> 85.5 on an M3 Max; the shaders compile again on the first
+  start). New in the launcher: **Upscaler** (FSR 3 or MetalFX with a render scale below 100%), **Hold
+  frame rate** (the game lowers its draw distance and detail to keep 30, 45 or 60) and a **Controls…**
+  window with remappable keys, including the spray can and the touchpad swipe without a gamepad.
 - **The 60 FPS cap no longer costs frame rate in heavy scenes** (0.1.13). With a cap, scenes that could
   not reach 60 (fire, cutscenes) ran up to 8% below what they reach uncapped: the GPU keep-alive of 0.1.11
   started between frames and took GPU time from the game. It now stays off whenever a frame rate cap is

@@ -1075,3 +1075,10 @@ Instruments (Shader Timeline option) for per-shader cost.
   - Input: launcher Controls page writes `TLG_KEY_MAP`; sticks, spray-can keys (T/G/Y) and the swipe modifier are
     named actions now (move_*, look_*, can_left/right/shake, swipe); parser buffer 4096.
   - Agents: four parallel agents exhausted the 5-hour API limit at 10:00 (4 h lost). Keep to two at a time.
+- 2026-11-16 evening: FAST SHADER MATH IS THE DEFAULT (owner played 28 min with it: clean picture, mean 84 FPS
+  uncapped; his call). TLG_FAST_SHADER_MATH=0 turns it off (library: anything but "0" is on; launcher writes
+  1/0, default on). The default cache folder is now "<serial>-<key>-fm"; precompile's done file lives in that
+  folder, so the first start compiles on the loading screen as after any release. His session's freezes were
+  compiles in a new cache (3592, 23.5 s; a precise new-game session on 2026-11-14 had 2014, 8.2 s); 42 long
+  frames of ~65 ms without compiles are unexplained (compare with a precise session). Issue #5 logs (M1 Pro,
+  out/agent/issue5-logs): 25.7 FPS at defaults with the GPU thread 66% idle = GPU-bound; Slower Mac holds 30.
