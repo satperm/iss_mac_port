@@ -5,7 +5,7 @@
 
 #include "common/types.h"
 #include "video_core/buffer_cache/buffer.h"
-#include "video_core/renderer_vulkan/vk_barrier_tracker.h"
+#include "video_core/renderer_vulkan/vk_barrier_ranges.h"
 #include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
 #include "video_core/texture_cache/image.h"
 #include "video_core/texture_cache/types.h"
@@ -124,7 +124,8 @@ private:
     Scheduler& scheduler;
     std::unique_ptr<VideoCore::BlitHelper> blit_helper;
     StagingBufferPool staging_pool;
-    BarrierTracker barrier_tracker;
+    // tlg: sorted vectors (upstream PR #5112) or the red-black tree, TLG_BARRIER_VECTOR.
+    SwitchedBarrierTracker barrier_tracker;
     VideoCore::Image::Barriers image_barriers;
     vk::MemoryBarrier2 memory_barrier{};
     // tlg: ranges inserted into barrier_tracker since its last Clear(); re-inserting a

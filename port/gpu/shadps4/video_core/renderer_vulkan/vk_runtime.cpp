@@ -999,15 +999,14 @@ void Runtime::AccessBuffer(const VideoCore::Buffer* handle, u64 offset, u64 size
         const u64 now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
         if (!report) report = now;
         if (now - report >= 5'000'000'000ull) {
+            const auto tracker = barrier_tracker.TakeStats();
             std::printf("Buffer accesses (5 s): %llu calls (%llu writes), %llu memo hits, %u "
                         "barrier flushes, tracker %zu nodes allocated, %zu free now; inserts: %llu new, "
                         "%llu contained, %llu widened\n",
                         (unsigned long long)stat_calls, (unsigned long long)stat_writes,
                         (unsigned long long)stat_hits, access_epoch - u32(stat_epoch),
-                        barrier_tracker.Nodes(), barrier_tracker.FreeNodes(),
-                        (unsigned long long)std::exchange(barrier_tracker.stat_new, 0),
-                        (unsigned long long)std::exchange(barrier_tracker.stat_contained, 0),
-                        (unsigned long long)std::exchange(barrier_tracker.stat_other, 0));
+                        tracker.nodes, tracker.free_nodes, (unsigned long long)tracker.inserted,
+                        (unsigned long long)tracker.contained, (unsigned long long)tracker.widened);
             stat_calls = stat_hits = stat_writes = 0;
             stat_epoch = access_epoch;
             report = now;

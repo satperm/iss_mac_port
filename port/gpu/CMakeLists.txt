@@ -375,6 +375,12 @@ add_executable(cheat-hooks-test EXCLUDE_FROM_ALL ../tests/test_cheat_hooks.cpp)
 target_compile_options(cheat-hooks-test PRIVATE -UNDEBUG)
 add_executable(readback-queue-test EXCLUDE_FROM_ALL ../tests/test_readback_queue.cpp)
 
+# tlg: the sorted-vector barrier tracker against the red-black tree (TLG_BARRIER_VECTOR);
+# `--bench` times the two.
+add_executable(barrier-tracker-test EXCLUDE_FROM_ALL ../tests/test_barrier_tracker.cpp
+    shadps4/video_core/renderer_vulkan/vk_barrier_tracker.cpp)
+target_include_directories(barrier-tracker-test PRIVATE shadps4)
+target_compile_options(barrier-tracker-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 # RX580 opt-in image-barrier coalescing, using Vulkan-Hpp without a GPU/driver.
 add_executable(barrier-merge-test EXCLUDE_FROM_ALL ../tests/test_barrier_merge.cpp)
 target_include_directories(barrier-merge-test PRIVATE shadps4 third_party/vulkan-headers/include)
