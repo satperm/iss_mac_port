@@ -464,6 +464,36 @@ void ImageTab() {
                     "Plano distante padrão das câmeras (o jogo usa 10000000, sem limite). Menor corta a visão; "
                     "vale na próxima câmera."),
                  ImGuiSliderFlags_Logarithmic);
+        static const char* const cull_labels[] = {TL("The game's own", "Do jogo"), TL("Never drop objects", "Nunca descartar objetos"),
+                                                  TL("Performance (drop from level 11)", "Desempenho (descarta a partir do nível 11)")};
+        ChoiceRow(TL("Dynamic quality: dropped objects", "Qualidade dinâmica: objetos descartados"), s.dyn_cull, cull_labels, nullptr, 3,
+                  s.view_supported ? TL("In heavy scenes the game raises a quality level on its own and, at levels 15 to 20, skips a share of "
+                                        "objects and particles at random. Performance starts skipping earlier: smoother, less detail.",
+                                        "Em cenas pesadas o jogo sobe um nível de qualidade sozinho e, nos níveis 15 a 20, pula uma parte dos "
+                                        "objetos e partículas ao acaso. Desempenho começa a pular antes: mais fluido, menos detalhe.")
+                                   : TL(Unsupported, "Indisponível: versão do jogo ou assinatura do código diferente."));
+        static const char* const target_labels[] = {TL("Off", "Desligado"), "30 FPS", "45 FPS", "60 FPS"};
+        static const int target_values[] = {0, 30, 45, 60};
+        ChoiceRow(TL("Automatic quality: target frame rate", "Qualidade automática: taxa de quadros alvo"), s.quality_target_fps,
+                  target_labels, target_values, 4,
+                  s.view_supported ? TL("Raises the minimum quality level while the frame rate stays under the target and gives it back when "
+                                        "there is room to spare (menus and loading are ignored). The minimum below still applies.",
+                                        "Sobe o nível mínimo de qualidade enquanto a taxa de quadros fica abaixo do alvo e devolve quando "
+                                        "há folga (menus e carregamentos são ignorados). O mínimo abaixo continua valendo.")
+                                   : TL(Unsupported, "Indisponível: versão do jogo ou assinatura do código diferente."));
+        SliderRow(TL("Minimum dynamic quality level", "Nível mínimo da qualidade dinâmica"), s.quality_floor, 0, 14, "%d",
+                  s.view_supported ? TL("The game steps its quality level (0 best, 20 lowest: shorter LOD, fewer shadow cascades, fewer "
+                                        "objects) up in heavy scenes and back down in light ones. Raising the minimum keeps the "
+                                        "lighter levels: more FPS on weak hardware, less detail.",
+                                        "O jogo sobe o nível de qualidade (0 melhor, 20 mais baixo: LOD mais curto, menos cascatas de sombra, "
+                                        "menos objetos) em cenas pesadas e desce nas leves. Subir o mínimo mantém os níveis mais leves: "
+                                        "mais FPS em máquina fraca, menos detalhe.")
+                                   : TL(Unsupported, "Indisponível: versão do jogo ou assinatura do código diferente."));
+        SliderRow(TL("Draw list budget (next start)", "Orçamento das listas de draw (próximo início)"), s.draw_budget, 10, 100, "%d%%",
+                  TL("Share of the game's 24 MB / 10 MB frame command lists. Lower makes the game cut LOD, shadows and detail sooner "
+                     "in heavy scenes. Read at start: set it in the launcher or in tlg.ini and restart.",
+                     "Parte das listas de comandos de 24 MB / 10 MB do quadro. Menor faz o jogo reduzir LOD, sombras e detalhe mais cedo "
+                     "em cenas pesadas. Lido na partida: ajuste no launcher ou no tlg.ini e reinicie."));
         ImGui::EndDisabled();
         FloatRow(TL("Texture LOD bias (MipLodBias)", "Bias de LOD das texturas (MipLodBias)"), s.mip_lod_bias, -3.0f, 3.0f,
                  "%+.2f",
@@ -477,6 +507,10 @@ void ImageTab() {
             s.near_clip = 10.0f;
             s.far_clip = 1.0e7f;
             s.mip_lod_bias = 0.0f;
+            s.dyn_cull = 0;
+            s.draw_budget = 100;
+            s.quality_floor = 0;
+            s.quality_target_fps = 0;
             const float bands[6] = {400.0f, 750.0f, 1500.0f, 3500.0f, 6000.0f, 15000.0f};
             for (int b = 0; b < 6; ++b) s.lod_bands[b] = bands[b];
             dirty = true;

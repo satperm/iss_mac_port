@@ -225,6 +225,9 @@ typedef struct {
     /* ISS UI calls: data the host returns with an answer (text, mouse, settings); the game
      * serialises the calls that read it. */
     TLGGPU_ALIGNAS(TLGGPU_CACHE_LINE) uint8_t ui_reply[2048];
+    /* The host's total draws, stored at each flip (host_flips counts the flips): the game process reads
+     * them for the automatic quality (gpu/shim/tlg_view.cpp). Appended last. */
+    uint64_t host_draws;
 } TlgGpuShared;
 
 /* ISS UI calls (game -> host, request): the game's tlggpu_* UI and input functions, run in the
