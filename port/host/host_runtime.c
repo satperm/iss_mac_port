@@ -344,6 +344,13 @@ void runtime_memory_gpu_protect(uintptr_t address, uint64_t size, int read, int 
     const TlgGpuProtect record = {{TLGGPU_REC_PROTECT, sizeof record}, address, size, (uint32_t)read, (uint32_t)write, seq, 0};
     while (tlggpu_ring_push(g_shared, &g_shared->protect, &record, UINT64_C(1000000000))) game_alive_or_exit();
     pthread_mutex_unlock(&protect_lock);
+    if (tlggpu_protect_spin_ns()) {
+        const uint64_t until = tlggpu_now_ns() + tlggpu_protect_spin_ns();
+        do {
+            if ((int32_t)(__atomic_load_n(&g_shared->protect_done, __ATOMIC_ACQUIRE) - seq) >= 0) return;
+            tlggpu_cpu_relax();
+        } while (tlggpu_now_ns() < until);
+    }
     for (;;) {
         const uint32_t done = __atomic_load_n(&g_shared->protect_done, __ATOMIC_ACQUIRE);
         if ((int32_t)(done - seq) >= 0) return;

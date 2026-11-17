@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <mutex>
 #include <thread>
+#include <pthread.h>
 #include <signal.h>
 #include <unistd.h>
 #include "common/thread.h"
@@ -102,7 +103,21 @@ void InitRemote(TlgGpuShared* shared) {
     std::thread([] {
         Common::SetCurrentThreadName("tlg:GpuProtect");
         TlgGpuShared* s = g_shared;
+        const u64 spin = tlggpu_protect_spin_ns();
+        if (spin) {
+            pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+            std::printf("GPU process: protect relay spins %llu us before sleeping (TLG_PROTECT_SPIN_US)\n",
+                        (unsigned long long)(spin / 1000));
+        }
         for (;;) {
+            // Requests come in bursts (texture streaming): look for the next one before sleeping.
+            if (spin) {
+                const u64 until = tlggpu_now_ns() + spin;
+                while (__atomic_load_n(&s->protect.head, __ATOMIC_ACQUIRE) == s->protect.tail &&
+                       tlggpu_now_ns() < until) {
+                    tlggpu_cpu_relax();
+                }
+            }
             const TlgGpuRecord* r = tlggpu_ring_peek(s, &s->protect, Second);
             if (!r) {
                 if (!PeerAlive(s->host_pid)) {
