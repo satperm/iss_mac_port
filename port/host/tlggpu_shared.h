@@ -310,14 +310,17 @@ static inline int tlggpu_wait_word(uint32_t *word, uint32_t value, uint64_t time
     if (r < 0 && errno == ETIMEDOUT) return __atomic_load_n(word, __ATOMIC_ACQUIRE) == value ? -1 : 0;
     return 0;
 }
-/* TLG_PROTECT_SPIN_US (0 = off): how long both ends of the protect relay spin before they sleep.
+/* TLG_PROTECT_SPIN_US (default 200; 0 = off): how long both ends of the protect relay spin before
+ * they sleep. M3 Max 2026-11-17: protect time in streaming stalls halved (Seattle camera sweep 72/49
+ * -> 23/23 ms, chase 36/44 -> 13/22 ms per 120 s), FPS unchanged (truck 80.1/81.0, bridge 108.2/108.2,
+ * Seattle 78.0/78.5).
  * Texture streaming sends ~350 protect requests in one frame; each sleep/wake pair across the two
  * processes cost ~65 us there (24 ms in one frame, 2026-11-17), a spinning round trip ~0.3 us. */
 static inline uint64_t tlggpu_protect_spin_ns(void) {
     static int64_t ns = -1;
     if (ns < 0) {
         const char *e = getenv("TLG_PROTECT_SPIN_US");
-        ns = e ? (int64_t)strtoull(e, NULL, 10) * 1000 : 0;
+        ns = (e ? (int64_t)strtoull(e, NULL, 10) : 200) * 1000;
     }
     return (uint64_t)ns;
 }
