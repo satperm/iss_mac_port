@@ -171,9 +171,25 @@ static Id MagnitudeBits32(EmitContext& ctx, Id value) {
                             ctx.ConstU32(0x7fffffffu));
 }
 
+// tlg: TLG_PLAIN_SATURATE=1: BP05's NMin/NMax become FClamp. NaN is already selected away on the bit
+// pattern, and FClamp is defined for every other value (Inf included), so the result is the same; SPIRV-Cross
+// writes NMin/NMax as Metal's precise::min/max (1747 of each in 270 of 709 shaders with fast math, 2026-11-16).
+bool PlainSaturate() {
+    static const bool on = [] {
+        const char* env = std::getenv("TLG_PLAIN_SATURATE");
+        return env && *env == '1';
+    }();
+    return on;
+}
+
 Id EmitFPSaturate32(EmitContext& ctx, Id value) {
     const Id zero{ctx.ConstF32(f32{0.0})};
     const Id one{ctx.ConstF32(f32{1.0})};
+    if (Common::Backports::On(Common::Backports::Id::SaturateNan) && PlainSaturate()) {
+        Common::Backports::Hit(Common::Backports::Id::SaturateNan);
+        const Id is_nan = ctx.OpUGreaterThan(ctx.U1[1], MagnitudeBits32(ctx, value), ctx.ConstU32(0x7f800000u));
+        return ctx.OpSelect(ctx.F32[1], is_nan, zero, ctx.OpFClamp(ctx.F32[1], value, zero, one));
+    }
     if (Common::Backports::On(Common::Backports::Id::SaturateNan)) {
         // tlg: BP05 (shadPS4 #5257): NaN saturates to 0 like HLSL/DX10_CLAMP (FClamp is
         // undefined for NaN). NClamp(x, lo, hi) == NMin(NMax(x, lo), hi).

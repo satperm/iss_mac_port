@@ -89,9 +89,9 @@ void PruneOtherRevisions(const std::filesystem::path& cache_path) {
     std::error_code ec;
     for (const auto& entry : std::filesystem::directory_iterator(cache_path.parent_path(), ec)) {
         const auto other = entry.path().filename().string();
-        // The precise and the fast-math cache of this revision both stay (a setting, not a revision).
+        // Every cache of this revision stays (precise, fast math "-fm", plain saturate "-ps": settings).
         const std::string revision = serial + "-" + TLG_SHADER_CACHE_KEY;
-        if (entry.is_directory(ec) && other != name && other != revision && other != revision + "-fm" &&
+        if (entry.is_directory(ec) && other != name && other.rfind(revision, 0) != 0 &&
             (other == serial || other.rfind(serial + "-", 0) == 0)) {
             LOG_INFO(Render, "Removing shader cache of another recompiler revision: {}", other);
             std::filesystem::remove_all(entry.path(), ec);
@@ -113,8 +113,13 @@ std::filesystem::path GameCacheDir() {
         const char* env = std::getenv("TLG_FAST_SHADER_MATH");
         return !(env && *env == '0');
     }();
+    // tlg: TLG_PLAIN_SATURATE=1 changes the SPIR-V too (emit_spirv_floating_point.cpp): "-ps".
+    static const bool plain_saturate = [] {
+        const char* env = std::getenv("TLG_PLAIN_SATURATE");
+        return env && *env == '1';
+    }();
     return Common::FS::GetUserPath(Common::FS::PathType::CacheDir) /
-           (serial + "-" + TLG_SHADER_CACHE_KEY + (fast ? "-fm" : ""));
+           (serial + "-" + TLG_SHADER_CACHE_KEY + (fast ? "-fm" : "") + (plain_saturate ? "-ps" : ""));
 #else
     return Common::FS::GetUserPath(Common::FS::PathType::CacheDir) / serial;
 #endif
