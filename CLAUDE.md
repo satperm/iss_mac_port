@@ -1124,4 +1124,11 @@ Instruments (Shader Timeline option) for per-shader cost.
   Bloodborne's deferred copy-shader copies / upload hoisting do not apply here (TLG_PASS_STATS: no copy-shader
   pass splits; ~2 mid-pass uploads a frame). Burning village GPU per frame (pass_profile.sh): compute 2.9 ms,
   G-buffer 2.1, a full-screen RGBA16F pass (ps 24dad4be, simple shader, likely fire overdraw) 1.9, shadows 1.4.
+- 2026-11-17: POST-LOAD STALL, FOLLOW-UP. The ~270 builds are graphics pipelines compiled on the GPU thread
+  (GetGraphicsPipeline "Compiling graphics pipeline", median 1.3 ms, 349 in a 60 s chase run) because
+  background compilation is off by default (tlg.ini async_shaders / TLG_ASYNC_SHADERS, menu "Compile new shaders
+  in the background"; BP07 is off too). TLG_ASYNC_SHADERS=1: post-load frame 789/785 -> 135/145 ms on the chase,
+  FPS the same; the price is a few frames after a load where new draws are skipped (not checked by eye yet).
+  Branch agent/prep-compile (TLG_PREP_COMPILE=1: draw-prep workers start builds; warm-up gives programs their
+  worker template at load): only 770 -> 650 ms, workers run just ahead of the GPU thread there; not merged.
 
