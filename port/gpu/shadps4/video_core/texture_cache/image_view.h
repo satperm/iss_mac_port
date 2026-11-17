@@ -42,6 +42,10 @@ struct ImageViewInfo {
 
 struct Image;
 
+/// tlg: the format a storage view writes through: storage writes never convert to sRGB, so an
+/// sRGB format is written through its UNORM twin (the same bytes); other formats unchanged.
+vk::Format StorageViewFormat(vk::Format format);
+
 struct ImageView {
     ImageView(const Vulkan::Instance& instance, const ImageViewInfo& info, const Image& image);
     ~ImageView();

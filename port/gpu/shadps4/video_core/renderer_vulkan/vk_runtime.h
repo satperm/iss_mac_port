@@ -97,6 +97,16 @@ public:
 
     void SetBackingSamples(VideoCore::Image* image, u32 num_samples, bool copy_backing = true);
 
+    /// tlg: TLG_LAZY_TEXTURE_USAGE: gives a lazy image (VideoCore::Image::IsLazy) its full usage:
+    /// a new backing with it, every level and layer of the current one copied into it; the old
+    /// image and its views are released once the GPU is past this point. No-op for other images
+    /// (always without the switch).
+    void UpgradeUsage(VideoCore::Image* image);
+    /// tlg: TLG_LAZY_TEXTURE_USAGE: before a copy between pixel formats, which MoltenVK makes
+    /// through a view in the other format when either side has PixelFormatView (else through a
+    /// temporary buffer): a lazy side gets its full usage when neither has it.
+    void PrepareFormatCopy(VideoCore::Image* src, VideoCore::Image* dst);
+
     void AccessBuffer(const VideoCore::Buffer* handle, u64 offset, u64 size,
                       vk::PipelineStageFlags2 src_stage, vk::AccessFlags2 src_access);
 

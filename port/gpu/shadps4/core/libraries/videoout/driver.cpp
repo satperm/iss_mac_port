@@ -39,6 +39,10 @@
 
 extern std::unique_ptr<Vulkan::Presenter> presenter;
 #include "tlg_split.h"
+
+namespace VideoCore {
+bool LazyTextureUsage(); // texture_cache/image.cpp
+}
 extern std::unique_ptr<AmdGpu::Liverpool> liverpool;
 
 namespace Vulkan {
@@ -628,6 +632,12 @@ void VideoOutDriver::Flip(const Request& req) {
                         frames ? double(TlgStats::submit_idle_calls.exchange(0)) / frames : 0.0,
                         frames ? double(TlgStats::reduced_draws.exchange(0)) / frames : 0.0,
                         frames ? double(TlgStats::scene_draws.exchange(0)) / frames : 0.0);
+            // tlg: TLG_LAZY_TEXTURE_USAGE (Runtime::UpgradeUsage), every stats period.
+            if (VideoCore::LazyTextureUsage()) {
+                std::printf("Texture usage upgrades: %llu (%.1f MB copied)\n",
+                            static_cast<unsigned long long>(TlgStats::texture_upgrades.exchange(0)),
+                            TlgStats::texture_upgrade_bytes.exchange(0) / 1e6);
+            }
             presenter->GetRasterizer().GetPipelineCache().ReportCompilerStats();
             Vulkan::WaitDiagnostics::Report();
             Common::Backports::LogHits();
