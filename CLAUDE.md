@@ -1108,3 +1108,11 @@ Instruments (Shader Timeline option) for per-shader cost.
   precise::min/max cost nothing. Play capture (branch agent/play-jobs: the player's pipelines kept for the
   precompile after updates): no change in compile stalls on the chase (they are first-use pipeline creation
   from the warm caches, e.g. 271 in one 947 ms frame in every run, not missing pipelines).
+- 2026-11-17: PROTECT RELAY SPIN (TLG_PROTECT_SPIN_US, default 200 us; 0 = off; host/tlggpu_shared.h). Texture
+  streaming frames send ~350 protect requests to tlg-probe, each a sleep/wake round trip of ~65 us (24-26 ms of a
+  60-70 ms frame in the owner's 0.1.14 session); mprotect itself is ~13 us per 1000 pages under Rosetta. Both ends
+  now spin up to 200 us before sleeping (the game side's tlg:GpuProtect thread at user-interactive QoS). Protect
+  time in streaming halved (Seattle camera sweep 72/49 -> 23/23 ms, chase 36/44 -> 13/22 ms per 120 s), FPS same
+  (truck 80.1/81.0, bridge 108.2/108.2, Seattle 78.0/78.5); stability suite clean; 9-min truck soak 82.4 (88 82 81
+  82 82 82 82 82). Dead end: TLG_WARMUP_BUILD_CACHED=1 makes the post-load stall worse (0.77 -> 4.4-5.8 s).
+
