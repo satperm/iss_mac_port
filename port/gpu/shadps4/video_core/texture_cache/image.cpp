@@ -395,6 +395,14 @@ Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,
         lazy_direct_ok = 0;
         const auto listed_end = lazy_view_formats.begin() + count;
         for (u32 i = 0; i < count; ++i) {
+            if (lazy_view_formats[i] == supported_format) {
+                lazy_direct_ok |= u8(1u << i);
+                continue;
+            }
+            // A twin the instance never queried (GetSupportedFormat would assert): not direct.
+            if (!instance.IsFormatQueried(lazy_view_formats[i])) {
+                continue;
+            }
             const auto mapped = instance.GetSupportedFormat(lazy_view_formats[i], format_features);
             if (std::find(lazy_view_formats.begin(), listed_end, mapped) != listed_end) {
                 lazy_direct_ok |= u8(1u << i);
@@ -513,6 +521,11 @@ bool Image::NeedsFullUsage(const ImageViewInfo& view_info) const {
         if (lazy_view_formats[i] == format && (lazy_direct_ok & (1u << i))) {
             return false;
         }
+    }
+    // A format the instance never queried cannot be mapped here (GetSupportedFormat asserts):
+    // take the full usages, which views in any format.
+    if (!runtime->GetInstance().IsFormatQueried(format)) {
+        return true;
     }
     return !CanViewAs(runtime->GetInstance().GetSupportedFormat(format, format_features));
 }
