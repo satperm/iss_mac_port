@@ -1082,7 +1082,7 @@ Instruments (Shader Timeline option) for per-shader cost.
   compiles in a new cache (3592, 23.5 s; a precise new-game session on 2026-11-14 had 2014, 8.2 s); 42 long
   frames of ~65 ms without compiles are unexplained (compare with a precise session). Issue #5 logs (M1 Pro,
   out/agent/issue5-logs): 25.7 FPS at defaults with the GPU thread 66% idle = GPU-bound; Slower Mac holds 30.
-- 2026-11-16: LAZY TEXTURE USAGES (`TLG_LAZY_TEXTURE_USAGE=1`, default OFF, branch agent/lazy-usage; port of
+- 2026-11-16: LAZY TEXTURE USAGES (`TLG_LAZY_TEXTURE_USAGE`, default ON since 2026-11-17, see below; branch agent/lazy-usage; port of
   bloodborne_mac_port f151a8fb + 8d7abb2d, redo of the old uncommitted TLG_LOSSLESS). Metal compresses private
   textures losslessly only without ShaderWrite/PixelFormatView; MoltenVK sets them for storage usage and for a
   mutable format without a format list. With the switch, single-sample colour images that are not block-coded
@@ -1097,3 +1097,14 @@ Instruments (Shader Timeline option) for per-shader cost.
   (only the new checks, all behind IsLazy() which is false). UNTESTED IN GAME: picture vs off (fire/particles,
   village, Seattle, UI, screenshots), FSR 3 + MetalFX, render scale 67%, upgrades count/MB, FPS A/B, Metal API
   validation (MTL_DEBUG_LAYER=1). Known risk: an image upgraded while it is also a texture of the same draw.
+- 2026-11-17: LAZY TEXTURE USAGES TESTED AND ON BY DEFAULT (`TLG_LAZY_TEXTURE_USAGE=0` turns them off). First
+  run asserted (GetFormatFeatureFlags on an unqueried sRGB twin): fixed with Instance::IsFormatQueried. M3 Max
+  lib_ab 3 x 60 s off / on: burning village 70.2 / 73.2, truck 77.4 / 79.9, bridge 103.7 / 107.3, Seattle
+  75.6 / 77.5. Screenshots off-vs-on within off-vs-off noise; MetalFX and FSR 3 at 67% fine; stability suite
+  clean (chase30 30.0, smoke 114, chase 92), 9-min truck soak 81.4 (87 81 80 79 79 80 81 81 per minute). No scene
+  needed an upgrade (0 in all); TLG_LAZY_FORCE_UPGRADE=1 (test) upgrades every lazy image at its first view:
+  29 upgrades (59 MB) on truck and village, no errors, screenshots equal.
+- 2026-11-17: dead ends. TLG_PLAIN_SATURATE=1 (FClamp for BP05, branch agent/plain-saturate): no gain, the 1747
+  precise::min/max cost nothing. Play capture (branch agent/play-jobs: the player's pipelines kept for the
+  precompile after updates): no change in compile stalls on the chase (they are first-use pipeline creation
+  from the warm caches, e.g. 271 in one 947 ms frame in every run, not missing pipelines).

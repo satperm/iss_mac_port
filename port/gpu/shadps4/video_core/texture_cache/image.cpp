@@ -95,12 +95,15 @@ bool IsPowerOfTen(u64 n) {
 
 bool LazyTextureUsage() {
     static const bool on = [] {
+        // On by default since 2026-11-17 (M3 Max 3 x 60 s, off / on: burning village 70.2 / 73.2,
+        // truck 77.4 / 79.9, bridge 103.7 / 107.3, Seattle 75.6 / 77.5; screenshots equal within
+        // run-to-run noise). TLG_LAZY_TEXTURE_USAGE=0 turns it off.
         const char* env = std::getenv("TLG_LAZY_TEXTURE_USAGE");
-        const bool enabled = env && env[0] == '1';
+        const bool enabled = !(env && env[0] == '0');
         if (enabled) {
-            std::printf("GPU: lazy texture usages (TLG_LAZY_TEXTURE_USAGE=1): colour images start "
-                        "without storage usage and other-format views (Metal lossless compression), "
-                        "upgraded once on need\n");
+            std::printf("GPU: lazy texture usages (TLG_LAZY_TEXTURE_USAGE=0 turns them off): colour "
+                        "images start without storage usage and other-format views (Metal lossless "
+                        "compression), upgraded once on need\n");
         }
         return enabled;
     }();
