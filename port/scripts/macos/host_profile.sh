@@ -5,6 +5,7 @@
 #   TLG_GAME_DIR=... bash port/scripts/macos/host_profile.sh <truck|bridge|user dir> <label> [VAR=value ...]
 #
 # Runs the scene for 85 s (agent_run.sh), records 6 s of Time Profiler for all processes from second 55
+# (PROFILE_AT / PROFILE_SECONDS change the start and the length, e.g. 12 and 40 for the end of loading)
 # (no attach: safe with the Rosetta game process), exports the samples and prints them per thread and
 # function (tools/gpu_probes/time_profile.py). Files: out/profile/<label>.{trace,xml,txt}. Bounded.
 set -uo pipefail
@@ -14,10 +15,10 @@ mkdir -p out/profile
 trace=out/profile/$label.trace
 rm -rf "$trace"
 (
-    sleep 55
+    sleep "${PROFILE_AT:-55}"
     # arm64 on purpose, and no `timeout` wrapper (an x86-64 one makes xctrace run under Rosetta:
     # "ktrace cannot trace the system under Rosetta translation"); the recording limits itself.
-    arch -arm64 xcrun xctrace record --template 'Time Profiler' --all-processes --time-limit 6s \
+    arch -arm64 xcrun xctrace record --template 'Time Profiler' --all-processes --time-limit "${PROFILE_SECONDS:-6}s" \
         --output "$trace" > "out/profile/$label.record.log" 2>&1
 ) &
 bash scripts/macos/agent_run.sh "$scene" "p-$label" 85 "$@" | grep -aE 'FPS|Crash|exit'
