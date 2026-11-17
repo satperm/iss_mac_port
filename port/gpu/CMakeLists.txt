@@ -233,7 +233,8 @@ if (NOT XBYAK_SYSTEM_INCLUDE)
     target_include_directories(tlggpu PRIVATE third_party/xbyak)
 endif()
 if (APPLE)
-    target_link_libraries(tlggpu PUBLIC "-framework Metal" "-framework MetalFX" "-framework QuartzCore")
+    target_link_libraries(tlggpu PUBLIC "-framework Metal" "-framework MetalFX" "-framework QuartzCore"
+        "-framework ImageIO" "-framework CoreGraphics")
 else()
     target_link_libraries(tlggpu PUBLIC PkgConfig::X11)
 endif()
@@ -259,7 +260,12 @@ target_include_directories(motion-shader-test PRIVATE shim shadps4 third_party/g
 target_link_libraries(motion-shader-test PRIVATE tlggpu)
 add_executable(png-decode-test EXCLUDE_FROM_ALL ../tests/test_png_decode.cpp shim/tlg_png.cpp)
 target_compile_options(png-decode-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
-target_link_libraries(png-decode-test PRIVATE PkgConfig::FFMPEG)
+if(APPLE)
+    target_link_libraries(png-decode-test PRIVATE "-framework ImageIO" "-framework CoreGraphics"
+        "-framework CoreFoundation")
+else()
+    target_link_libraries(png-decode-test PRIVATE PkgConfig::FFMPEG)
+endif()
 add_executable(aliasing-test EXCLUDE_FROM_ALL ../tests/test_aliasing.cpp
     shadps4/video_core/texture_cache/aliasing.cpp shadps4/video_core/texture_cache/host_compatibility.cpp)
 target_compile_options(aliasing-test PRIVATE -UNDEBUG)
