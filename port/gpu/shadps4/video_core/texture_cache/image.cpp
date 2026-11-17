@@ -369,7 +369,18 @@ Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,
     // above used the full usage (same sample counts and formats as without the switch).
     full_usage_flags = usage_flags;
     const bool mutable_format = bool(flags & vk::ImageCreateFlagBits::eMutableFormat);
-    const bool lazy = LazyTextureUsage() && !info.props.is_block && !info.props.is_depth &&
+    // tlg: TLG_LAZY_DEPTH=1: depth formats without stencil too (no stencil views; a view in another
+    // format, e.g. depth sampled as R32F, upgrades as for colour).
+    static const bool lazy_depth = [] {
+        const char* env = std::getenv("TLG_LAZY_DEPTH");
+        return env && env[0] == '1';
+    }();
+    const bool stencil = supported_format == vk::Format::eD32SfloatS8Uint ||
+                         supported_format == vk::Format::eD24UnormS8Uint ||
+                         supported_format == vk::Format::eD16UnormS8Uint ||
+                         supported_format == vk::Format::eS8Uint;
+    const bool depth_ok = !info.props.is_depth || (lazy_depth && !stencil);
+    const bool lazy = LazyTextureUsage() && !info.props.is_block && depth_ok &&
                       info.num_samples <= 1 &&
                       (bool(usage_flags & vk::ImageUsageFlagBits::eStorage) || mutable_format);
     vk::ImageFormatListCreateInfo format_list{};
