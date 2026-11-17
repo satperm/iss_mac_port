@@ -425,3 +425,10 @@ target_compile_options(iss-temporal-hook-test PRIVATE -UNDEBUG -Wall -Wextra -We
 # Automatic quality governor (gpu/shim/tlg_quality.h): a pure header, no GPU or game needed.
 add_executable(quality-governor-test EXCLUDE_FROM_ALL ../tests/test_quality_governor.cpp)
 target_compile_options(quality-governor-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+
+# The renderer tests' runtime stubs are looked up by libtlggpu at run time (-undefined dynamic_lookup):
+# export them, or (thin LTO) the executable keeps only what the test itself references.
+set_source_files_properties(../tests/test_gpu_runtime_stubs.cpp PROPERTIES COMPILE_OPTIONS "-fno-lto")
+foreach(stub_test camera-motion-test motion-shader-test pipeline-binary-cache-test pipeline-binary-initialization-test recompiler-fixes-test scene-resolution-test shader-replay taa-shader-test)
+    target_link_options(${stub_test} PRIVATE -Wl,-export_dynamic)
+endforeach()

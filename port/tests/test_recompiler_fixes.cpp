@@ -353,7 +353,9 @@ int main(int argc, char** argv) {
     Check(Toggles::ShaderBinarySalt() ==
               ((small ? 1u : 0u) | (multi ? 2u : 0u) | (Toggles::LdsUniformReadLane() ? 4u : 0u) |
                (wqm ? 0u : 8u) | (Toggles::LaneDivergence() ? 16u : 0u) |
-               (Toggles::ReadFirstLaneAll() ? 32u : 0u)),
+               (Toggles::ReadFirstLaneAll() ? 32u : 0u) |
+               (Toggles::DynamicBufferStride() ? 64u : 0u) | (Toggles::NanGuard() ? 0u : 128u) |
+               (Toggles::WaveMemoryBarriers() ? 0u : 256u)),
           "shader cache salt follows the switches");
     {
         // Backport switches: tlg.ini choices apply unless the environment sets the entry; only the
