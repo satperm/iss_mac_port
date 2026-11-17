@@ -1131,4 +1131,10 @@ Instruments (Shader Timeline option) for per-shader cost.
   FPS the same; the price is a few frames after a load where new draws are skipped (not checked by eye yet).
   Branch agent/prep-compile (TLG_PREP_COMPILE=1: draw-prep workers start builds; warm-up gives programs their
   worker template at load): only 770 -> 650 ms, workers run just ahead of the GPU thread there; not merged.
+- 2026-11-17 night: AUTO EXPOSURE TOO DARK (owner: 2-3 s dark after a camera change, e.g. falling onto the lower
+  Space Needle platform; gone with GPU particles off). TLG_EXPOSURE_LOG=1 (branch agent/exposure-log) hooks the
+  CPU sum of the per-tile luminance (FUN_00171610, site eboot+0x171783, 225 log-luminance floats, rdi = array,
+  r13 = count). In the owner's dark moments the mean jumps -0.08 -> -0.03 (game sees a brighter scene) with no
+  NaN/Inf/outlier, then recovers over 2-3 s. So particles add light to the luminance input that the final image
+  does not show. Next: which passes feed the 48x27 R16G16F luminance target and which particle draws they read.
 
