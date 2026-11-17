@@ -974,6 +974,13 @@ void PipelineCache::PublishShaders(bool wait) {
 }
 
 void PipelineCache::PublishGraphics(bool wait) {
+    // tlg: called for every draw. A robin_map's begin() walks its buckets to the first entry, and
+    // the table keeps the size of its busiest moment: after the ~270 background builds of a load it
+    // scanned hundreds of empty buckets per draw (with "Compile new shaders in the background" on,
+    // village 73.6 -> 68.0 FPS, 2026-11-17).
+    if (pending_graphics.empty()) {
+        return;
+    }
     for (auto it = pending_graphics.begin(); it != pending_graphics.end();) {
         auto build = it.value();
         if (wait) {
