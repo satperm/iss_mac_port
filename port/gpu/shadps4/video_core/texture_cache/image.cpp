@@ -507,6 +507,15 @@ bool Image::NeedsFullUsage(const ImageViewInfo& view_info) const {
     if (!IsLazy()) {
         return false;
     }
+    // tlg: TLG_LAZY_FORCE_UPGRADE=1 (test only): every lazy image is upgraded at its first view,
+    // to exercise Runtime::UpgradeUsage (no scene measured on 2026-11-17 needed an upgrade).
+    static const bool force = [] {
+        const char* env = std::getenv("TLG_LAZY_FORCE_UPGRADE");
+        return env && env[0] == '1';
+    }();
+    if (force) {
+        return true;
+    }
     if (view_info.is_storage && (full_usage_flags & vk::ImageUsageFlagBits::eStorage)) {
         return true;
     }
