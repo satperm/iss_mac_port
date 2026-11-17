@@ -22,6 +22,13 @@ inline bool SkipWithoutVulkanDriver() {
         app.apiVersion = VK_API_VERSION_1_1;
         VkInstanceCreateInfo instance_info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
         instance_info.pApplicationInfo = &app;
+#ifdef __APPLE__
+        // MoltenVK is a portability driver: the loader lists it only when asked to.
+        static const char* const portability = VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
+        instance_info.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+        instance_info.enabledExtensionCount = 1;
+        instance_info.ppEnabledExtensionNames = &portability;
+#endif
         VkInstance instance{};
         const VkResult created = d.vkCreateInstance(&instance_info, nullptr, &instance);
         skip = missing(created);
