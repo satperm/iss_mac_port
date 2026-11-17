@@ -143,6 +143,7 @@ struct Image {
     /// True when the current backing is lazy.
     [[nodiscard]] bool IsLazy() const noexcept;
     /// True when a view `view_info` of the current backing needs the full usage.
+    static bool ForceUpgrade();
     [[nodiscard]] bool NeedsFullUsage(const ImageViewInfo& view_info) const;
     /// True when the current backing can be viewed in `format` (a lazy backing: only the formats
     /// of its view format list).

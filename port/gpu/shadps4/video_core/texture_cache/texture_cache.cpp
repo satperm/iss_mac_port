@@ -1328,7 +1328,8 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
         image_id = slot_images.insert(instance, runtime, slot_image_views, info);
         // tlg: TLG_LAZY_TEXTURE_USAGE: a texture first bound as storage or in another format gets
         // the full usage at creation instead of an upgrade copy at its first view.
-        if (auto& created = slot_images[image_id]; created.NeedsFullUsage(desc.view_info)) {
+        if (auto& created = slot_images[image_id]; !VideoCore::Image::ForceUpgrade() &&
+                                                            created.NeedsFullUsage(desc.view_info)) {
             created.MakeFullUsage();
         }
         RegisterImage(image_id);
