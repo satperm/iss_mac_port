@@ -428,6 +428,23 @@ bool WindowSDL::PollEvents() {
     }
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
+        // tlg: the port's own dialogs (save list, messages, settings menu, text entry) run here in the
+        // GPU process and take controller buttons from SDL's events, which only come from opened
+        // gamepads; the game process opens its own for the game. Without this the save list could
+        // not be used with a controller (owner, 2026-11-17). Buttons reach the dialogs only while
+        // they capture input; otherwise the overlay ignores them.
+        if (event.type == SDL_EVENT_GAMEPAD_ADDED) {
+            if (!SDL_GetGamepadFromID(event.gdevice.which)) {
+                SDL_OpenGamepad(event.gdevice.which);
+            }
+            continue;
+        }
+        if (event.type == SDL_EVENT_GAMEPAD_REMOVED) {
+            if (SDL_Gamepad* gamepad = SDL_GetGamepadFromID(event.gdevice.which)) {
+                SDL_CloseGamepad(gamepad);
+            }
+            continue;
+        }
         if (text_active && (event.type == SDL_EVENT_TEXT_INPUT || event.type == SDL_EVENT_KEY_DOWN)) {
             std::scoped_lock lock{text_mutex};
             if (event.type == SDL_EVENT_TEXT_INPUT) {
