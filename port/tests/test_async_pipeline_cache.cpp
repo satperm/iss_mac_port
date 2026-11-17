@@ -11,6 +11,13 @@
 int main() {
     VkInstance instance{};
     VkInstanceCreateInfo instance_info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+#ifdef __APPLE__
+    // MoltenVK is a portability driver: the loader lists it only when asked to.
+    static const char* const portability = VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
+    instance_info.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+    instance_info.enabledExtensionCount = 1;
+    instance_info.ppEnabledExtensionNames = &portability;
+#endif
     // A host without a driver (build containers) skips; any other failure still fails.
     const VkResult created = vkCreateInstance(&instance_info, nullptr, &instance);
     if (created == VK_ERROR_INCOMPATIBLE_DRIVER || created == VK_ERROR_INITIALIZATION_FAILED) {
