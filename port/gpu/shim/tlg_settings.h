@@ -87,10 +87,10 @@ struct Values {
     /// Off by default (2026-10-16): a draw whose pipeline was still compiling was skipped, and the
     /// object vanished for a frame (grey flashes when the camera turns). Measured in the city with the
     /// first-run cache: 0 skipped draws against 85, same FPS, better worst frame (67 ms against 117).
-    /// PROPOSAL (2026-11-17, waits for the owner's eyes): on. After #40 it costs no FPS (village 73.4,
-    /// truck 80.7, bridge 108.2, Seattle 78.5, same as off) and the stall after a save loads drops
-    /// 0.8 -> 0.14 s (cold cache worst 1.0 -> 0.23 s); the grey flashes above must be checked again.
-    std::atomic<bool> async_shaders{true};
+    /// 2026-11-17: on by default for an evening, then off again at the owner's request: the glitch
+    /// in the first second after a save loads (objects missing while they compile) spoils the feel
+    /// more than the 0.8 s stall it removes. Since #40 the option itself costs no FPS.
+    std::atomic<bool> async_shaders{false};
     std::atomic<bool> fsr1{false};
     std::atomic<bool> rcas{true};
     std::atomic<int> rcas_strength{60};
