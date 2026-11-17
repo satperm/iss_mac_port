@@ -402,7 +402,9 @@ SceneTargets::Entry& SceneTargets::Get(VideoCore::ImageId id, u32 level) {
         entry->uid = original.image_uid;
         entry->level = level;
         entry->image = VideoCore::UniqueImage(instance.GetDevice(), instance.GetAllocator());
-        auto ci = original.backing->image.image_ci;
+        // tlg: TLG_LAZY_TEXTURE_USAGE: proxies keep the full usage (FullCreateInfo is the same
+        // create info without the switch).
+        auto ci = original.FullCreateInfo(original.backing->image.image_ci);
         ci.pNext = nullptr;
         const auto proxy = ProxySize(original, level);
         ci.extent = vk::Extent3D{proxy.width, proxy.height, 1};

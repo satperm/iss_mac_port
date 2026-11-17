@@ -865,6 +865,10 @@ ImageId TextureCache::ResolveDepthOverlap(const ImageInfo& requested_info, Bindi
         new_info.resources = std::max(requested_info.resources, cache_image.info.resources);
         new_info.UpdateSize();
         const auto new_image_id = slot_images.insert(instance, runtime, slot_image_views, new_info);
+        // tlg: TLG_LAZY_TEXTURE_USAGE: the replacement keeps the full usage the old image got.
+        if (!slot_images[cache_image_id].IsLazy()) {
+            slot_images[new_image_id].MakeFullUsage();
+        }
         RegisterImage(new_image_id);
 
         // Inherit image usage
@@ -1163,6 +1167,10 @@ std::tuple<ImageId, int, int> TextureCache::ResolveOverlap(const ImageInfo& imag
 
 ImageId TextureCache::ExpandImage(const ImageInfo& info, ImageId image_id) {
     const auto new_image_id = slot_images.insert(instance, runtime, slot_image_views, info);
+    // tlg: TLG_LAZY_TEXTURE_USAGE: the larger image keeps the full usage the old one got.
+    if (!slot_images[image_id].IsLazy()) {
+        slot_images[new_image_id].MakeFullUsage();
+    }
     RegisterImage(new_image_id);
 
     auto& src_image = slot_images[image_id];
@@ -1318,6 +1326,12 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
     // Create and register a new image
     if (!image_id) {
         image_id = slot_images.insert(instance, runtime, slot_image_views, info);
+        // tlg: TLG_LAZY_TEXTURE_USAGE: a texture first bound as storage or in another format gets
+        // the full usage at creation instead of an upgrade copy at its first view.
+        if (auto& created = slot_images[image_id]; !VideoCore::Image::ForceUpgrade() &&
+                                                            created.NeedsFullUsage(desc.view_info)) {
+            created.MakeFullUsage();
+        }
         RegisterImage(image_id);
         if (diag) {
             ++images_created;

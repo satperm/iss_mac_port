@@ -382,6 +382,7 @@ void Runtime::CopyAliasImage(VideoCore::Image* src, VideoCore::Image* dst,
     }
     SetBackingSamples(src, src->info.num_samples);
     SetBackingSamples(dst, dst->info.num_samples);
+    PrepareFormatCopy(src, dst);
     scheduler.EndRendering();
     const TransferMark mark{*this, "image alias copy", *dst};
     const u32 layers = std::min(src->info.resources.layers, dst->info.resources.layers);
@@ -460,6 +461,7 @@ void Runtime::CopyImage(VideoCore::Image* src, VideoCore::Image* dst) {
     // Match sample count before copying
     SetBackingSamples(dst, dst->info.num_samples, false);
     SetBackingSamples(src, src->info.num_samples);
+    PrepareFormatCopy(src, dst);
 
     boost::container::small_vector<vk::ImageCopy, 8> regions;
 
@@ -655,6 +657,7 @@ void Runtime::CopyMip(VideoCore::Image* src, VideoCore::Image* dst, u32 mip, u32
 
     SetBackingSamples(dst, dst->info.num_samples);
     SetBackingSamples(src, src->info.num_samples);
+    PrepareFormatCopy(src, dst);
 
     scheduler.EndRendering();
 
@@ -881,10 +884,16 @@ void Runtime::SetBackingSamples(VideoCore::Image* image, u32 num_samples, bool c
                                 &VideoCore::Image::BackingImage::num_samples);
     if (it == backing_images.end()) {
         auto new_image_ci = backing->image.image_ci;
+        // tlg: TLG_LAZY_TEXTURE_USAGE: no upgrades of multisample backings, full usage from
+        // the start (UpgradeUsage only replaces single-sample backings).
+        if (backing->lazy && num_samples > 1) {
+            new_image_ci = image->FullCreateInfo(new_image_ci);
+        }
         new_image_ci.samples = LiverpoolToVK::NumSamples(num_samples, image->supported_samples);
 
         new_backing = &backing_images.emplace_back();
         new_backing->num_samples = num_samples;
+        new_backing->lazy = backing->lazy && num_samples <= 1;
         new_backing->image = VideoCore::UniqueImage{instance.GetDevice(), instance.GetAllocator()};
         new_backing->image.Create(new_image_ci);
 
@@ -943,6 +952,109 @@ void Runtime::SetBackingSamples(VideoCore::Image* image, u32 num_samples, bool c
     }
 
     backing = new_backing;
+    // tlg: usage_flags is the current backing's (ImageView usage).
+    if (VideoCore::LazyTextureUsage()) {
+        image->usage_flags = backing->lazy
+                                 ? image->full_usage_flags & ~vk::ImageUsageFlagBits::eStorage
+                                 : image->full_usage_flags;
+    }
+}
+
+void Runtime::PrepareFormatCopy(VideoCore::Image* src, VideoCore::Image* dst) {
+    if (!src->IsLazy() && !dst->IsLazy()) {
+        return;
+    }
+    const auto& sci = src->backing->image.image_ci;
+    const auto& dci = dst->backing->image.image_ci;
+    if (sci.format == dci.format || src->info.props.is_block || dst->info.props.is_block ||
+        src->info.props.is_depth || dst->info.props.is_depth) {
+        return; // same format, or MoltenVK copies through a buffer whatever the usage
+    }
+    const auto reinterprets = [](const VideoCore::Image& image) {
+        return !image.IsLazy() &&
+               bool(image.backing->image.image_ci.flags & vk::ImageCreateFlagBits::eMutableFormat);
+    };
+    if (reinterprets(*src) || reinterprets(*dst)) {
+        return;
+    }
+    UpgradeUsage(src->IsLazy() ? src : dst);
+}
+
+void Runtime::UpgradeUsage(VideoCore::Image* image) {
+    if (!image->IsLazy()) {
+        return;
+    }
+    BeforeImageAccess();
+    auto* const old_backing = image->backing;
+    const auto image_ci = image->FullCreateInfo(old_backing->image.image_ci);
+    const auto& info = image->info;
+    auto& fresh = image->backing_images.emplace_back();
+    fresh.num_samples = old_backing->num_samples;
+    fresh.image = VideoCore::UniqueImage{instance.GetDevice(), instance.GetAllocator()};
+    fresh.image.Create(image_ci);
+    Vulkan::SetObjectName(instance.GetDevice(), fresh.image.image,
+                          "Image {}x{}x{} {} {} {:#x}:{:#x} L:{} M:{} (full usage)",
+                          info.size.width, info.size.height, info.size.depth,
+                          AmdGpu::NameOf(info.tile_mode), vk::to_string(info.pixel_format),
+                          info.guest_address, info.guest_size, info.resources.layers,
+                          info.resources.levels);
+    const u64 count = TlgStats::texture_upgrades.fetch_add(1, std::memory_order_relaxed) + 1;
+    TlgStats::texture_upgrade_bytes.fetch_add(fresh.image.size_bytes, std::memory_order_relaxed);
+    static std::atomic<u64> logged{0};
+    if (logged.fetch_add(1, std::memory_order_relaxed) < 16) {
+        LOG_INFO(Render_Vulkan, "tlg: texture usage upgrade #{}: {:#x} {}x{} {} mips {} layers {}{}",
+                 count, info.guest_address, info.size.width, info.size.height,
+                 vk::to_string(info.pixel_format), info.resources.levels, info.resources.layers,
+                 image->binding.is_target ? " (bound render target)" : "");
+    }
+
+    scheduler.EndRendering();
+    bool needs_flush = Transit(image, vk::ImageLayout::eTransferSrcOptimal,
+                               vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferRead);
+    image->backing = &fresh;
+    image->usage_flags = image->full_usage_flags;
+    needs_flush |= Transit(image, vk::ImageLayout::eTransferDstOptimal,
+                           vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite);
+    if (needs_flush) {
+        FlushBarriers();
+    }
+    const bool is_3d = image_ci.imageType == vk::ImageType::e3D;
+    boost::container::small_vector<vk::ImageCopy, 16> regions;
+    for (u32 level = 0; level < image_ci.mipLevels; ++level) {
+        regions.push_back(vk::ImageCopy{
+            .srcSubresource{.aspectMask = image->aspect_mask, .mipLevel = level,
+                            .baseArrayLayer = 0, .layerCount = image_ci.arrayLayers},
+            .dstSubresource{.aspectMask = image->aspect_mask, .mipLevel = level,
+                            .baseArrayLayer = 0, .layerCount = image_ci.arrayLayers},
+            .extent{std::max(image_ci.extent.width >> level, 1u),
+                    std::max(image_ci.extent.height >> level, 1u),
+                    is_3d ? std::max(image_ci.extent.depth >> level, 1u) : 1u},
+        });
+    }
+    scheduler.Record([src = old_backing->image.image, dst = fresh.image.image,
+                      regions](vk::CommandBuffer cmdbuf) {
+        cmdbuf.copyImage(src, vk::ImageLayout::eTransferSrcOptimal, dst,
+                         vk::ImageLayout::eTransferDstOptimal, regions);
+    });
+
+    // The old backing stays in the deque as an empty husk (backings are referenced by address,
+    // and no sample count asks for 0); its image and views go when the GPU is past the copy.
+    std::vector<VideoCore::ImageViewId> views(old_backing->image_view_ids.begin(),
+                                              old_backing->image_view_ids.end());
+    old_backing->image_view_ids.clear();
+    old_backing->image_view_infos.clear();
+    old_backing->last_view = 0;
+    old_backing->num_samples = 0;
+    old_backing->lazy = false;
+    old_backing->subresource_states.clear();
+    old_backing->partial_memo = {};
+    scheduler.DeferOperation([old = std::move(old_backing->image), views = std::move(views),
+                              slot_views = image->slot_image_views]() mutable {
+        for (const auto view_id : views) {
+            slot_views->erase(view_id);
+        }
+        old.Destroy();
+    });
 }
 
 bool Runtime::IsBufferAccessed(const VideoCore::Buffer* handle, u64 offset, u64 size,

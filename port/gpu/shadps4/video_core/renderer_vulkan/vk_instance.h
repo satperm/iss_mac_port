@@ -33,6 +33,11 @@ public:
     std::string GetDriverVersionName();
 
     /// Gets a compatibility format if the format is not supported.
+    /// tlg: whether the format's properties were queried at start (GetFormatFeatureFlags asserts
+    /// for the others).
+    [[nodiscard]] bool IsFormatQueried(vk::Format format) const {
+        return format_properties.contains(format);
+    }
     [[nodiscard]] vk::Format GetSupportedFormat(vk::Format format,
                                                 vk::FormatFeatureFlags2 flags) const;
 

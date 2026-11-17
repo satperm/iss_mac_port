@@ -10,6 +10,7 @@
 #include "video_core/texture_cache/image_info.h"
 #include "video_core/texture_cache/image_view.h"
 
+#include <array>
 #include <deque>
 #include <optional>
 #include <boost/container/small_vector.hpp>
@@ -37,6 +38,9 @@ enum ImageFlagBits : u32 {
     Aliased = 1 << 8,     ///< tlg: another image has the same guest address (alias_states)
 };
 DECLARE_ENUM_FLAG_OPERATORS(ImageFlagBits)
+
+/// tlg: TLG_LAZY_TEXTURE_USAGE=1 (default off): lazy texture usages (Image::full_usage_flags).
+bool LazyTextureUsage();
 
 struct UniqueImage {
     explicit UniqueImage() = default;
@@ -130,6 +134,26 @@ struct Image {
 
     ImageView& FindView(const ImageViewInfo& view_info, bool ensure_guest_samples = true);
 
+    /// tlg: TLG_LAZY_TEXTURE_USAGE: Metal compresses private textures losslessly only without
+    /// MTLTextureUsageShaderWrite and MTLTextureUsagePixelFormatView, which MoltenVK sets for
+    /// storage usage and for a mutable format without a list of sRGB twins. Single-sample colour
+    /// images (not block-coded) are created without both (a "lazy" backing) and get their full
+    /// usage once, when a binding needs storage or a view in another format
+    /// (Runtime::UpgradeUsage: new backing, contents copied, the old one released later).
+    /// True when the current backing is lazy.
+    [[nodiscard]] bool IsLazy() const noexcept;
+    /// True when a view `view_info` of the current backing needs the full usage.
+    static bool ForceUpgrade();
+    [[nodiscard]] bool NeedsFullUsage(const ImageViewInfo& view_info) const;
+    /// True when the current backing can be viewed in `format` (a lazy backing: only the formats
+    /// of its view format list).
+    [[nodiscard]] bool CanViewAs(vk::Format format) const;
+    /// A new image (no views, no contents yet) whose creating binding or predecessor needs the
+    /// full usage: its backing is made again with it (no copy, no upgrade later).
+    void MakeFullUsage();
+    /// The create info of a backing with the full usage (no format list), from a backing's.
+    [[nodiscard]] vk::ImageCreateInfo FullCreateInfo(const vk::ImageCreateInfo& from) const;
+
     using Barriers = boost::container::small_vector<vk::ImageMemoryBarrier2, 32>;
     void GetBarriers(Barriers& out_barriers, vk::ImageLayout dst_layout, vk::AccessFlags2 dst_mask,
                      vk::PipelineStageFlags2 dst_stage,
@@ -179,6 +203,12 @@ public:
     vk::SampleCountFlags supported_samples = vk::SampleCountFlagBits::e1;
 
     vk::ImageUsageFlags usage_flags;
+    /// tlg: TLG_LAZY_TEXTURE_USAGE: the usage without it (usage_flags is the current backing's).
+    vk::ImageUsageFlags full_usage_flags;
+    /// tlg: the view formats of a lazy backing (its VkImageFormatListCreateInfo), eUndefined after.
+    std::array<vk::Format, 4> lazy_view_formats{};
+    /// tlg: lazy_view_formats entries a view keeps (GetSupportedFormat maps them into the list).
+    u8 lazy_direct_ok = 0;
     vk::FormatFeatureFlags2 format_features;
     struct State {
         vk::PipelineStageFlags2 pl_stage = vk::PipelineStageFlagBits2::eAllCommands;
@@ -204,6 +234,7 @@ public:
         boost::container::small_vector<ImageViewId, 4> image_view_ids;
         u32 last_view = 0; ///< tlg: index of the view FindView returned last
         u32 num_samples;
+        bool lazy = false; ///< tlg: TLG_LAZY_TEXTURE_USAGE: made without its full usage
     };
     std::deque<BackingImage> backing_images;
     boost::container::static_vector<u64, 16> mip_hashes{};
