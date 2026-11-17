@@ -16,6 +16,7 @@
 #include "tlg_settings.h"
 #include "tlg_graphics.h"
 #include "video_core/renderer_vulkan/vk_temporal_upscaler.h"
+#include "video_core/texture_cache/tlg_exposure_log.h"
 #include "video_core/renderer_vulkan/vk_presenter.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
 #include "video_core/renderer_vulkan/vk_warmup_inbox.h"
@@ -675,6 +676,10 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     }();
     static int frame_dump_index = 0;
     static int frame_dump_left = 0;
+    {
+        static u64 exposure_frame = 0;
+        TlgExposureLog::Print(++exposure_frame);
+    }
     if (frame_dump_trigger && frame_dump_left == 0 && std::remove(frame_dump_trigger) == 0) {
         frame_dump_left = frame_dump_count;
     }

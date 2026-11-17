@@ -27,6 +27,7 @@
 #include "video_core/texture_cache/aliasing.h"
 #include "video_core/texture_cache/host_compatibility.h"
 #include "video_core/texture_cache/texture_cache.h"
+#include "video_core/texture_cache/tlg_exposure_log.h"
 #include "video_core/texture_cache/tile_manager.h"
 #include <vulkan/vulkan_format_traits.hpp>
 
@@ -1751,6 +1752,19 @@ bool TextureCache::TouchSamplers(const u64* lru_ids, u32 count, u64 generation) 
 void TextureCache::RegisterImage(ImageId image_id) {
     TlgStats::images_registered.fetch_add(1, std::memory_order_relaxed);
     Image& image = slot_images[image_id];
+    // tlg: TLG_EXPOSURE_LOG=1 (diagnostic): tiny float images (the game's 1x1 exposure and
+    // luminance values) are remembered so the presenter can print what the CPU sees each frame.
+    if (TlgExposureLog::Enabled() && ((image.info.size.width <= 16 && image.info.size.height <= 16) ||
+                                        (image.info.pixel_format == vk::Format::eR16G16Sfloat &&
+                                         image.info.size.width <= 256)) &&
+        (image.info.pixel_format == vk::Format::eR16G16Sfloat ||
+         image.info.pixel_format == vk::Format::eR16Sfloat ||
+         image.info.pixel_format == vk::Format::eR32Sfloat ||
+         image.info.pixel_format == vk::Format::eR32G32Sfloat ||
+         image.info.pixel_format == vk::Format::eR16G16B16A16Sfloat)) {
+        TlgExposureLog::Note(image.info.guest_address, static_cast<u32>(image.info.pixel_format),
+                             image.info.size.width, image.info.size.height);
+    }
     if (TlgPerf::Enabled()) {
         image.perf_generation = TlgPerf::NextOperation();
         TlgPerf::Event e; e.kind = TlgPerf::Kind::ResourceCreate;
