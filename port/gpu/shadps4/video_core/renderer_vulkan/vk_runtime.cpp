@@ -1255,11 +1255,15 @@ void Runtime::FlushBarriers() {
         if (dep_info.memoryBarrierCount) {
             key += " mem";
         }
-        if (!image_barriers.empty()) {
-            key += fmt::format(" {} -> {}", vk::to_string(image_barriers[0].oldLayout),
-                               vk::to_string(image_barriers[0].newLayout));
+        for (size_t i = 0; i < std::min<size_t>(image_barriers.size(), 3); ++i) {
+            const auto& b = image_barriers[i];
+            key += fmt::format(" | {}->{} {}", vk::to_string(b.oldLayout), vk::to_string(b.newLayout),
+                               vk::to_string(b.subresourceRange.aspectMask));
         }
-        ++kinds[key.substr(0, 150)];
+        if (dep_info.memoryBarrierCount) {
+            key += fmt::format(" | mem src {}", vk::to_string(memory_barrier.srcAccessMask));
+        }
+        ++kinds[key.substr(0, 300)];
         {
             std::string note;
             if (dep_info.memoryBarrierCount) {
