@@ -1115,4 +1115,13 @@ Instruments (Shader Timeline option) for per-shader cost.
   time in streaming halved (Seattle camera sweep 72/49 -> 23/23 ms, chase 36/44 -> 13/22 ms per 120 s), FPS same
   (truck 80.1/81.0, bridge 108.2/108.2, Seattle 78.0/78.5); stability suite clean; 9-min truck soak 82.4 (88 82 81
   82 82 82 82 82). Dead end: TLG_WARMUP_BUILD_CACHED=1 makes the post-load stall worse (0.77 -> 4.4-5.8 s).
+- 2026-11-17: POST-LOAD STALL (the frame right after a save loads: 0.8 s on the chase, 4.8 s in the owner's
+  session) = ~270 pipelines created on first use, one after another, ~2.9 ms each, with a precompiled cache
+  (warm-up loads shader stages only). Time Profiler (host_profile.sh with PROFILE_AT=12 PROFILE_SECONDS=40) shows
+  almost no samples in MoltenVK's pipeline code: the time is spent waiting on Metal's compiler service. No help
+  from TLG_WARMUP_BUILD_CACHED=1 (worse: 4.4-5.8 s) or MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION=1.
+  Idea left: create the missing pipelines of such a frame in parallel (prep workers) instead of serially.
+  Bloodborne's deferred copy-shader copies / upload hoisting do not apply here (TLG_PASS_STATS: no copy-shader
+  pass splits; ~2 mid-pass uploads a frame). Burning village GPU per frame (pass_profile.sh): compute 2.9 ms,
+  G-buffer 2.1, a full-screen RGBA16F pass (ps 24dad4be, simple shader, likely fire overdraw) 1.9, shadows 1.4.
 
