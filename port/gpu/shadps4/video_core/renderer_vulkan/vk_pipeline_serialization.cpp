@@ -885,6 +885,7 @@ bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
 
     const auto [it, is_new] = graphics_pipelines.try_emplace(sel.graphics_key);
     ASSERT(is_new);
+    NoteGraphicsKnown(sel.graphics_key);
 
     if (warmup_pool) {
         warmup_pool->Push([this, key = sel.graphics_key, infos = sel.infos,
@@ -1001,6 +1002,9 @@ bool PipelineCache::LoadProgramFromCache(u64 hash) {
     }
     if (!program) {
         return false;
+    }
+    if (PrepCompileTemplates()) {
+        program->info_template = std::make_unique<Shader::Info>(program->info);
     }
     std::unique_lock lock{programs_mutex};
     program_cache.emplace(hash, std::move(program));
@@ -1146,6 +1150,7 @@ void PipelineCache::WarmUp(const std::function<void(u32, u32)>& progress) {
         warmup_pool = nullptr;
         // Every slot was reserved by the loaders; the ones whose build failed stay out.
         for (auto& [key, pipeline] : warmup_graphics) {
+            NoteGraphicsKnown(key);
             graphics_pipelines[key] = std::move(pipeline);
         }
         for (auto& [key, pipeline] : warmup_compute) {
@@ -1383,6 +1388,11 @@ bool PipelineCache::MergeWarmStage(WarmStage& stage) {
     if (it_pgm == program_cache.end()) {
         Program* program = stage.program.get();
         program->InsertPermut(stage.module, std::move(stage.spec), stage.perm_idx);
+        // tlg: TLG_PREP_COMPILE: the draw-preparation workers need the template right away (else
+        // the first frame after a load, where most programs are new, is left to the GPU thread).
+        if (PrepCompileTemplates() && !program->info_template) {
+            program->info_template = std::make_unique<Shader::Info>(program->info);
+        }
         program_cache.emplace(hash, std::move(stage.program));
         stage.module_kept = true;
         stage.result = stage.module;

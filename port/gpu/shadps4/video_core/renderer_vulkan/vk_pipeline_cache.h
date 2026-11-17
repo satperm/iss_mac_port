@@ -5,6 +5,8 @@
 
 #include <functional>
 #include <unordered_map>
+#include <atomic>
+#include <mutex>
 #include <unordered_set>
 #include <shared_mutex>
 #include <variant>
@@ -147,6 +149,12 @@ struct PreparedDraw;
 
 class PipelineCache {
 public:
+    /// tlg: TLG_PREP_COMPILE=1: a draw-preparation worker that computed the key of a pipeline
+    /// nobody has asked for yet starts its build on the compiler threads, so the GPU thread finds
+    /// it pending (or done) instead of creating it itself. Thread-safe.
+    void PrefetchGraphicsPipeline(const PipelineSelection& worker_sel);
+    /// tlg: TLG_PREP_COMPILE: warm-up gives programs their worker template at load.
+    static bool PrepCompileTemplates();
     explicit PipelineCache(const Instance& instance, Scheduler& scheduler,
                            AmdGpu::Liverpool* liverpool, u32 sparse_page_shift);
     ~PipelineCache();
@@ -287,6 +295,15 @@ private:
     /// tlg: StartBackgroundWarmUp state; owned here, deleted by StopWarmUp.
     BackgroundWarmup* background = nullptr;
     tsl::robin_map<GraphicsPipelineKey, std::shared_ptr<AsyncGraphicsCompilation>> pending_graphics;
+    // tlg: TLG_PREP_COMPILE. Keys a build was started or published for (hashes), and the builds the
+    // workers started, handed to pending_graphics by the GPU thread (DrainPrefetched).
+    std::mutex prefetch_mutex;
+    std::unordered_set<u64> prefetch_known;
+    std::vector<std::pair<GraphicsPipelineKey, std::shared_ptr<AsyncGraphicsCompilation>>> prefetched;
+    std::atomic<u32> prefetched_count{0};
+    void NoteGraphicsKnown(const GraphicsPipelineKey& key);
+    void DrainPrefetched();
+    bool StartGraphicsBuild(const std::shared_ptr<AsyncGraphicsCompilation>& build);
     tsl::robin_map<size_t, std::unique_ptr<Program>> program_cache;
     /// tlg: per program hash, one past the highest permutation index of the .spv files on disk.
     /// A permutation compiled in game takes an index from here, never one that a cached

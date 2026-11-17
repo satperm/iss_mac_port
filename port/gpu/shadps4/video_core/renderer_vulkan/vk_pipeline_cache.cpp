@@ -973,7 +973,136 @@ void PipelineCache::PublishShaders(bool wait) {
     }
 }
 
+bool PipelineCache::StartGraphicsBuild(const std::shared_ptr<AsyncGraphicsCompilation>& build) {
+    return build->job.Start(*compiler, [this, build] {
+        // Only the vertex stage uses fetch-shader guest pointers during pipeline construction.
+        Shader::Gcn::ScopedFetchShaderSnapshot snapshot{build->fetch[u32(SwStage::Vertex)]};
+        PhaseTimer compile{g_tlg_async_ns};
+        const auto started = std::chrono::steady_clock::now();
+        auto& s = build->selection;
+        build->pipeline = std::make_unique<GraphicsPipeline>(
+            instance, scheduler, desc_heap, profile, s.graphics_key,
+            *worker_pipeline_caches[AsyncCompiler::WorkerIndex()],
+            s.infos, s.runtime_infos, s.fetch_shader, s.modules, build->data, false);
+        // tlg: which background compile a stutter belongs to (TLG_GPU_LOG=info/debug).
+        LOG_INFO(Render_Vulkan, "tlg: compiled graphics pipeline {:#x} ({}) in {:.1f} ms",
+                 std::hash<GraphicsPipelineKey>{}(s.graphics_key), DescribeStages(s.infos),
+                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                           started)
+                     .count());
+        return build;
+    });
+}
+
+namespace {
+bool PrepCompileEnabled() {
+    static const bool on = [] {
+        const char* env = std::getenv("TLG_PREP_COMPILE");
+        const bool enabled = env && env[0] == '1';
+        if (enabled) {
+            std::printf("GPU: draw-preparation workers start the builds of new pipelines "
+                        "(TLG_PREP_COMPILE=1)\n");
+        }
+        return enabled;
+    }();
+    return on;
+}
+
+// The fetch shader is read from guest memory, which ahead of the GPU thread may already be reused:
+// a fault returns false (no locals with destructors here, as in GetProgram's worker path).
+bool CaptureFetchGuarded(Shader::Gcn::FetchShaderSnapshot& fetch, const Shader::Info& info) {
+    sigjmp_buf recover;
+    if (sigsetjmp(recover, 0)) {
+        runtime_fault_recover = nullptr;
+        return false;
+    }
+    runtime_fault_recover = &recover;
+    fetch.Capture(info);
+    runtime_fault_recover = nullptr;
+    return true;
+}
+} // namespace
+
+bool PipelineCache::PrepCompileTemplates() {
+    return PrepCompileEnabled();
+}
+
+void PipelineCache::NoteGraphicsKnown(const GraphicsPipelineKey& key) {
+    if (!PrepCompileEnabled()) {
+        return;
+    }
+    std::scoped_lock lock{prefetch_mutex};
+    prefetch_known.insert(std::hash<GraphicsPipelineKey>{}(key));
+}
+
+void PipelineCache::PrefetchGraphicsPipeline(const PipelineSelection& worker_sel) {
+    if (!PrepCompileEnabled() || !compiler || !worker_sel.worker) {
+        return;
+    }
+    const u64 hash = std::hash<GraphicsPipelineKey>{}(worker_sel.graphics_key);
+    {
+        std::scoped_lock lock{prefetch_mutex};
+        if (prefetch_known.contains(hash) || !compiler->HasCapacity()) {
+            return;
+        }
+        prefetch_known.insert(hash);
+    }
+    auto build = std::make_shared<AsyncGraphicsCompilation>();
+    build->selection = worker_sel;
+    build->selection.regs = nullptr;
+    build->selection.worker = nullptr;
+    for (u32 i = 0; i < MaxShaderStages; ++i) {
+        const Shader::Info* info = worker_sel.infos[i];
+        if (!info) {
+            continue;
+        }
+        // The pipeline keeps the program's own Info once published (the worker's copy is reused).
+        const Program* program = nullptr;
+        for (const auto& [owner, copy] : worker_sel.worker->infos) {
+            if (&copy == info) {
+                program = owner;
+                break;
+            }
+        }
+        if (!program) {
+            return; // left to the GPU thread
+        }
+        build->live_infos[i] = &program->info;
+        build->infos[i] = std::make_unique<Shader::Info>(*info);
+        build->user_data[i].assign(info->user_data.begin(), info->user_data.end());
+        build->infos[i]->user_data = build->user_data[i];
+        build->selection.infos[i] = build->infos[i].get();
+        if (!CaptureFetchGuarded(build->fetch[i], *build->infos[i])) {
+            return;
+        }
+    }
+    if (StartGraphicsBuild(build)) {
+        std::scoped_lock lock{prefetch_mutex};
+        prefetched.emplace_back(worker_sel.graphics_key, std::move(build));
+        prefetched_count.fetch_add(1, std::memory_order_release);
+    }
+}
+
+// GPU thread: the workers' builds join pending_graphics (unless the key got there another way).
+void PipelineCache::DrainPrefetched() {
+    if (prefetched_count.load(std::memory_order_acquire) == 0) {
+        return;
+    }
+    decltype(prefetched) got;
+    {
+        std::scoped_lock lock{prefetch_mutex};
+        got.swap(prefetched);
+        prefetched_count.store(0, std::memory_order_relaxed);
+    }
+    for (auto& [key, build] : got) {
+        if (!graphics_pipelines.contains(key) && !pending_graphics.contains(key)) {
+            pending_graphics.emplace(key, std::move(build));
+        }
+    }
+}
+
 void PipelineCache::PublishGraphics(bool wait) {
+    DrainPrefetched();
     for (auto it = pending_graphics.begin(); it != pending_graphics.end();) {
         auto build = it.value();
         if (wait) {
@@ -1369,25 +1498,9 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
                     build->fetch[i].Capture(*build->infos[i]);
                 }
             }
-            const bool queued = build->job.Start(*compiler, [this, build] {
-                // Only the vertex stage uses fetch-shader guest pointers during pipeline construction.
-                Shader::Gcn::ScopedFetchShaderSnapshot snapshot{build->fetch[u32(SwStage::Vertex)]};
-                PhaseTimer compile{g_tlg_async_ns};
-                const auto started = std::chrono::steady_clock::now();
-                auto& s = build->selection;
-                build->pipeline = std::make_unique<GraphicsPipeline>(
-                    instance, scheduler, desc_heap, profile, s.graphics_key,
-                    *worker_pipeline_caches[AsyncCompiler::WorkerIndex()],
-                    s.infos, s.runtime_infos, s.fetch_shader, s.modules, build->data, false);
-                // tlg: which background compile a stutter belongs to (TLG_GPU_LOG=info/debug).
-                LOG_INFO(Render_Vulkan, "tlg: compiled graphics pipeline {:#x} ({}) in {:.1f} ms",
-                         std::hash<GraphicsPipelineKey>{}(s.graphics_key), DescribeStages(s.infos),
-                         std::chrono::duration<double, std::milli>(
-                             std::chrono::steady_clock::now() - started)
-                             .count());
-                return build;
-            });
+            const bool queued = StartGraphicsBuild(build);
             if (queued) {
+                NoteGraphicsKnown(sel.graphics_key);
                 pending_graphics.emplace(sel.graphics_key, std::move(build));
             }
         }
@@ -1418,6 +1531,7 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
 compile_now:
     const auto [it, is_new] = graphics_pipelines.try_emplace(sel.graphics_key);
     if (is_new) {
+        NoteGraphicsKnown(sel.graphics_key);
         const auto pipeline_hash = std::hash<GraphicsPipelineKey>{}(sel.graphics_key);
         LOG_INFO(Render_Vulkan, "Compiling graphics pipeline {:#x}", pipeline_hash);
         CompileTimer timer{pipeline_hash, 'g'};

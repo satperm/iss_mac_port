@@ -450,6 +450,7 @@ void DrawPreparation::WorkerLoop(std::stop_token stop, u32 index) {
                 prep_worker.failed = false;
                 sel.draw_indirect_params = {};
                 if (pipeline_cache.PrepareGraphicsPipeline(sel)) {
+                    pipeline_cache.PrefetchGraphicsPipeline(sel); // TLG_PREP_COMPILE
                     draw.reg_checksum = checksum;
                     draw.key = sel.graphics_key;
                     draw.num_stages = static_cast<u32>(prep_worker.stages.size());
