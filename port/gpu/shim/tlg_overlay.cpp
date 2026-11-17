@@ -1929,6 +1929,20 @@ bool HandleSaveEvent(const SDL_Event& event) {
     case SDL_EVENT_MOUSE_WHEEL:
         move = event.wheel.y > 0 ? -1 : event.wheel.y < 0 ? 1 : 0;
         break;
+    case SDL_EVENT_GAMEPAD_AXIS_MOTION: {
+        // tlg: the left stick moves like the d-pad: one step when it crosses half way.
+        static int stick = 0; // -1 up, 0 centre, 1 down
+        if (event.gaxis.axis != SDL_GAMEPAD_AXIS_LEFTY && event.gaxis.axis != SDL_GAMEPAD_AXIS_LEFTX) {
+            return true;
+        }
+        const int value = event.gaxis.value;
+        const int now = value < -16000 ? -1 : value > 16000 ? 1 : (value > -8000 && value < 8000 ? 0 : stick);
+        if (now != stick) {
+            move = now;
+            stick = now;
+        }
+        break;
+    }
     case SDL_EVENT_KEY_UP:
     case SDL_EVENT_GAMEPAD_BUTTON_UP:
     case SDL_EVENT_MOUSE_BUTTON_UP:
