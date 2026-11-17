@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include "common/assert.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
+#include "video_core/renderer_vulkan/vk_bind_helper.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
@@ -89,6 +90,47 @@ bool IsPowerOfTen(u64 n) {
         }
     }
     return false;
+}
+} // namespace
+
+bool LazyTextureUsage() {
+    static const bool on = [] {
+        const char* env = std::getenv("TLG_LAZY_TEXTURE_USAGE");
+        const bool enabled = env && env[0] == '1';
+        if (enabled) {
+            std::printf("GPU: lazy texture usages (TLG_LAZY_TEXTURE_USAGE=1): colour images start "
+                        "without storage usage and other-format views (Metal lossless compression), "
+                        "upgraded once on need\n");
+        }
+        return enabled;
+    }();
+    return on;
+}
+
+namespace {
+/// tlg: TLG_LAZY_TEXTURE_USAGE: the formats MoltenVK views without PixelFormatView: the same
+/// MTLPixelFormat or its sRGB/linear twin (MVKPixelFormats::compatibleAsLinearOrSRGB).
+std::array<vk::Format, 4> MetalTwinFormats(vk::Format format) {
+    using F = vk::Format;
+    switch (format) {
+    case F::eR8G8B8A8Unorm:
+    case F::eR8G8B8A8Srgb:
+    case F::eA8B8G8R8UnormPack32:
+    case F::eA8B8G8R8SrgbPack32:
+        return {F::eR8G8B8A8Unorm, F::eR8G8B8A8Srgb, F::eA8B8G8R8UnormPack32,
+                F::eA8B8G8R8SrgbPack32};
+    case F::eB8G8R8A8Unorm:
+    case F::eB8G8R8A8Srgb:
+        return {F::eB8G8R8A8Unorm, F::eB8G8R8A8Srgb, F::eUndefined, F::eUndefined};
+    case F::eR8Unorm:
+    case F::eR8Srgb:
+        return {F::eR8Unorm, F::eR8Srgb, F::eUndefined, F::eUndefined};
+    case F::eR8G8Unorm:
+    case F::eR8G8Srgb:
+        return {F::eR8G8Unorm, F::eR8G8Srgb, F::eUndefined, F::eUndefined};
+    default:
+        return {format, F::eUndefined, F::eUndefined, F::eUndefined};
+    }
 }
 } // namespace
 
@@ -318,7 +360,50 @@ Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,
                             ? image_format_properties.value.imageFormatProperties.sampleCounts
                             : vk::SampleCountFlagBits::e1;
 
+    // tlg: TLG_LAZY_TEXTURE_USAGE (Image::IsLazy): single-sample colour images that are not
+    // block-coded start without storage usage and, when mutable, with a format list of the sRGB
+    // twins only, so MoltenVK sets neither ShaderWrite nor PixelFormatView. The format queries
+    // above used the full usage (same sample counts and formats as without the switch).
+    full_usage_flags = usage_flags;
+    const bool mutable_format = bool(flags & vk::ImageCreateFlagBits::eMutableFormat);
+    const bool lazy = LazyTextureUsage() && !info.props.is_block && !info.props.is_depth &&
+                      info.num_samples <= 1 &&
+                      (bool(usage_flags & vk::ImageUsageFlagBits::eStorage) || mutable_format);
+    vk::ImageFormatListCreateInfo format_list{};
+    if (lazy) {
+        usage_flags &= ~vk::ImageUsageFlagBits::eStorage;
+        lazy_view_formats = MetalTwinFormats(supported_format);
+        if (std::ranges::find(lazy_view_formats, supported_format) == lazy_view_formats.end()) {
+            lazy_view_formats = {supported_format, vk::Format::eUndefined, vk::Format::eUndefined,
+                                 vk::Format::eUndefined};
+        }
+        // Views in the guest's format (the MSAA blit helper) when the host format differs.
+        const auto free_slot = std::ranges::find(lazy_view_formats, vk::Format::eUndefined);
+        if (info.pixel_format != supported_format && free_slot != lazy_view_formats.end() &&
+            std::ranges::find(lazy_view_formats, info.pixel_format) == lazy_view_formats.end()) {
+            *free_slot = info.pixel_format;
+        }
+        u32 count = 0;
+        while (count < lazy_view_formats.size() &&
+               lazy_view_formats[count] != vk::Format::eUndefined) {
+            ++count;
+        }
+        if (mutable_format) {
+            format_list.viewFormatCount = count;
+            format_list.pViewFormats = lazy_view_formats.data();
+        }
+        lazy_direct_ok = 0;
+        const auto listed_end = lazy_view_formats.begin() + count;
+        for (u32 i = 0; i < count; ++i) {
+            const auto mapped = instance.GetSupportedFormat(lazy_view_formats[i], format_features);
+            if (std::find(lazy_view_formats.begin(), listed_end, mapped) != listed_end) {
+                lazy_direct_ok |= u8(1u << i);
+            }
+        }
+    }
+
     const vk::ImageCreateInfo image_ci = {
+        .pNext = format_list.viewFormatCount ? &format_list : nullptr,
         .flags = flags,
         .imageType = (info.props.is_host_2d ? vk::ImageType::e2D : ConvertImageType(info.type)),
         .format = supported_format,
@@ -351,6 +436,9 @@ Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,
                       vk::to_string(usage_flags).c_str(), (unsigned long long)info.guest_address);
     }
     backing->image.Create(image_ci);
+    // tlg: the format list lives on this stack: backings made from image_ci later get none.
+    backing->image.image_ci.pNext = nullptr;
+    backing->lazy = lazy;
     if (trace_thin) {
         TLG_IMG_TRACE("created thin image %p\n", (void*)VkImage(backing->image.image));
     }
@@ -378,10 +466,81 @@ ImageView& Image::FindView(const ImageViewInfo& view_info, bool ensure_guest_sam
         const auto view_id = backing->image_view_ids[backing->last_view];
         return (*slot_image_views)[view_id];
     }
+    if (NeedsFullUsage(view_info)) {
+        if (Vulkan::BindHelper::OnHelper()) {
+            // Rasterizer::TexturesBindableOnHelper keeps such bindings on the GPU thread.
+            static std::atomic<bool> logged{false};
+            if (!logged.exchange(true)) {
+                LOG_ERROR(Render_Vulkan, "tlg: texture usage upgrade needed on the binding helper");
+            }
+        } else {
+            runtime->UpgradeUsage(this);
+            return FindView(view_info, false);
+        }
+    }
     const auto view_id = slot_image_views->insert(runtime->GetInstance(), view_info, *this);
     backing->image_view_infos.emplace_back(view_info);
     backing->image_view_ids.emplace_back(view_id);
     return (*slot_image_views)[view_id];
+}
+
+bool Image::IsLazy() const noexcept {
+    return backing && backing->lazy;
+}
+
+bool Image::CanViewAs(vk::Format format) const {
+    if (!IsLazy() || !(backing->image.image_ci.flags & vk::ImageCreateFlagBits::eMutableFormat)) {
+        return true; // no format list: as without the switch
+    }
+    return std::ranges::find(lazy_view_formats, format) != lazy_view_formats.end();
+}
+
+bool Image::NeedsFullUsage(const ImageViewInfo& view_info) const {
+    if (!IsLazy()) {
+        return false;
+    }
+    if (view_info.is_storage && (full_usage_flags & vk::ImageUsageFlagBits::eStorage)) {
+        return true;
+    }
+    if (view_info.format == vk::Format::eUndefined) {
+        return false;
+    }
+    // The format ImageView gives the view (colour images: storage sRGB through UNORM, then the
+    // supported format).
+    const vk::Format format =
+        view_info.is_storage ? StorageViewFormat(view_info.format) : view_info.format;
+    for (u32 i = 0; i < lazy_view_formats.size(); ++i) {
+        if (lazy_view_formats[i] == format && (lazy_direct_ok & (1u << i))) {
+            return false;
+        }
+    }
+    return !CanViewAs(runtime->GetInstance().GetSupportedFormat(format, format_features));
+}
+
+vk::ImageCreateInfo Image::FullCreateInfo(const vk::ImageCreateInfo& from) const {
+    auto ci = from;
+    ci.pNext = nullptr;
+    ci.usage = full_usage_flags;
+    return ci;
+}
+
+void Image::MakeFullUsage() {
+    if (!IsLazy() || backing_images.size() != 1 || !backing->image_view_ids.empty()) {
+        return;
+    }
+    const auto ci = FullCreateInfo(backing->image.image_ci);
+    const auto device = backing->image.device;
+    const auto allocator = backing->image.allocator;
+    backing->image = UniqueImage{device, allocator};
+    backing->image.Create(ci);
+    backing->state = {};
+    backing->subresource_states.clear();
+    backing->partial_memo = {};
+    backing->lazy = false;
+    usage_flags = full_usage_flags;
+    Vulkan::SetObjectName(device, GetImage(), "Image {}x{}x{} {} {:#x} (full usage at creation)",
+                          info.size.width, info.size.height, info.size.depth,
+                          vk::to_string(info.pixel_format), info.guest_address);
 }
 
 void Image::GetBarriers(Barriers& barriers, vk::ImageLayout dst_layout, vk::AccessFlags2 dst_mask,

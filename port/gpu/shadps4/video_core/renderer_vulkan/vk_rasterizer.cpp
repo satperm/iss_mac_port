@@ -3916,6 +3916,10 @@ bool Rasterizer::TexturesBindableOnHelper(const Shader::Info& stage,
             (upscaler->Redirects() && upscaler->RedirectsSampled(image_id))) {
             return false;
         }
+        // tlg: TLG_LAZY_TEXTURE_USAGE: an upgrade (Runtime::UpgradeUsage) runs on the GPU thread.
+        if (image->NeedsFullUsage(entry.desc.view_info)) {
+            return false;
+        }
     }
     return true;
 }
@@ -4911,6 +4915,21 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
         }
 
         image_descriptor_array_sizes.push_back(num_bindings);
+    }
+
+    // tlg: TLG_LAZY_TEXTURE_USAGE: an upgrade replaces the image's backing. Every binding of the
+    // stage gets its upgrade before any binding takes a view: a dispatch that writes one mip and
+    // reads another in a second format must not get a view of the replaced image.
+    if (!on_helper && VideoCore::LazyTextureUsage()) {
+        for (const auto& [image_id, desc_ptr] : image_bindings) {
+            if (!image_id) {
+                continue;
+            }
+            auto& image = texture_cache.GetImage(image_id);
+            if (image.NeedsFullUsage(desc_ptr->view_info)) {
+                runtime.UpgradeUsage(&image);
+            }
+        }
     }
 
     // Second pass to re-bind images that were updated after binding

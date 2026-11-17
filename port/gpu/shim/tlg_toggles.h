@@ -162,4 +162,7 @@ inline std::atomic<std::uint64_t> gpu_signal_faults{0};
 /// Protection changes: calls and pages, those removing write access (TLB shootdowns) apart.
 inline std::atomic<std::uint64_t> protect_calls{0}, protect_pages{0}, protect_revoke_calls{0},
     protect_revoke_pages{0};
+/// TLG_LAZY_TEXTURE_USAGE: texture usage upgrades (Runtime::UpgradeUsage) and the bytes of the
+/// textures they copied, printed with the frame stats.
+inline std::atomic<std::uint64_t> texture_upgrades{0}, texture_upgrade_bytes{0};
 } // namespace TlgStats

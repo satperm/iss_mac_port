@@ -905,6 +905,8 @@ void TemporalUpscaler::OnSceneComposite() {
         return;
     }
     auto& color = texture_cache.GetImage(scene_color);
+    // tlg: TLG_LAZY_TEXTURE_USAGE: the reactive mask reads the scene colour as a storage image.
+    runtime.UpgradeUsage(&color);
     const bool reduced = ReducedScene(color);
     const auto scene = Scaled() ? SceneSize(color.info.size.width, color.info.size.height)
                                 : std::array<u32, 2>{color.info.size.width, color.info.size.height};
@@ -1011,6 +1013,9 @@ void TemporalUpscaler::Run() {
     }
     auto& color = texture_cache.GetImage(scene_color);
     auto& depth = texture_cache.GetImage(camera_motion.Depth());
+    // tlg: TLG_LAZY_TEXTURE_USAGE: the merge writes the scene colour as a storage image, and the
+    // upscaler is described with its usage.
+    runtime.UpgradeUsage(&color);
     const u32 ow = color.info.size.width, oh = color.info.size.height;
     const bool reduced = ReducedScene(color) && scene_targets.EligibleScene(depth);
     const u32 w = reduced ? scene_targets.Size().width : ow;
@@ -1284,6 +1289,9 @@ void TemporalUpscaler::RunIss(const u32* p, VideoCore::ImageId color_id) {
     }
     auto& color = texture_cache.GetImage(color_id);
     auto& depth = texture_cache.GetImage(depth_id);
+    // tlg: TLG_LAZY_TEXTURE_USAGE: FSR 3 is described with the colour's usage and MetalFX checks
+    // its textures' usages against the scaler's (tlg_metalfx.mm): the full usage, as before.
+    runtime.UpgradeUsage(&color);
     const u32 w = color.info.size.width, h = color.info.size.height;
     // Below the output size (TLG_RENDER_SCALE): upscale to TLG_ISS_OUTPUT (default 1920x1080) into the
     // output-size UI image; the UI drawn after the marker and the display pass are redirected there.
@@ -1866,6 +1874,8 @@ void TemporalUpscaler::RunScaled() {
     }
     auto& color = texture_cache.GetImage(ldr_target);
     auto& depth = texture_cache.GetImage(camera_motion.Depth());
+    // tlg: TLG_LAZY_TEXTURE_USAGE: as in RunIss (FSR / MetalFX inputs, raw views).
+    runtime.UpgradeUsage(&color);
     // The scene fills the top-left w x h of its targets (iw x ih, aligned by the game).
     const u32 iw = color.info.size.width, ih = color.info.size.height;
     const auto [w, h] = SceneSize(iw, ih);

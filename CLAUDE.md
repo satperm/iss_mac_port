@@ -1082,3 +1082,18 @@ Instruments (Shader Timeline option) for per-shader cost.
   compiles in a new cache (3592, 23.5 s; a precise new-game session on 2026-11-14 had 2014, 8.2 s); 42 long
   frames of ~65 ms without compiles are unexplained (compare with a precise session). Issue #5 logs (M1 Pro,
   out/agent/issue5-logs): 25.7 FPS at defaults with the GPU thread 66% idle = GPU-bound; Slower Mac holds 30.
+- 2026-11-16: LAZY TEXTURE USAGES (`TLG_LAZY_TEXTURE_USAGE=1`, default OFF, branch agent/lazy-usage; port of
+  bloodborne_mac_port f151a8fb + 8d7abb2d, redo of the old uncommitted TLG_LOSSLESS). Metal compresses private
+  textures losslessly only without ShaderWrite/PixelFormatView; MoltenVK sets them for storage usage and for a
+  mutable format without a format list. With the switch, single-sample colour images that are not block-coded
+  (not TLG_BC_TINY, not depth) are made without storage and with a format list of their sRGB twins
+  (Image::IsLazy); a storage binding, a view in another format, or a copy between formats where neither side can
+  reinterpret upgrades them once (Runtime::UpgradeUsage: new backing, all levels/layers copied, old image and
+  views released by DeferOperation). BindTextures upgrades every binding of a stage before taking views; the
+  binding helper never upgrades (TexturesBindableOnHelper). Created with the full usage: images whose creating
+  binding needs it, ExpandImage/overlap replacements of upgraded images, MSAA backings, scene proxies. The
+  upscaler (Run, RunIss, RunScaled, reactive mask) and the camera-motion overlay upgrade the scene colour first
+  (FSR 3/MetalFX see the old usages). Frame stats: "Texture usage upgrades: N (M MB copied)". Off = no change
+  (only the new checks, all behind IsLazy() which is false). UNTESTED IN GAME: picture vs off (fire/particles,
+  village, Seattle, UI, screenshots), FSR 3 + MetalFX, render scale 67%, upgrades count/MB, FPS A/B, Metal API
+  validation (MTL_DEBUG_LAYER=1). Known risk: an image upgraded while it is also a texture of the same draw.

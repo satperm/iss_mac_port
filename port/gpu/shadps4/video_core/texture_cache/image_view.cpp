@@ -93,6 +93,23 @@ ImageViewInfo::ImageViewInfo(const AmdGpu::DepthBuffer& depth_buffer, AmdGpu::De
     type = range.extent.layers > 1 ? AmdGpu::ImageType::Color2DArray : AmdGpu::ImageType::Color2D;
 }
 
+vk::Format StorageViewFormat(vk::Format format) {
+    switch (format) {
+    case vk::Format::eR8G8B8A8Srgb:
+        return vk::Format::eR8G8B8A8Unorm;
+    case vk::Format::eB8G8R8A8Srgb:
+        return vk::Format::eB8G8R8A8Unorm;
+    case vk::Format::eA8B8G8R8SrgbPack32:
+        return vk::Format::eA8B8G8R8UnormPack32;
+    case vk::Format::eR8Srgb:
+        return vk::Format::eR8Unorm;
+    case vk::Format::eR8G8Srgb:
+        return vk::Format::eR8G8Unorm;
+    default:
+        return format;
+    }
+}
+
 ImageView::ImageView(const Vulkan::Instance& instance, const ImageViewInfo& info_,
                      const Image& image)
     : info{info_} {
@@ -132,25 +149,7 @@ ImageView::ImageView(const Vulkan::Instance& instance, const ImageViewInfo& info
     // (AMD's driver loses the device on such a view; NVIDIA tolerates it): write through the
     // UNORM format, which stores the same bytes.
     if (info.is_storage) {
-        switch (format) {
-        case vk::Format::eR8G8B8A8Srgb:
-            format = vk::Format::eR8G8B8A8Unorm;
-            break;
-        case vk::Format::eB8G8R8A8Srgb:
-            format = vk::Format::eB8G8R8A8Unorm;
-            break;
-        case vk::Format::eA8B8G8R8SrgbPack32:
-            format = vk::Format::eA8B8G8R8UnormPack32;
-            break;
-        case vk::Format::eR8Srgb:
-            format = vk::Format::eR8Unorm;
-            break;
-        case vk::Format::eR8G8Srgb:
-            format = vk::Format::eR8G8Unorm;
-            break;
-        default:
-            break;
-        }
+        format = StorageViewFormat(format);
     }
 
     const vk::ImageViewCreateInfo image_view_ci = {
