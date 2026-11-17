@@ -174,13 +174,20 @@ struct Info : InfoPersistent {
         VAddr pgm_base;
     };
     static constexpr u32 MaxUdSnapshots = 6;
-    static inline thread_local UdSnapshot ud_snapshots[MaxUdSnapshots];
-    static inline thread_local u32 num_ud_snapshots = 0;
+    // tlg: one thread_local for the count and the entries: in a dylib on macOS every access to a
+    // thread_local is a call (_tlv_get_addr), and UserData()/FlatUserData() run for every sharp
+    // read (~4% of the draw recording thread in the burning village, 2026-11-17).
+    struct UdSnapshots {
+        u32 count;
+        UdSnapshot items[MaxUdSnapshots];
+    };
+    static inline thread_local UdSnapshots ud_snapshots; // zero-initialized (thread storage)
 
     const UdSnapshot* Snapshot() const noexcept {
-        for (u32 i = 0; i < num_ud_snapshots; ++i) {
-            if (ud_snapshots[i].info == this) {
-                return &ud_snapshots[i];
+        const UdSnapshots& snapshots = ud_snapshots;
+        for (u32 i = 0; i < snapshots.count; ++i) {
+            if (snapshots.items[i].info == this) {
+                return &snapshots.items[i];
             }
         }
         return nullptr;
