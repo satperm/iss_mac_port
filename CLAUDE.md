@@ -1132,3 +1132,14 @@ Instruments (Shader Timeline option) for per-shader cost.
   Branch agent/prep-compile (TLG_PREP_COMPILE=1: draw-prep workers start builds; warm-up gives programs their
   worker template at load): only 770 -> 650 ms, workers run just ahead of the GPU thread there; not merged.
 
+- 2026-11-18: FRAME CAPTURE ON macOS: F11 (and fn+F11) is the system's Show Desktop shortcut and never reaches the
+  game: with TLG_FRAME_CAPTURE_KEY=1, Cmd+7 records the frame (checked with a synthesized key in split mode: 134
+  passes written). TLG_CAPTURE_TRIGGER=<file> works in split mode too (tower save, 257 passes); files go to
+  TLG_CAPTURE_DIR or <user>/captures.
+- 2026-11-18: DRAW RECORDING, LINE PROFILE (PR #47): BindTextures zeroed a 16-entry local set array per call (19%
+  of it); fixed with RenderState == on used attachments: village +1.1%, truck +2.1%, bridge =, Seattle +3.2%.
+  Line profiles: the GPU library keeps its thin-LTO objects (-object_path_lto), `dsymutil` gives the dSYM,
+  tools/gpu_probes/line_profile.py <xml> <function> --thread DrawRec --dsym <DWARF>. TLG_SYNC_STATS=1 (branch
+  agent/sync-stats2): recorder drains per caller; most are on DrawRec (SubmitIfWorkPiledUp every 64 draws), but
+  TLG_SUBMIT_DRAWS 128/256 gave truck = and village -1.2%: not the critical path. TLG_MAC_KEEP_FEEDBACK=1 again
+  on an idle Mac: truck 81.5/81.9, village 74.0/74.2: pass restarts closed.

@@ -2007,7 +2007,11 @@ bool HandleEvent(const SDL_Event& event) {
             const char* env = std::getenv("TLG_FRAME_CAPTURE_KEY");
             return env && *env == '1';
         }();
-        if (down && !event.key.repeat && capture_key && event.key.key == SDLK_F11) {
+        // tlg (macOS): F11 (also fn+F11) is the system's Show Desktop shortcut and never reaches
+        // the game, so Cmd+7 records the frame too.
+        if (down && !event.key.repeat && capture_key &&
+            (event.key.key == SDLK_F11 ||
+             ((event.key.mod & SDL_KMOD_GUI) != 0 && event.key.key == SDLK_7))) {
 #ifndef TLG_RENDERER_V2
             Vulkan::FrameCapture::Request();
 #endif
