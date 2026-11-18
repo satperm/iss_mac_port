@@ -719,6 +719,123 @@ static int iss_temporal_requested(void) {
     fclose(f);
     return on;
 }
+
+/* TLG_EXPOSURE_LOG=1 (diagnostic, 2026-11-17): the owner sees the screen go dark for 2-3 s after a
+ * camera change, only with GPU particles on. FUN_00171610 sums an array of floats on the CPU (the
+ * per-tile luminance the GPU wrote; eboot+0x1717c0 is the AVX loop) and the exposure follows the sum.
+ * A hook before the loop logs the array: count, sum, mean, max (and where), NaN/Inf count. */
+static int exposure_cmp(const void *a, const void *b) {
+    const float x = *(const float *)a, y = *(const float *)b;
+    return (x > y) - (x < y);
+}
+/* Auto exposure fix (default on; TLG_EXPOSURE_ROBUST=<d> sets the margin, 0 or "off" turns it off): no tile
+ * may be brighter than the frame's median tile by more than d (0.05; the values are the game's per-tile
+ * luminance terms, higher = brighter, max ~0). Bright particles near the camera (sun-lit smoke on Delsin's
+ * hands, HDR up to ~450) lifted a few tiles and the game darkened the whole picture for 2-3 s (owner's
+ * captures 2026-11-18); a uniformly bright scene keeps a high median and is not touched. */
+static float exposure_margin(void) {
+    const char *e = getenv("TLG_EXPOSURE_ROBUST");
+    if (!e || !*e) return 0.05f;
+    if (!strcmp(e, "off")) return 0;
+    return (float)atof(e);
+}
+static void exposure_robust(float *values, uint64_t count, uint64_t *clamped) {
+    static float d = -1;
+    static int read;
+    if (!read) { read = 1; d = exposure_margin(); }
+    if (d <= 0 || count > 4096) return;
+    float sorted[4096];
+    uint64_t n = 0;
+    for (uint64_t i = 0; i < count; ++i) if (isfinite(values[i])) sorted[n++] = values[i];
+    if (n == 0) return;
+    qsort(sorted, n, sizeof(float), exposure_cmp);
+    const float limit = sorted[n / 2] + d;
+    for (uint64_t i = 0; i < count; ++i)
+        if (isfinite(values[i]) && values[i] > limit) { values[i] = limit; ++*clamped; }
+}
+static void exposure_sum_log(float *values, uint64_t count) {
+    static uint64_t calls;
+    ++calls;
+    if (!values || count == 0 || count > (1u << 20)) {
+        printf("Exposure sum %llu: count %llu (skipped)\n", (unsigned long long)calls, (unsigned long long)count);
+        return;
+    }
+    uint64_t clamped = 0;
+    exposure_robust(values, count, &clamped);
+    static int log = -1;
+    if (log < 0) { const char *e = getenv("TLG_EXPOSURE_LOG"); log = e && *e == '1'; }
+    if (!log) return;
+    double sum = 0;
+    float top = -INFINITY, low = INFINITY;
+    uint64_t at = 0, bad = 0, zero = 0;
+    for (uint64_t i = 0; i < count; ++i) {
+        const float v = values[i];
+        if (!isfinite(v)) { ++bad; continue; }
+        if (v == 0) ++zero;
+        sum += v;
+        if (v > top) { top = v; at = i; }
+        if (v < low) low = v;
+    }
+    printf("Exposure sum %llu: n=%llu sum=%.5g mean=%.5g min=%.5g max=%.5g@%llu bad=%llu zero=%llu clamped=%llu\n",
+           (unsigned long long)calls, (unsigned long long)count, sum, sum / (double)count, low, top,
+           (unsigned long long)at, (unsigned long long)bad, (unsigned long long)zero, (unsigned long long)clamped);
+}
+static void install_exposure_log(uint64_t size) {
+    const char *env = getenv("TLG_EXPOSURE_LOG");
+    if ((!env || *env != '1') && exposure_margin() <= 0) return;
+    /* mov eax,0xe0e ; mov rsi,r13 ; lea r13,[rdi+32]  (rdi = the array, r13 = its length) */
+    static const unsigned char want[] = {0xb8, 0x0e, 0x0e, 0x00, 0x00, 0x4c, 0x89, 0xee, 0x4c, 0x8d, 0x6f, 0x20};
+    const uint64_t site = 0x171783;
+    if (site + sizeof(want) > size || memcmp((unsigned char *)image + site, want, sizeof(want))) {
+        puts("Auto exposure: code differs, hook not installed");
+        return;
+    }
+    unsigned char *s = allocate(page_size);
+    size_t k = 0;
+#define EB(x) (s[k++] = (unsigned char)(x))
+    static const unsigned char pushes[] = {0x50, 0x51, 0x52, 0x56, 0x57, 0x41, 0x50, 0x41, 0x51, 0x41, 0x52, 0x41, 0x53};
+    for (size_t i = 0; i < sizeof(pushes); ++i) EB(pushes[i]);
+    EB(0x49); EB(0x89); EB(0xe3);                                        /* mov r11, rsp */
+    EB(0x48); EB(0x83); EB(0xe4); EB(0xe0);                              /* and rsp, -32 */
+    EB(0x48); EB(0x81); EB(0xec); EB(0x20); EB(0x02); EB(0x00); EB(0x00); /* sub rsp, 544 */
+    for (int n = 0; n < 16; ++n) {                                        /* vmovups [rsp+32n], ymmN */
+        EB(0xc5); EB(n < 8 ? 0xfc : 0x7c); EB(0x11); EB(0x84 | ((n & 7) << 3)); EB(0x24);
+        const uint32_t off = 32u * (uint32_t)n;
+        EB(off); EB(off >> 8); EB(off >> 16); EB(off >> 24);
+    }
+    EB(0x4c); EB(0x89); EB(0x9c); EB(0x24); EB(0x00); EB(0x02); EB(0x00); EB(0x00); /* mov [rsp+512], r11 */
+    EB(0x4c); EB(0x89); EB(0xee);                                        /* mov rsi, r13 */
+    EB(0x48); EB(0xb8);                                                  /* mov rax, imm64 */
+    const uint64_t fn = (uint64_t)(uintptr_t)&exposure_sum_log;
+    for (int i = 0; i < 8; ++i) EB(fn >> (8 * i));
+    EB(0xff); EB(0xd0);                                                  /* call rax */
+    for (int n = 0; n < 16; ++n) {                                        /* vmovups ymmN, [rsp+32n] */
+        EB(0xc5); EB(n < 8 ? 0xfc : 0x7c); EB(0x10); EB(0x84 | ((n & 7) << 3)); EB(0x24);
+        const uint32_t off = 32u * (uint32_t)n;
+        EB(off); EB(off >> 8); EB(off >> 16); EB(off >> 24);
+    }
+    EB(0x4c); EB(0x8b); EB(0x9c); EB(0x24); EB(0x00); EB(0x02); EB(0x00); EB(0x00); /* mov r11, [rsp+512] */
+    EB(0x4c); EB(0x89); EB(0xdc);                                        /* mov rsp, r11 */
+    static const unsigned char pops[] = {0x41, 0x5b, 0x41, 0x5a, 0x41, 0x59, 0x41, 0x58, 0x5f, 0x5e, 0x5a, 0x59, 0x58};
+    for (size_t i = 0; i < sizeof(pops); ++i) EB(pops[i]);
+    for (size_t i = 0; i < 8; ++i) EB(want[i]);                          /* the two replaced instructions */
+    EB(0xff); EB(0x25); EB(0); EB(0); EB(0); EB(0);                      /* jmp [rip+0] */
+    const uint64_t back = (uint64_t)(uintptr_t)image + site + 8;
+    for (int i = 0; i < 8; ++i) EB(back >> (8 * i));
+#undef EB
+    const int64_t distance = (int64_t)(uintptr_t)s - ((int64_t)(uintptr_t)image + (int64_t)site + 5);
+    if (distance > INT32_MAX || distance < INT32_MIN) {
+        puts("Auto exposure: stub out of reach of the image, hook not installed");
+        return;
+    }
+    protect(s, page_size, 5);
+    unsigned char *p = (unsigned char *)image + site;
+    const int32_t rel = (int32_t)distance;
+    p[0] = 0xe9;
+    memcpy(p + 1, &rel, 4);
+    p[5] = p[6] = p[7] = 0x90;
+    printf("Auto exposure: tile limit median + %.3g (TLG_EXPOSURE_ROBUST=off: game default), hook at eboot+0x171783\n", exposure_margin());
+}
 static void iss_start_camera_dump(void);
 static void install_iss_temporal(const char *app0, Segment *segments, uint64_t count, uint64_t size) {
     if (!iss_temporal_requested()) return;
@@ -1583,6 +1700,7 @@ int main(int argc, char **argv) {
     if (gpu_enabled) install_stat_multipliers(app0, segments, ns, size);
     if (gpu_enabled) install_view_tuning(app0, segments, ns, size);
     if (gpu_enabled) install_iss_temporal(app0, segments, ns, size);
+    install_exposure_log(size);
     if (isa_table) {
         isa_table->protect_red_zone = red_zone_on;
         IsaReport r = isa_rewrite_apply(isa_table, image, stubs, isa_sets);
