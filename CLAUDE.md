@@ -1143,3 +1143,9 @@ Instruments (Shader Timeline option) for per-shader cost.
   agent/sync-stats2): recorder drains per caller; most are on DrawRec (SubmitIfWorkPiledUp every 64 draws), but
   TLG_SUBMIT_DRAWS 128/256 gave truck = and village -1.2%: not the critical path. TLG_MAC_KEEP_FEEDBACK=1 again
   on an idle Mac: truck 81.5/81.9, village 74.0/74.2: pass restarts closed.
+- 2026-11-18: CLOSED WITHOUT GAIN: exact barrier read ranges (coarse 4 KiB off, TLG_DISABLED_MASK=(1<<45)|2048):
+  village 75.4 -> 74.2; texture-set memo on (TLG_DISABLED_MASK=0; the GPU process keeps 1<<45 off since the
+  2026-11-01 stale smoke/glyph sets): chase 98.1 -> 97.8; TLG_SUBMIT_DRAWS 16/32 (64 stays). NATIVE METAL: not now
+  (docs/METAL_SPIKE_2026-11-18.md): truck GPU ~60% busy (in-buffer gaps 20%, starved 14%), encoder thread 80% with
+  MoltenVK ~1/3 of it. EXPOSURE INPUT: compute a8b68717 (15x15 groups) reads the HDR scene (1920x1080 RGBA16F) and a
+  480x270 RGBA16F; TLG_DIAG_IMAGES=1 during a capture dumps them; tools/exposure_stats.py prints the tile grid.
