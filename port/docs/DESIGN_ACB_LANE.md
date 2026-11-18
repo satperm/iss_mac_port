@@ -65,3 +65,24 @@ the compute ring before each graphics packet. Order between the lanes is kept on
 5. Behind `TLG_ACB_LANE=1`; measure with `TLG_CHAIN_LOG` (the p90 above) and lib_ab on four scenes;
    then the stability suite (chase 30 FPS cap 240 s for issue #11, smoke, chase), the 9-minute soak and
    screenshots (smoke and sparks must look the same).
+
+## Result of the prototype (2026-11-18 afternoon, branch `agent/acb-lane`, not merged)
+
+Built as designed: two lanes, sequence numbers, gates (graphics only on compute fences), no register blocks in
+lane 1, constant ring stamps from lane 0 only when lane 1 holds nothing older, and a compute flush when lane 1
+runs dry (without it, fences waited ~1 ms for the 64-fence flush because stage B never idled after a burst).
+
+| | Base | Lane on |
+|---|---|---|
+| Compute fence, seen -> recorded (median) | 0.61 ms | 0.08 ms |
+| Compute fence total (median) | 2.35 ms | 1.5 ms |
+| Truck FPS (lib_ab 3 x 60 s) | 80.6 | 78.5 |
+| Burning village FPS | 74.5 | 73.1 |
+| Main thread samples in the particle-label wait (10 s) | 1271 | 1401 |
+
+The median fence latency fell by a third, yet the game waited longer and the frame rate dropped ~2%. Serving
+compute first delays the graphics recording. The game's wait is for the last fences of the frame, so the
+median does not describe it. Open questions before another try: which fence the main thread waits on (its
+address/index per frame against the chain timeline), and whether a fair interleave helps instead of strict
+priority (e.g. lane 1 only when its oldest packet waited more than N us). Without the constant ring, compute
+packets cost twice as much on the recording thread (0.61 -> 1.19 ms): keep it.
