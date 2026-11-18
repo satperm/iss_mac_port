@@ -3349,6 +3349,44 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
     }
     if (Scheduler* acb = AcbTarget(cs, dispatch_flags, main_records)) {
         std::scoped_lock acb_lock{acb->CompanionMutex()};
+        // tlg: TLG_ACB_RUNS=1 (diagnostic): which shaders the compute queue repeats back to back
+        // without a barrier (could one dispatch do the work of several?), every 5 s.
+        static const bool run_stats = std::getenv("TLG_ACB_RUNS") != nullptr;
+        if (run_stats) [[unlikely]] {
+            struct Stat { u64 dispatches = 0, repeats = 0, groups = 0, one_group = 0; };
+            static std::unordered_map<u64, Stat> stats;
+            static u64 last_hash = 0, report = 0, total = 0;
+            const bool barrier = (dispatch_flags & 2u) != 0;
+            auto& st = stats[cs.pgm_hash];
+            ++st.dispatches;
+            ++total;
+            const u64 groups = u64(cs_program.dim_x) * cs_program.dim_y * cs_program.dim_z;
+            st.groups += groups;
+            st.one_group += groups == 1;
+            if (!barrier && cs.pgm_hash == last_hash) {
+                ++st.repeats;
+            }
+            last_hash = cs.pgm_hash;
+            const u64 now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+            if (!report) report = now;
+            if (now - report >= 5'000'000'000ull) {
+                report = now;
+                std::vector<std::pair<u64, Stat>> rows(stats.begin(), stats.end());
+                std::sort(rows.begin(), rows.end(),
+                          [](const auto& a, const auto& b) { return a.second.dispatches > b.second.dispatches; });
+                std::printf("ACB runs (5 s): %llu dispatches, %zu shaders; top: shader dispatches "
+                            "(repeated back to back, 1-group, mean groups)\n",
+                            (unsigned long long)total, rows.size());
+                for (size_t i = 0; i < rows.size() && i < 12; ++i) {
+                    const auto& r = rows[i].second;
+                    std::printf("  %016llx %llu (%llu, %llu, %.1f)\n", (unsigned long long)rows[i].first,
+                                (unsigned long long)r.dispatches, (unsigned long long)r.repeats,
+                                (unsigned long long)r.one_group, double(r.groups) / double(r.dispatches));
+                }
+                stats.clear();
+                total = 0;
+            }
+        }
         AcbBind(*acb, pipeline, (dispatch_flags & 2u) != 0);
         dispatch_flags = 0;
         const auto acb_bind = ComputeBind(pipeline);
