@@ -239,6 +239,12 @@ else()
     target_link_libraries(tlggpu PUBLIC PkgConfig::X11)
 endif()
 
+# tlg (macOS): keep the LTO object so the debug map stays valid: `dsymutil libtlggpu.dylib` then gives
+# source lines for profiles (atos -o libtlggpu.dylib.dSYM ...). Same code, only a kept file.
+if (APPLE AND CMAKE_INTERPROCEDURAL_OPTIMIZATION)
+    target_link_options(tlggpu PRIVATE "-Wl,-object_path_lto,${CMAKE_CURRENT_BINARY_DIR}/tlggpu-lto.o")
+endif()
+
 # Explicit test targets; neither launches the game nor needs a Vulkan device.
 add_executable(pipeline-binary-cache-test EXCLUDE_FROM_ALL ../tests/test_pipeline_binary_cache.cpp
     ../tests/test_gpu_runtime_stubs.cpp)
