@@ -755,6 +755,9 @@ std::atomic<u64> g_tlg_capture_ns, g_tlg_async_ns, g_tlg_compile_wait_ns;
 std::atomic<u64> g_tlg_snapshot_ns, g_tlg_guest_wait_ns;
 std::atomic<u32> g_tlg_pool_reuses;
 std::atomic<u32> g_tlg_pending_draws;
+// tlg: draws skipped while their pipeline compiles in the background, never reset (VideoOut's
+// TLG_ASYNC_HOLD compares it from flip to flip).
+std::atomic<u64> g_tlg_skipped_draws_total;
 namespace {
 struct PhaseTimer {
     std::atomic<u64>& counter;
@@ -1316,6 +1319,7 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
     if (!RefreshGraphicsKey(sel)) {
         if (sel.compilation_pending) {
             ++g_tlg_pending_draws;
+            g_tlg_skipped_draws_total.fetch_add(1, std::memory_order_relaxed);
             if (bp07 && !sel.sync_compile) {
                 Bp07Tally(false); // a draw classified skippable
             }
@@ -1417,6 +1421,7 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
             }
         }
         ++g_tlg_pending_draws;
+            g_tlg_skipped_draws_total.fetch_add(1, std::memory_order_relaxed);
         if (bp07) {
             Bp07Tally(false);
         }
