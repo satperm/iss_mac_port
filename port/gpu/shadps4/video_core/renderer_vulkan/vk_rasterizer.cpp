@@ -3133,6 +3133,35 @@ void Rasterizer::AcbResetBindings() {
 
 void Rasterizer::AcbBind(Scheduler& acb, const ComputePipeline* pipeline, bool barrier) {
     needs_barrier = false;
+    // tlg: TLG_ACB_PACKETS=1: compute-queue barriers and the dispatch runs between them, every 5 s
+    // (how much of the particle chain the GPU may overlap).
+    static const bool barrier_stats = std::getenv("TLG_ACB_PACKETS") != nullptr;
+    if (barrier_stats) [[unlikely]] {
+        static u64 dispatches = 0, barriers = 0, run = 0, max_run = 0, report = 0;
+        static std::array<u64, 6> runs{}; // runs of 1, 2-3, 4-7, 8-15, 16-31, 32+
+        ++dispatches;
+        if (barrier) {
+            ++barriers;
+            const u32 bucket = run <= 1 ? 0 : std::min<u32>(5, std::bit_width(run) - 1);
+            ++runs[bucket];
+            max_run = std::max(max_run, run);
+            run = 0;
+        }
+        ++run;
+        const u64 now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+        if (!report) report = now;
+        if (now - report >= 5'000'000'000ull) {
+            report = now;
+            std::printf("ACB barriers (5 s): %llu dispatches, %llu barriers; runs between barriers: 1 %llu, "
+                        "2-3 %llu, 4-7 %llu, 8-15 %llu, 16-31 %llu, 32+ %llu; longest %llu\n",
+                        (unsigned long long)dispatches, (unsigned long long)barriers,
+                        (unsigned long long)runs[0], (unsigned long long)runs[1], (unsigned long long)runs[2],
+                        (unsigned long long)runs[3], (unsigned long long)runs[4], (unsigned long long)runs[5],
+                        (unsigned long long)max_run);
+            dispatches = barriers = max_run = 0;
+            runs = {};
+        }
+    }
     if (barrier) {
         acb.Record([](vk::CommandBuffer cmdbuf) {
             const vk::MemoryBarrier2 mb{
