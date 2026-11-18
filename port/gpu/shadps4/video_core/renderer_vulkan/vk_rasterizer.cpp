@@ -123,6 +123,7 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
     runtime.SetImageAccessHook(&JoinBindHelper, this);
     if (draw_pipe) {
         draw_pipe->SetIdleHandler(&Rasterizer::AcbIdle, this);
+        draw_pipe->SetLaneIdleHandler(&Rasterizer::AcbLaneIdle, this);
     }
     if (instance.GetComputeQueue()) {
         acb_scheduler = std::make_unique<Scheduler>(instance, instance.GetComputeQueue(),
@@ -709,9 +710,15 @@ void Rasterizer::PostDraw(const Pipeline* pipeline, const PreparedDraw* used_pre
         dirty.Clear();
         pipe_synced = true;
     }
+    // tlg: TLG_ACB_LANE: a compute-queue packet in lane 1 may run before graphics packets queued
+    // earlier, so it carries no register blocks (the changed blocks stay for the next graphics
+    // packet) and is not verified; its constant ring copies are stamped by lane 0 (RunDrawPacket).
+    const bool lane_packet = draw_pipe->CurrentLane() != 0;
     std::array<u16, AmdGpu::RegDirty::NumBlocks> blocks;
     u32 num_blocks = 0;
-    dirty.blocks.ForEach([&](u32 block) { blocks[num_blocks++] = static_cast<u16>(block); });
+    if (!lane_packet) {
+        dirty.blocks.ForEach([&](u32 block) { blocks[num_blocks++] = static_cast<u16>(block); });
+    }
     const auto stages =
         pipeline ? pipeline->GetStages() : std::span<const Shader::Info* const>{};
     // Constants: copied here into the ring, the recording thread only binds them.
@@ -742,7 +749,7 @@ void Rasterizer::PostDraw(const Pipeline* pipeline, const PreparedDraw* used_pre
         size += AlignPacket(sizeof(IndirectDraw));
     }
     const u32 interval = VerifyInterval();
-    const bool verify = interval && (draw_pipe->packets % interval) == 0;
+    const bool verify = interval && !lane_packet && (draw_pipe->packets % interval) == 0;
     if (verify) {
         size += sizeof(AmdGpu::Regs);
     }
@@ -758,7 +765,7 @@ void Rasterizer::PostDraw(const Pipeline* pipeline, const PreparedDraw* used_pre
     packet.prepared = used_prepared;
     packet.index_offset = index_offset;
     packet.is_indexed = is_indexed;
-    packet.regs_reset = dirty.reset;
+    packet.regs_reset = lane_packet ? 0 : dirty.reset;
     packet.num_blocks = static_cast<u16>(num_blocks);
     packet.num_stages = num_stages;
     packet.verify = verify;
@@ -808,7 +815,9 @@ void Rasterizer::PostDraw(const Pipeline* pipeline, const PreparedDraw* used_pre
         std::memcpy(out, &liverpool->regs, sizeof(AmdGpu::Regs));
         out += sizeof(AmdGpu::Regs);
     }
-    dirty.Clear();
+    if (!lane_packet) {
+        dirty.Clear();
+    }
     draw_pipe->Commit(static_cast<u32>(out - start));
     PrintPipeStats();
 }
@@ -823,6 +832,25 @@ void Rasterizer::RetireSubmission() {
     if (!draw_pipe->Idle()) {
         pipe_keepalive.emplace_back(draw_pipe->Head(), draw_prep->KeepCurrent());
     }
+}
+
+bool Rasterizer::AcbLaneEnabled() {
+    static const bool on = [] {
+        const char* env = std::getenv("TLG_ACB_LANE");
+        return env && *env == '1';
+    }();
+    return on;
+}
+
+void Rasterizer::SetPipeLane(u32 lane) {
+    if (!draw_pipe || !AcbLaneEnabled()) {
+        return;
+    }
+    // Frame capture and frame record read passes in order: one lane while they run.
+    if (lane != 0 && (FrameCapture::Active() || FrameRecord::IsRecording())) {
+        lane = 0;
+    }
+    draw_pipe->SetLane(lane);
 }
 
 bool Rasterizer::RunInOrder(OrderedTask task, const void* data, u32 size, u64 toggle) {
@@ -1025,7 +1053,13 @@ void Rasterizer::RunDrawPacket(void* context, const u8* data, u32 size) {
     }
     Shader::Info::ud_snapshots.count = 0;
     self.num_ring_stages = 0;
-    if (self.constant_ring) {
+    // tlg: TLG_ACB_LANE: the ring is copied in sequence order on stage A, so a stamp is safe only
+    // once every packet below this one has run: lane 1 packets never stamp (a later lane 0 stamp
+    // covers them), a lane 0 packet only when lane 1 holds nothing older.
+    if (self.constant_ring &&
+        (!AcbLaneEnabled() ||
+         (self.draw_pipe->RunningLane() == 0 &&
+          self.draw_pipe->LaneClearBelow(1, self.draw_pipe->RunningSeq())))) {
         self.constant_ring->Stamp(packet.ring_end);
     }
 }
@@ -1049,6 +1083,18 @@ void Rasterizer::PrintPipeStats() {
     const u64 busy = draw_pipe->busy_cycles.load(std::memory_order_relaxed);
     const u64 spin = draw_pipe->spin_cycles.load(std::memory_order_relaxed);
     const u64 sleeps = draw_pipe->sleeps.load(std::memory_order_relaxed);
+    if (AcbLaneEnabled()) {
+        static u64 last_lane0 = 0, last_lane1 = 0, last_overtakes = 0;
+        const u64 l0 = draw_pipe->lane_packets[0].load(std::memory_order_relaxed);
+        const u64 l1 = draw_pipe->lane_packets[1].load(std::memory_order_relaxed);
+        const u64 ov = draw_pipe->lane_overtakes.load(std::memory_order_relaxed);
+        std::printf("Draw pipe lanes: %.0f/s graphics, %.0f/s compute, %.0f/s run ahead of queued graphics\n",
+                    (l0 - last_lane0) / seconds, (l1 - last_lane1) / seconds,
+                    (ov - last_overtakes) / seconds);
+        last_lane0 = l0;
+        last_lane1 = l1;
+        last_overtakes = ov;
+    }
     std::printf("Draw pipe: %.0f draws/s pipelined, %.0f drains/s that waited, stage A waited "
                 "%.1f%%, stage B busy %.1f%%, stage B idle-spin %.1f%% (%llu sleeps); %llu "
                 "ring-full waits, stage A waited %.1f%% for room\n",
@@ -2982,6 +3028,19 @@ void Rasterizer::AcbIdle(void* context) {
         !FrameCapture::Active()) {
         self->scheduler.Flush();
     }
+    if (!self->acb_scheduler || (self->acb_fences_since_flush == 0 && self->acb_copies.empty())) {
+        return;
+    }
+    std::scoped_lock lock{self->acb_scheduler->CompanionMutex()};
+    self->AcbFlushCopies();
+    self->acb_fences_since_flush = 0;
+    self->AcbFlush();
+}
+
+void Rasterizer::AcbLaneIdle(void* context) {
+    // TLG_ACB_LANE: a compute burst ran ahead of queued graphics: its fences go to the GPU now
+    // instead of after the graphics backlog (AcbIdle's flush for the compute queue).
+    auto* self = static_cast<Rasterizer*>(context);
     if (!self->acb_scheduler || (self->acb_fences_since_flush == 0 && self->acb_copies.empty())) {
         return;
     }
