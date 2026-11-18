@@ -2767,7 +2767,7 @@ bool Rasterizer::AcbCopyGds(VAddr dst, u32 gds_offset, u32 num_bytes) {
     return true;
 }
 
-u64 g_chain_seen_ns = 0, g_chain_run_ns = 0;
+u64 g_chain_seen_ns = 0, g_chain_run_ns = 0, g_chain_addr = 0, g_chain_value = 0;
 
 namespace {
 bool ChainLog() {
@@ -2876,6 +2876,20 @@ void Rasterizer::AcbFenceThread(std::stop_token stop) {
             static u64 report = 0;
             const u64 now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
             recs.push_back({fence.seen_ns, fence.run_ns, fence.defer_ns, fence.flush_ns, set_ns, now});
+            // tlg: TLG_CHAIN_TRACE=1: every compute fence, from 30 to 40 s after the first one (one clock
+            // with the game's TLG_WAIT_TRACE lines): seen, run, flushed, GPU set, written, address, value.
+            static const bool trace = std::getenv("TLG_CHAIN_TRACE") != nullptr;
+            static u64 trace_start = 0;
+            if (trace) {
+                if (!trace_start) trace_start = now;
+                if (now - trace_start >= 30'000'000'000ull && now - trace_start < 40'000'000'000ull) {
+                    std::printf("Chain trace: %llu %llu %llu %llu %llu %#llx %llu\n",
+                                (unsigned long long)fence.seen_ns, (unsigned long long)fence.run_ns,
+                                (unsigned long long)fence.flush_ns, (unsigned long long)set_ns,
+                                (unsigned long long)now, (unsigned long long)fence.addr,
+                                (unsigned long long)fence.value);
+                }
+            }
             if (!report) report = now;
             if (now - report >= 5'000'000'000ull && recs.size() > 64) {
                 report = now;
@@ -2941,7 +2955,8 @@ void Rasterizer::AcbDeferFence(Common::UniqueFunction<void>&& write) {
     {
         std::scoped_lock lock{acb_fence_mutex};
         acb_fences.push_back({event, std::move(write), g_chain_seen_ns, g_chain_run_ns,
-                              ChainLog() ? clock_gettime_nsec_np(CLOCK_UPTIME_RAW) : 0, 0});
+                              ChainLog() ? clock_gettime_nsec_np(CLOCK_UPTIME_RAW) : 0, 0,
+                              g_chain_addr, g_chain_value});
     }
     acb_fence_cv.notify_one();
     // Stage B flushes when it runs out of packets (AcbIdle); under a steady stream of packets, every few

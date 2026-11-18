@@ -40,7 +40,7 @@
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 
 namespace Vulkan { extern bool g_fence_kind_compute; }
-namespace Vulkan { extern u64 g_chain_seen_ns, g_chain_run_ns; }
+namespace Vulkan { extern u64 g_chain_seen_ns, g_chain_run_ns, g_chain_addr, g_chain_value; }
 namespace AmdGpu {
 
 // tlg: TLG_GFX_UNORDERED=1 (experiment): compute dispatches of the graphics queue that follow each
@@ -507,6 +507,8 @@ void RunComputeReleaseMem(Vulkan::Rasterizer& rasterizer, const u8* data) {
         return !(env && *env == '0');
     }();
     const auto* release_mem = reinterpret_cast<const PM4CmdReleaseMem*>(task.packet);
+    Vulkan::g_chain_addr = release_mem->Address<VAddr>();
+    Vulkan::g_chain_value = release_mem->DataQWord();
     Vulkan::g_fence_kind_compute = true;
     struct ResetKind { ~ResetKind() { Vulkan::g_fence_kind_compute = false; } } reset_kind;
     if (defer_compute && release_mem->data_sel.Value() != DataSelect::GdsMemStore &&

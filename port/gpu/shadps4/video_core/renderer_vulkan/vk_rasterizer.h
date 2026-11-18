@@ -675,6 +675,7 @@ private:
         vk::Event event;
         Common::UniqueFunction<void> write;
         u64 seen_ns = 0, run_ns = 0, defer_ns = 0, flush_ns = 0; ///< tlg: TLG_CHAIN_LOG
+        u64 addr = 0, value = 0; ///< tlg: TLG_CHAIN_TRACE
     };
     /// tlg: the compute queue's open work goes to the GPU (stamps the fences in it, TLG_CHAIN_LOG).
     void AcbFlush();

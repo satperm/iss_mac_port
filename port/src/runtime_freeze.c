@@ -503,6 +503,12 @@ static void wait_probe_sample(const x86_thread_state64_t *st) {
             KERN_SUCCESS)
         return;
     if (label >= target) return; /* not (or no longer) waiting */
+    /* TLG_WAIT_TRACE=1: every sample in the wait (one clock with the GPU host's TLG_CHAIN_TRACE lines). */
+    static int trace = -1;
+    if (trace < 0) { const char *e = getenv("TLG_WAIT_TRACE"); trace = e && *e == '1'; }
+    if (trace)
+        printf("Wait trace: %llu %#llx %u %u\n", (unsigned long long)clock_gettime_nsec_np(CLOCK_UPTIME_RAW),
+               (unsigned long long)(labels + (uint64_t)idx * 8), target, label);
     ++wait_probe_hits;
     for (int k = 0; k < WAIT_PROBE_SLOTS; ++k) {
         if (wait_probe[k].samples == 0 || (wait_probe[k].ctx == ctx && wait_probe[k].idx == idx)) {
