@@ -1149,3 +1149,10 @@ Instruments (Shader Timeline option) for per-shader cost.
   (docs/METAL_SPIKE_2026-11-18.md): truck GPU ~60% busy (in-buffer gaps 20%, starved 14%), encoder thread 80% with
   MoltenVK ~1/3 of it. EXPOSURE INPUT: compute a8b68717 (15x15 groups) reads the HDR scene (1920x1080 RGBA16F) and a
   480x270 RGBA16F; TLG_DIAG_IMAGES=1 during a capture dumps them; tools/exposure_stats.py prints the tile grid.
+- 2026-11-18: AUTO EXPOSURE FIX (default on, src/probe.c, hook eboot+0x171783 before the game sums its 225 per-tile
+  luminance terms; code bytes checked): no tile brighter than the frame's median + 0.05 (TLG_EXPOSURE_ROBUST=<d>,
+  off). Cause (owner's Cmd+7 captures + TLG_DIAG_IMAGES dumps): sun-lit smoke/ember particles on Delsin's hands (pass
+  with ps dc01c60a, dual-source blend, HDR up to ~450) enter the exposure compute a8b68717's input -> 2-3 s dark screen.
+  Owner: no more dark moments at the tower. Shots on/off: truck/bridge/Seattle equal within noise, village (fire)
+  59.8 -> 61.8 brightness; FPS equal (truck 81.1/80.9, village 74.6/74.6); chase30/smoke/chase clean.
+  TLG_EXPOSURE_LOG=1 prints the per-frame sums (with clamped tile counts).
