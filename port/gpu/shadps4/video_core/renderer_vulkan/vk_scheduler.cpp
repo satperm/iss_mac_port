@@ -1,4 +1,3 @@
-#include <dlfcn.h>
 #include <unordered_map>
 #include "tlg_perf_trace.h"
 #include "common/cpu_relax.h"
@@ -15,6 +14,7 @@
 #include <unordered_map>
 #ifndef _WIN32
 #include <dlfcn.h>
+#include <execinfo.h>
 #endif
 #include <functional>
 #include <optional>
@@ -556,8 +556,55 @@ void Scheduler::SyncRecording() {
     KickRecording(true);
     TlgStats::WaitTimer timer{TlgStats::sync_recording_ns};
     TlgPerf::Span perf_wait{TlgPerf::Kind::WaitBegin, TlgPerf::Kind::WaitEnd, TlgPerf::Label("recorder")};
-    std::unique_lock lk{recorder_mutex};
-    recorder_idle_cv.wait(lk, [this] { return recorder_queue.empty() && !recorder_busy; });
+    // tlg: TLG_SYNC_STATS=1 (diagnostic): wait time per caller of this function, every 5 s.
+    static const bool sync_stats = [] {
+        const char* env = std::getenv("TLG_SYNC_STATS");
+        return env && *env == '1';
+    }();
+    const u64 start = sync_stats ? clock_gettime_nsec_np(CLOCK_UPTIME_RAW) : 0;
+    {
+        std::unique_lock lk{recorder_mutex};
+        recorder_idle_cv.wait(lk, [this] { return recorder_queue.empty() && !recorder_busy; });
+    }
+    if (sync_stats) {
+        static std::mutex stats_mutex;
+        static std::unordered_map<void*, std::pair<u64, u64>> by_caller; // calls, ns
+        static std::unordered_map<void*, std::array<void*, 3>> chains;
+        static u64 report = start;
+        void* frames[6]{};
+        const int depth = backtrace(frames, 6);
+        // frames[1] = the caller; key on the caller of SubmitExecution-like wrappers too.
+        void* caller = depth > 3 ? frames[3] : __builtin_return_address(0);
+        chains[caller] = {depth > 1 ? frames[1] : nullptr, depth > 2 ? frames[2] : nullptr,
+                          depth > 4 ? frames[4] : nullptr};
+        const u64 now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+        std::scoped_lock lock{stats_mutex};
+        auto& entry = by_caller[caller];
+        ++entry.first;
+        entry.second += now - start;
+        if (now - report >= 5'000'000'000ull) {
+            std::vector<std::pair<void*, std::pair<u64, u64>>> rows(by_caller.begin(), by_caller.end());
+            std::sort(rows.begin(), rows.end(),
+                      [](const auto& a, const auto& b) { return a.second.second > b.second.second; });
+            std::printf("Recorder syncs (5 s):");
+            for (size_t i = 0; i < rows.size() && i < 8; ++i) {
+                Dl_info info{};
+                const char* name = dladdr(rows[i].first, &info) && info.dli_sname ? info.dli_sname : "?";
+                // lib+offset: `atos -o libtlggpu.dylib -l 0 <offset>` names local functions too.
+                const auto& ch = chains[rows[i].first];
+                const auto off = [&](void* a) {
+                    return (unsigned long long)((char*)a - (char*)info.dli_fbase);
+                };
+                std::printf(" | %llu x %.1f ms %s lib+%#llx (via %#llx %#llx, from %#llx)",
+                            (unsigned long long)rows[i].second.first, rows[i].second.second / 1e6,
+                            name, off(rows[i].first), off(ch[0]), off(ch[1]), off(ch[2]));
+            }
+            std::printf("\n");
+            by_caller.clear();
+            chains.clear();
+            report = now;
+        }
+    }
 }
 
 void Scheduler::RecorderThread(std::stop_token stoken) {
