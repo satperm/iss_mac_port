@@ -4763,8 +4763,15 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
     // To emulate storing to explicit mip levels, build a descriptor array with each mip level.
     boost::container::small_vector<u32, 8> image_descriptor_array_sizes;
     // TextureSetMemo: what this call resolves, to remember when the set qualifies.
-    std::array<TextureSetEntry, TextureSet::MaxImages> resolved{};
+    // tlg: written straight into the missed set's slot (a local array of 16 entries, zeroed per
+    // call, was 19% of this function); only this stage's entries are reset. key = 0 below drops a
+    // set that does not qualify.
     bool set_ok = set_slot != nullptr;
+    TextureSetEntry* resolved = set_ok ? set_slot->entries.data() : nullptr;
+    const u32 resolved_size = TextureSet::MaxImages;
+    if (set_ok) {
+        std::fill_n(resolved, std::min<size_t>(stage.images.size(), resolved_size), TextureSetEntry{});
+    }
     // SampleSceneProxies: bindings that may read a reduced scene proxy instead of the native
     // image (normalized sampling only; see Shader::ImageResource::needs_native).
     boost::container::small_vector<bool, 16> binding_proxy_ok;
@@ -4772,8 +4779,8 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
                                 !on_helper && scene_targets->Reduced();
 
     boost::container::small_vector<u8, 16> binding_fb;
-    Shader::RuntimeInfo fb_runtime{};
-    bool fb_runtime_ready = false;
+    // tlg: built on first use (zeroing a RuntimeInfo per call cost ~3% of this function).
+    std::optional<Shader::RuntimeInfo> fb_runtime;
     for (u32 image_index = 0; image_index < stage.images.size(); ++image_index) {
         const auto& image_desc = stage.images[image_index];
         const auto tsharp =
@@ -4815,12 +4822,12 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
         u8 fb_cb = 0;
         if (stage.hw_stage == Shader::HwStage::Fragment && image_desc.fb_fetchable && fb_mrt_mask &&
             FbFetch::Enabled()) {
-            if (!fb_runtime_ready) {
-                fb_runtime.hw_stage = Shader::HwStage::Fragment;
-                FbFetch::FillTargets(Regs(), fb_mrt_mask, fb_runtime.hw.fs.fb_targets);
-                fb_runtime_ready = true;
+            if (!fb_runtime) {
+                fb_runtime.emplace(Shader::RuntimeInfo{});
+                fb_runtime->hw_stage = Shader::HwStage::Fragment;
+                FbFetch::FillTargets(Regs(), fb_mrt_mask, fb_runtime->hw.fs.fb_targets);
             }
-            fb_cb = Shader::FbFetchTarget(image_desc, tsharp, fb_runtime);
+            fb_cb = Shader::FbFetchTarget(image_desc, tsharp, *fb_runtime);
         }
         const Shader::MipStorageFallbackMode mip_fallback_mode = image_desc.mip_fallback_mode;
         // Same as image_desc.NumBindings(stage), without fetching the T# again.
@@ -5035,7 +5042,7 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
                 if (const auto proxy = scene_targets->SampleProxy(image, desc.view_info)) {
                     image.usage.texture = 1u;
                     image_infos.emplace_back(VK_NULL_HANDLE, proxy->view, proxy->layout);
-                    if (set_ok && binding_index < resolved.size()) {
+                    if (set_ok && binding_index < resolved_size) {
                         resolved[binding_index] = {image_id, proxy->view, image.backing,
                                                    desc.view_info.range, true};
                     }
@@ -5089,7 +5096,7 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
                 upscaler->RedirectSampled(image_id, image_view.info, view, layout);
             }
             image_infos.emplace_back(VK_NULL_HANDLE, view, layout);
-            if (set_ok && binding_index < resolved.size()) {
+            if (set_ok && binding_index < resolved_size) {
                 resolved[binding_index] = {image_id, *image_view.image_view, image.backing,
                                            desc.view_info.range};
                 set_ok = !is_storage && !binding.force_general && !binding.is_target;
@@ -5101,7 +5108,6 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
         set_slot->generation = texture_cache.RegistryGeneration();
         set_slot->scene_generation = scene_targets->Generation();
         set_slot->count = static_cast<u32>(stage.images.size());
-        std::copy_n(resolved.begin(), set_slot->count, set_slot->entries.begin());
     } else if (set_slot) {
         set_slot->key = 0;
     }

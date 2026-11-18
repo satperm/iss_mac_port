@@ -61,7 +61,16 @@ struct RenderState {
     u16 num_color_attachments;
 
     bool operator==(const RenderState& other) const noexcept {
-        return std::memcmp(this, &other, sizeof(RenderState)) == 0;
+        // tlg: the size fields, depth and the attachments in use only (a whole-struct memcmp of
+        // ~370 bytes ran up to three times a draw). Unused slots never reach Vulkan.
+        if (std::memcmp(&width, &other.width, 4 * sizeof(u16)) != 0 ||
+            std::memcmp(&depth_stencil_attachment, &other.depth_stencil_attachment,
+                        sizeof(RenderAttachment)) != 0) {
+            return false;
+        }
+        return std::memcmp(color_attachments.data(), other.color_attachments.data(),
+                           std::min<size_t>(num_color_attachments, color_attachments.size()) *
+                               sizeof(RenderAttachment)) == 0;
     }
 };
 static_assert(std::has_unique_object_representations_v<RenderState>);
