@@ -90,7 +90,10 @@ struct Values {
     /// 2026-11-17: on by default for an evening, then off again at the owner's request: the glitch
     /// in the first second after a save loads (objects missing while they compile) spoils the feel
     /// more than the 0.8 s stall it removes. Since #40 the option itself costs no FPS.
-    std::atomic<bool> async_shaders{false};
+    /// 2026-11-19: on again, with TLG_ASYNC_HOLD (VideoOut): a frame in which draws were skipped is not
+    /// shown (the last complete frame stays, at most 45 in a row), so nothing vanishes; the bright
+    /// second after a load is the game's fog blend and happens either way (CLAUDE.md 2026-11-19).
+    std::atomic<bool> async_shaders{true};
     std::atomic<bool> fsr1{false};
     std::atomic<bool> rcas{true};
     std::atomic<int> rcas_strength{60};
