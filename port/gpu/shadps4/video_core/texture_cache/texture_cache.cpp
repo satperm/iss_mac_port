@@ -1498,7 +1498,10 @@ ImageView& TextureCache::FindDepthTarget(ImageId image_id, const ImageDesc& desc
     }
 
     // If there is a stencil attachment, link depth and stencil.
-    if (desc.info.stencil_addr != 0) {
+    // tlg: shadPS4 #5737: not when the depth buffer has no stencil (or it is the depth address
+    // itself): a zero-size stencil image was created and linked (a crash after a minute upstream).
+    if (desc.info.stencil_addr != 0 && desc.info.stencil_addr != desc.info.guest_address &&
+        desc.info.props.has_stencil && desc.info.stencil_size != 0) {
         ImageId stencil_id{};
         ForEachImageInRegion(desc.info.stencil_addr, desc.info.stencil_size,
                              [&](ImageId image_id, Image& image) {
