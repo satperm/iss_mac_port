@@ -1156,3 +1156,10 @@ Instruments (Shader Timeline option) for per-shader cost.
   Owner: no more dark moments at the tower. Shots on/off: truck/bridge/Seattle equal within noise, village (fire)
   59.8 -> 61.8 brightness; FPS equal (truck 81.1/80.9, village 74.6/74.6); chase30/smoke/chase clean.
   TLG_EXPOSURE_LOG=1 prints the per-frame sums (with clamped tile counts).
+- 2026-11-19: THE BRIGHT FLASH AFTER A SAVE LOADS (~0.6-0.8 s, with or without background compilation) is the game's
+  own fog blend: the full-screen fog pass (ps f3ce73fa) gets different constants for ~0.6 s after a load (flash frame
+  c[0..1] 0.155/0.816, c[4..5] 0.22/0.32, c[18] -6.8; settled 0.5/1, 0/0.1, 5.56) and brightens the HDR scene by ~1.4
+  log units (pass-boundary dumps, captures right after a load). Not the eye adaptation: the game's adapted exposure
+  ([caller rbx+0x17264], caller of the tile sum at eboot 0x192f9e; ring of 10 measurements at +0x1eb48..0x1eb60,
+  reset on cuts/loads) sits at its clamp (9.85) the whole time in the chase scene. TLG_EXPOSURE_LOG=1 now prints
+  ring count/capacity, average, adapted, scale (+0x17260), timer (+0x1eb70) and flags.
