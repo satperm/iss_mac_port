@@ -753,7 +753,27 @@ static void exposure_robust(float *values, uint64_t count, uint64_t *clamped) {
     for (uint64_t i = 0; i < count; ++i)
         if (isfinite(values[i]) && values[i] > limit) { values[i] = limit; ++*clamped; }
 }
-static void exposure_sum_log(float *values, uint64_t count) {
+/* The sum's caller (eboot 0x192f9e) keeps the eye adaptation: a ring of the last measurements
+ * ([rbx+0x1eb48] values, +0x1eb50 capacity, +0x1eb54 count, +0x1eb60 their average) and the adapted value
+ * [rbx+0x17264], which moves toward its target by dt * speed * count / capacity; a camera cut or load resets
+ * the ring (count 0), so the old exposure stays on screen until the ring refills. Its rbx is the one the
+ * sum saved at [rbp-0x28]. */
+struct exposure_state { uint32_t capacity, count; float average, adapted, scale, timer; uint32_t flag; };
+static int exposure_caller_state(uint64_t frame, struct exposure_state *st, uint64_t *base) {
+    if (frame < 0x100000) return 0;
+    const uint64_t rbx = *(const uint64_t *)(uintptr_t)(frame - 0x28);
+    if (rbx < 0x100000) return 0;
+    st->capacity = *(const uint32_t *)(uintptr_t)(rbx + 0x1eb50);
+    st->count = *(const uint32_t *)(uintptr_t)(rbx + 0x1eb54);
+    st->average = *(const float *)(uintptr_t)(rbx + 0x1eb60);
+    st->adapted = *(const float *)(uintptr_t)(rbx + 0x17264);
+    st->scale = *(const float *)(uintptr_t)(rbx + 0x17260);
+    st->timer = *(const float *)(uintptr_t)(rbx + 0x1eb70);
+    st->flag = *(const uint8_t *)(uintptr_t)(rbx + 0x1eb6a) | (uint32_t)*(const uint8_t *)(uintptr_t)(rbx + 0x1eb69) << 8;
+    *base = rbx;
+    return 1;
+}
+static void exposure_sum_log(float *values, uint64_t count, uint64_t frame) {
     static uint64_t calls;
     ++calls;
     if (!values || count == 0 || count > (1u << 20)) {
@@ -776,9 +796,15 @@ static void exposure_sum_log(float *values, uint64_t count) {
         if (v > top) { top = v; at = i; }
         if (v < low) low = v;
     }
-    printf("Exposure sum %llu: n=%llu sum=%.5g mean=%.5g min=%.5g max=%.5g@%llu bad=%llu zero=%llu clamped=%llu\n",
+    struct exposure_state st = {0};
+    uint64_t base = 0;
+    const int have = exposure_caller_state(frame, &st, &base);
+    printf("Exposure sum %llu: n=%llu sum=%.5g mean=%.5g min=%.5g max=%.5g@%llu bad=%llu zero=%llu clamped=%llu"
+           " | ring %u/%u avg=%.5g adapted=%.5g scale=%.5g timer=%.4g flags=%x\n",
            (unsigned long long)calls, (unsigned long long)count, sum, sum / (double)count, low, top,
-           (unsigned long long)at, (unsigned long long)bad, (unsigned long long)zero, (unsigned long long)clamped);
+           (unsigned long long)at, (unsigned long long)bad, (unsigned long long)zero, (unsigned long long)clamped,
+           have ? st.count : 0, have ? st.capacity : 0, have ? st.average : 0.0f, have ? st.adapted : 0.0f,
+           have ? st.scale : 0.0f, have ? st.timer : 0.0f, have ? st.flag : 0);
 }
 static void install_exposure_log(uint64_t size) {
     const char *env = getenv("TLG_EXPOSURE_LOG");
@@ -805,6 +831,7 @@ static void install_exposure_log(uint64_t size) {
     }
     EB(0x4c); EB(0x89); EB(0x9c); EB(0x24); EB(0x00); EB(0x02); EB(0x00); EB(0x00); /* mov [rsp+512], r11 */
     EB(0x4c); EB(0x89); EB(0xee);                                        /* mov rsi, r13 */
+    EB(0x48); EB(0x89); EB(0xea);                                        /* mov rdx, rbp (the sum's frame) */
     EB(0x48); EB(0xb8);                                                  /* mov rax, imm64 */
     const uint64_t fn = (uint64_t)(uintptr_t)&exposure_sum_log;
     for (int i = 0; i < 8; ++i) EB(fn >> (8 * i));
