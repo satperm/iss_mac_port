@@ -967,6 +967,13 @@ void Presenter::PresentLoadingFrame() {
     present_scheduler.Finish();
 }
 
+void Presenter::DropFrame(Frame* frame) {
+    // last_submit_frame stays the last presented one (it is what a redraw shows).
+    std::scoped_lock fl{free_mutex};
+    free_queue.push(frame);
+    free_cv.notify_one();
+}
+
 void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame) {
     // Free the frame for reuse
     const auto free_frame = [&] {

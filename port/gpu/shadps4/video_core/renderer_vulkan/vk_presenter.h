@@ -99,6 +99,9 @@ public:
     Frame* PrepareBlankFrame(bool present_thread);
 
     void Present(Frame* frame, bool is_reusing_frame = false, bool is_game_frame = true);
+    /// tlg: TLG_ASYNC_HOLD: frees a prepared frame without presenting it (the screen keeps the last
+    /// presented image).
+    void DropFrame(Frame* frame);
     /// tlg: a black frame with the loading screen (TlgOverlay::SetLoading) only.
     void PresentLoadingFrame();
     Frame* PrepareLastFrame();

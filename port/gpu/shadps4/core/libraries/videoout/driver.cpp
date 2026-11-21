@@ -51,6 +51,7 @@ extern std::atomic<u32> g_tlg_compiles;
 extern std::atomic<u64> g_tlg_capture_ns, g_tlg_async_ns, g_tlg_compile_wait_ns;
 extern std::atomic<u64> g_tlg_snapshot_ns, g_tlg_guest_wait_ns;
 extern std::atomic<u32> g_tlg_pending_draws;
+extern std::atomic<u64> g_tlg_skipped_draws_total;
 extern std::atomic<u64> g_tlg_frames_ahead_wait_ns, g_tlg_free_frame_wait_ns;
 extern std::atomic<u64> g_tlg_present_lock_wait_ns;
 extern std::atomic<int> g_tlg_recorder_cpu_clock;
@@ -389,11 +390,64 @@ int VideoOutDriver::ChangeBufferAttribute(VideoOutPort* port, s32 attributeIndex
 void VideoOutDriver::Flip(const Request& req) {
     // Update HDR status before presenting, then present the frame (tlg: on the swap thread).
     TlgFreeze::flips_shown.fetch_add(1, std::memory_order_relaxed);
-    RunPresenter([this, frame = req.frame, hdr = req.port->is_hdr] {
-        presenter->SetHDR(hdr);
-        presenter->Present(frame);
-        TlgFreeze::presents.fetch_add(1, std::memory_order_relaxed);
-    });
+    // tlg: TLG_ASYNC_HOLD (default on; 0: off): with "Compile new shaders in the background", a frame
+    // in which draws were skipped while their pipelines compile is not shown; the screen keeps the
+    // last complete frame (after a save loads: the loading screen) instead of a picture with parts
+    // missing. At most TLG_ASYNC_HOLD_FRAMES (45) frames in a row, so a pipeline that never builds
+    // cannot freeze the picture. After a long frame (a save loading: >= TLG_ASYNC_HOLD_GAP_MS, 100) the limit is
+    // off for TLG_ASYNC_HOLD_LOAD_MS (2000): the first seconds in a new place compile the most, and 45 frames were
+    // not enough there (the owner saw the hero with faces missing after a load, 2026-11-21).
+    static const bool hold_enabled = [] {
+        const char* env = std::getenv("TLG_ASYNC_HOLD");
+        return !(env && *env == '0');
+    }();
+    static const u32 hold_max = [] {
+        const char* env = std::getenv("TLG_ASYNC_HOLD_FRAMES");
+        return env && *env ? static_cast<u32>(std::strtoul(env, nullptr, 10)) : 45u;
+    }();
+    static u64 skipped_seen = 0;
+    static u32 held_in_row = 0;
+    static u64 held_total = 0;
+    static u64 shown_incomplete = 0;
+    const u64 skipped_now = Vulkan::g_tlg_skipped_draws_total.load(std::memory_order_relaxed);
+    const bool incomplete = skipped_now != skipped_seen;
+    skipped_seen = skipped_now;
+    using HoldClock = std::chrono::steady_clock;
+    static const auto env_ms = [](const char* name, long def) {
+        const char* env = std::getenv(name);
+        return std::chrono::milliseconds(env && *env ? std::strtol(env, nullptr, 10) : def);
+    };
+    static const auto hold_gap = env_ms("TLG_ASYNC_HOLD_GAP_MS", 100);
+    static const auto hold_load = env_ms("TLG_ASYNC_HOLD_LOAD_MS", 2000);
+    static HoldClock::time_point last_flip{}, load_until{};
+    const auto flip_now = HoldClock::now();
+    if (last_flip != HoldClock::time_point{} && flip_now - last_flip >= hold_gap) {
+        load_until = flip_now + hold_load;
+    }
+    last_flip = flip_now;
+    const bool after_load = flip_now < load_until;
+    const bool hold =
+        hold_enabled && incomplete && (after_load || held_in_row < hold_max) && req.frame;
+    if (hold) {
+        ++held_in_row;
+        if ((++held_total & 63) == 1) {
+            std::printf("Async hold: %llu frames with skipped draws kept off the screen so far, %llu shown\n",
+                        static_cast<unsigned long long>(held_total),
+                        static_cast<unsigned long long>(shown_incomplete));
+        }
+        RunPresenter([this, frame = req.frame] { presenter->DropFrame(frame); });
+    } else {
+        if (incomplete && req.frame && (++shown_incomplete & 15) == 1) {
+            std::printf("Async hold: %llu frames with skipped draws shown (limit reached)\n",
+                        static_cast<unsigned long long>(shown_incomplete));
+        }
+        held_in_row = 0;
+        RunPresenter([this, frame = req.frame, hdr = req.port->is_hdr] {
+            presenter->SetHDR(hdr);
+            presenter->Present(frame);
+            TlgFreeze::presents.fetch_add(1, std::memory_order_relaxed);
+        });
+    }
     Vulkan::FrameCapture::OnFlip(req.index >= 0 ? req.port->buffer_slots[req.index].address_left
                                                 : 0);
 
