@@ -234,6 +234,7 @@ Values& Get() {
 void Load() {
     auto& v = Get();
     if (FILE* file = std::fopen(Path(), "r")) {
+        bool async_hold_seen = false;
         char line[1024]; // key_map can be long
         while (std::fgets(line, sizeof(line), file)) {
             std::string text{line};
@@ -242,9 +243,19 @@ void Load() {
             if (text.empty() || text[0] == '#' || eq == std::string::npos) {
                 continue;
             }
+            if (text.compare(0, eq, "async_hold") == 0) {
+                async_hold_seen = true;
+                continue;
+            }
             Set(v, text.substr(0, eq), text.substr(eq + 1));
         }
         std::fclose(file);
+        // tlg 0.1.16: background compilation is on by default again (with frames held while draws are skipped).
+        // Files written before that (no async_hold key) mostly hold the old default 0, not a choice: on, once.
+        if (!async_hold_seen && !v.async_shaders) {
+            v.async_shaders = true;
+            std::puts("Settings: background shader compilation switched on (new default in 0.1.16)");
+        }
         std::printf("Settings: %s\n", Path());
     }
     // Environment overrides (scripts, A/B tests).
@@ -391,7 +402,7 @@ void Save() {
                  int(v.overlay_items >> 6 & 1), v.overlay_scale.load(), v.overlay_corner.load(),
                  v.overlay_opacity.load(), v.overlay_layout.load(), v.menu_tab.load());
     std::fprintf(file,
-                 "display_mode=%s\nvsync=%d\nfps_limit=%d\nasync_shaders=%d\n"
+                 "display_mode=%s\nvsync=%d\nfps_limit=%d\nasync_shaders=%d\nasync_hold=1\n"
                  "fsr1=%d\nrcas=%d\nrcas_strength=%d\nframes_queued=%d\n"
                  "render_resolution=%s\nengine_fps=%d\ndeferred_readback=%d\nstale_readback=%d\n"
                  "restart_unconfirmed=%d\n",
