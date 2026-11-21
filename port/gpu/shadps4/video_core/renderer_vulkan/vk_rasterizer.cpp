@@ -575,8 +575,38 @@ bool Rasterizer::IsGpuSideThreadId(u32 tid) const {
     return tid == liverpool->GetGpuCommandProcessorThreadId();
 }
 
+namespace {
+bool PendingPagesEnabled() {
+    static const bool on = [] {
+        const char* env = std::getenv("TLG_PENDING_PAGES");
+        return !(env && *env == '0');
+    }();
+    return on;
+}
+constexpr u64 PendingPageShift = 12;
+constexpr u64 PendingPagesMaxBytes = 256_KB;
+} // namespace
+
 void Rasterizer::NotePendingGpuWrite(VAddr address, u64 size) {
     if (!draw_pipe || !size) {
+        return;
+    }
+    if (PendingPagesEnabled() && size <= PendingPagesMaxBytes) {
+        const u64 position = draw_pipe->Head();
+        for (u64 page = address >> PendingPageShift; page <= (address + size - 1) >> PendingPageShift; ++page) {
+            pending_pages[page] = position;
+        }
+        pending_pages_min = std::min<VAddr>(pending_pages_min, address);
+        pending_pages_max = std::max<VAddr>(pending_pages_max, address + size);
+        // Drop pages whose writes the recording thread has done, now and then.
+        if ((++pending_notes & 255) == 0 && pending_pages.size() > 4096) {
+            const u64 done = draw_pipe->Consumed();
+            std::erase_if(pending_pages, [&](const auto& entry) { return done >= entry.second; });
+            if (pending_pages.empty()) {
+                pending_pages_min = ~VAddr{0};
+                pending_pages_max = 0;
+            }
+        }
         return;
     }
     // tlg: entries were only dropped by PendingWriteOverlaps, and only on checks inside the
@@ -616,6 +646,14 @@ void Rasterizer::NotePendingGpuWrite(VAddr address, u64 size) {
 }
 
 bool Rasterizer::PendingWriteOverlaps(VAddr address, u64 size) {
+    if (!pending_pages.empty() && address < pending_pages_max && address + size > pending_pages_min) {
+        const u64 done = draw_pipe->Consumed();
+        for (u64 page = address >> PendingPageShift; page <= (address + size - 1) >> PendingPageShift; ++page) {
+            if (const auto it = pending_pages.find(page); it != pending_pages.end() && done < it->second) {
+                return true;
+            }
+        }
+    }
     if (pending_writes.empty() || address >= pending_max || address + size <= pending_min) {
         return false;
     }

@@ -12,6 +12,7 @@
 
 #include <chrono>
 #include <optional>
+#include <unordered_map>
 #include <source_location>
 
 #include "common/recursive_lock.h"
@@ -724,6 +725,11 @@ private:
         u64 position;
     };
     std::vector<PendingWrite> pending_writes;
+    /// tlg: TLG_PENDING_PAGES (default on): writes up to 256 KiB are kept per 4 KiB page (page ->
+    /// position) instead of in pending_writes, so a constant buffer check looks at its 1-2 pages
+    /// rather than scanning hundreds of entries (15% of the GPU command thread on the truck).
+    std::unordered_map<u64, u64> pending_pages;
+    VAddr pending_pages_min = ~VAddr{0}, pending_pages_max = 0;
     VAddr pending_min = ~VAddr{0}, pending_max = 0; ///< bounds of pending_writes
     u32 pending_notes = 0; ///< tlg: NotePendingGpuWrite calls, for its pruning
     u32 pending_checks = 0;
