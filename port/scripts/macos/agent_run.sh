@@ -4,7 +4,8 @@
 #
 #   TLG_GAME_DIR=... bash port/scripts/macos/agent_run.sh <truck|bridge|<user dir>> <label> <seconds> [VAR=value ...]
 #
-# Measurements: the Metal Performance HUD is forced off (MTL_HUD_ENABLED=0; it costs FPS and adds noise).
+# Measurements: no real-time HUDs: the Metal Performance HUD and the port's FPS overlay are forced off
+# (MTL_HUD_ENABLED=0 TLG_SHOW_FPS=0; they cost FPS and add noise).
 # Never hangs: waits (bounded) for an earlier game to exit, the run itself is bounded by diag_run.sh's
 # timeout, and this script gives up after <seconds> + 180 s whatever happens. Prints the median FPS of
 # the last 40 s, crashes, compute-queue and fence stats. SHOT_SECONDS / PAD_SCRIPT pass through.
@@ -44,7 +45,7 @@ if [[ ${AGENT_APP:-1} != 0 && -x $bundle ]]; then
 fi
 started=$(date '+%Y-%m-%d %H:%M:%S')
 SHOT_SECONDS=${SHOT_SECONDS:-0} timeout $((secs + 180)) bash scripts/macos/diag_run.sh "a-$label" "$secs" \
-    TLG_USER_DIR="$PWD/$user" MTL_HUD_ENABLED=0 TLG_HOST_INPUT=0 TLG_ACB_PACKETS=1 TLG_FENCE_LATENCY=1 ${app_args[@]+"${app_args[@]}"} "$@" >/dev/null 2>&1
+    TLG_USER_DIR="$PWD/$user" MTL_HUD_ENABLED=0 TLG_SHOW_FPS=0 TLG_HOST_INPUT=0 TLG_ACB_PACKETS=1 TLG_FENCE_LATENCY=1 ${app_args[@]+"${app_args[@]}"} "$@" >/dev/null 2>&1
 echo "exit $?"
 bash scripts/macos/wait_game.sh 120 || echo "WARNING: the game is still running after the run"
 d=$(ls -td out/diag/*-a-"$label" | head -1)
