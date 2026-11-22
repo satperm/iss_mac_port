@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <chrono>
+#include <cstring>
 #include <cstdlib>
 #include <array>
 #include <span>
@@ -142,7 +143,126 @@ void PushChanged(vk::CommandBuffer cmdbuf, vk::PipelineBindPoint bind_point, vk:
         cmdbuf.pushDescriptorSetKHR(bind_point, layout, 0, std::span<const vk::WriteDescriptorSet>{changed.data(), changed.size()});
     }
 }
+bool PushTemplateEnabled() {
+#ifdef __APPLE__
+    static const bool enabled = [] {
+        const char* env = std::getenv("TLG_MAC_PUSH_TEMPLATE");
+        return !(env && *env == '0');
+    }();
+    return enabled;
+#else
+    return false;
+#endif
+}
+
+bool IsBufferType(vk::DescriptorType t) {
+    return t == vk::DescriptorType::eUniformBuffer || t == vk::DescriptorType::eStorageBuffer ||
+           t == vk::DescriptorType::eUniformBufferDynamic || t == vk::DescriptorType::eStorageBufferDynamic;
+}
+
+bool IsTexelType(vk::DescriptorType t) {
+    return t == vk::DescriptorType::eUniformTexelBuffer || t == vk::DescriptorType::eStorageTexelBuffer ||
+           t == vk::DescriptorType::eInlineUniformBlock;
+}
+
+union PushPayload {
+    PushPayload() : buffer{} {}
+    vk::DescriptorBufferInfo buffer;
+    vk::DescriptorImageInfo image;
+};
+static_assert(sizeof(vk::DescriptorBufferInfo) == sizeof(vk::DescriptorImageInfo));
+static_assert(sizeof(PushPayload) == sizeof(vk::DescriptorBufferInfo));
 } // namespace
+
+// tlg (macOS, default on; TLG_MAC_PUSH_TEMPLATE=0: write-based partial pushes, g/c: graphics/compute only):
+// MoltenVK's write-based push (MVKCmdPushDescriptorSet::setContent) copies every write and
+// its infos into separate allocations; a template push copies one blob. The template is made per
+// pipeline and shape of the writes (bindings, counts, types), which is nearly always fixed.
+bool Pipeline::PushWithTemplate(Scheduler& scheduler, vk::PipelineLayout layout,
+                                std::span<const vk::WriteDescriptorSet> writes) const {
+    static const char mode = [] {
+        const char* env = std::getenv("TLG_MAC_PUSH_TEMPLATE");
+        return env ? *env : '0';
+    }();
+    if ((mode == 'g' && IsCompute()) || (mode == 'c' && !IsCompute())) {
+        return false;
+    }
+    u64 shape = 1469598103934665603ull;
+    size_t count = 0;
+    for (const auto& w : writes) {
+        // The write pool reuses structs: only the pointer the descriptor type selects is valid.
+        const bool is_buffer = IsBufferType(w.descriptorType);
+        if (IsTexelType(w.descriptorType) || (is_buffer ? !w.pBufferInfo : !w.pImageInfo)) {
+            return false;
+        }
+        const u64 key[4] = {w.dstBinding, w.dstArrayElement, w.descriptorCount, u64(w.descriptorType)};
+        for (const u64 k : key) {
+            shape = (shape ^ k) * 1099511628211ull;
+        }
+        count += w.descriptorCount;
+    }
+    VkDescriptorUpdateTemplate tmpl{};
+    {
+        std::scoped_lock lock{push_template_mutex};
+        for (const auto& [s, t] : push_templates) {
+            if (s == shape) {
+                tmpl = *t;
+                break;
+            }
+        }
+        if (!tmpl) {
+            if (push_templates.size() >= 8) {
+                return false;
+            }
+            boost::container::small_vector<vk::DescriptorUpdateTemplateEntry, 32> entries;
+            size_t offset = 0;
+            for (const auto& w : writes) {
+                entries.push_back({
+                    .dstBinding = w.dstBinding,
+                    .dstArrayElement = w.dstArrayElement,
+                    .descriptorCount = w.descriptorCount,
+                    .descriptorType = w.descriptorType,
+                    .offset = offset,
+                    .stride = sizeof(PushPayload),
+                });
+                offset += w.descriptorCount * sizeof(PushPayload);
+            }
+            const vk::DescriptorUpdateTemplateCreateInfo ci = {
+                .descriptorUpdateEntryCount = static_cast<u32>(entries.size()),
+                .pDescriptorUpdateEntries = entries.data(),
+                .templateType = vk::DescriptorUpdateTemplateType::ePushDescriptorsKHR,
+                .pipelineBindPoint = IsCompute() ? vk::PipelineBindPoint::eCompute
+                                                 : vk::PipelineBindPoint::eGraphics,
+                .pipelineLayout = layout,
+                .set = 0,
+            };
+            auto [result, created] = instance.GetDevice().createDescriptorUpdateTemplateUnique(ci);
+            if (result != vk::Result::eSuccess) {
+                return false;
+            }
+            tmpl = *created;
+            push_templates.emplace_back(shape, std::move(created));
+        }
+    }
+    boost::container::small_vector<PushPayload, 64> payload(count);
+    size_t i = 0;
+    for (const auto& w : writes) {
+        if (IsBufferType(w.descriptorType)) {
+            std::memcpy(&payload[i], w.pBufferInfo, w.descriptorCount * sizeof(PushPayload));
+        } else {
+            for (u32 k = 0; k < w.descriptorCount; ++k) {
+                payload[i + k].image = w.pImageInfo[k];
+            }
+        }
+        i += w.descriptorCount;
+    }
+    scheduler.ReserveRecordData(payload.size() * sizeof(PushPayload) + 64);
+    const auto recorded = scheduler.RecordData(std::span<const PushPayload>{payload.data(), payload.size()});
+    scheduler.Record([tmpl, layout, data = recorded.data()](vk::CommandBuffer cmdbuf) {
+        cmdbuf.pushDescriptorSetWithTemplateKHR(vk::DescriptorUpdateTemplate{tmpl}, layout, 0, static_cast<const void*>(data));
+    });
+    return true;
+}
 
 void Pipeline::BindResources(DescriptorWrites& set_writes, u32 count,
                              const Shader::PushData& push_data) const {
@@ -224,6 +344,9 @@ void Pipeline::BindResources(Scheduler& scheduler, DescriptorWrites& set_writes,
         }
     }
 
+    if (uses_push_descriptors && PushTemplateEnabled() && PushWithTemplate(scheduler, layout, writes)) {
+        return;
+    }
     if (uses_push_descriptors) {
         if (!scheduler.IsRecordingDeferred()) {
             scheduler.Record([bind_point, layout, writes](vk::CommandBuffer cmdbuf) {

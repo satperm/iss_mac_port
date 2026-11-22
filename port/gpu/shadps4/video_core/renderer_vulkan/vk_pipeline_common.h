@@ -126,6 +126,12 @@ protected:
     std::array<const Shader::Info*, Shader::MaxStageTypes> stages{};
     bool uses_push_descriptors{};
     bool is_compute;
+
+    // tlg (macOS): descriptor update templates for pushes (shadPS4 #5731 idea), TLG_MAC_PUSH_TEMPLATE=1.
+    bool PushWithTemplate(Scheduler& scheduler, vk::PipelineLayout layout,
+                          std::span<const vk::WriteDescriptorSet> writes) const;
+    mutable std::mutex push_template_mutex;
+    mutable std::vector<std::pair<u64, vk::UniqueDescriptorUpdateTemplate>> push_templates;
 };
 
 } // namespace Vulkan
