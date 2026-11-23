@@ -227,7 +227,7 @@ struct LauncherView: View {
                     Picker("Smoke and sparks", selection: $model.settings.particles) {
                         ForEach(ParticleMode.allCases) { Text($0.label).tag($0) }
                     }
-                    Text("Smoke, sparks, neon and rain are simulated on the GPU. Auto: shared memory (on, the default). Off: no GPU particles, fastest. All particles: exactly as on the PS4, much slower.")
+                    Text("Smoke, sparks, neon and rain are simulated on the GPU. Auto: shared memory (on, the default, fastest). Off: no GPU particles, but slower on most Macs (the game's memory is tracked page by page) and it crashed on macOS 26. All particles: exactly as on the PS4, much slower.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Renderer") {

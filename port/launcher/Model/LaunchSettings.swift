@@ -156,7 +156,9 @@ enum PerformancePreset: String, CaseIterable, Identifiable {
         case .slowest: .p50
         }
     }
-    var particles: ParticleMode { self == .slowest ? .off : .auto }
+    /// Auto for every preset: Off (no shared memory, write-tracked guest pages) measured 23-25% slower on an
+    /// M3 Max (truck 85 -> 65, village 77 -> 59) and crashed Rosetta on macOS 26.6 (issue #71).
+    var particles: ParticleMode { .auto }
     var shadowDetail: ShadowDetail { .full }
 }
 
