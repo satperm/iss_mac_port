@@ -115,8 +115,8 @@ ParticlesHalf::ParticlesHalf(const Instance& instance_, Scheduler& scheduler_)
 
 ParticlesHalf::~ParticlesHalf() {
     if (runs) {
-        std::printf("Particles: %llu half-resolution runs, %llu draws\n",
-                    (unsigned long long)runs, (unsigned long long)draws);
+        std::printf("Particles: %llu half-resolution runs, %llu draws, %llu at full size\n",
+                    (unsigned long long)runs, (unsigned long long)draws, (unsigned long long)skipped);
     }
 }
 
@@ -225,6 +225,12 @@ bool ParticlesHalf::Redirect(RenderState& state, std::array<float, 2>& target_sc
         color.is_clear || format != vk::Format::eR16G16B16A16Sfloat ||
         target_scale[0] != 1.0f || target_scale[1] != 1.0f || state.width < 2 ||
         state.height < 2) {
+        if (skipped++ == 0) {
+            std::printf("Particles: a candidate draw stays at full size (layers %u, depth %d, "
+                        "clear %d, scale %.2f, %ux%u)\n",
+                        state.num_layers, int(state.depth_stencil_attachment.has_depth),
+                        int(color.is_clear), target_scale[0], state.width, state.height);
+        }
         return false;
     }
     if (active && (target_view != color.image_view || target_width != state.width ||
@@ -282,9 +288,9 @@ bool ParticlesHalf::Redirect(RenderState& state, std::array<float, 2>& target_sc
         static u64 window_runs = 0, window_draws = 0;
         const auto now = std::chrono::steady_clock::now();
         if (now - window >= std::chrono::seconds(10)) {
-            std::printf("Particles: %llu half-resolution runs, %llu draws in the last 10 s\n",
+            std::printf("Particles: %llu half-resolution runs, %llu draws in the last 10 s (%llu at full size so far)\n",
                         (unsigned long long)(runs - window_runs),
-                        (unsigned long long)(draws - window_draws));
+                        (unsigned long long)(draws - window_draws), (unsigned long long)skipped);
             window = now;
             window_runs = runs;
             window_draws = draws;

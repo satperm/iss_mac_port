@@ -76,6 +76,7 @@ private:
     std::array<std::pair<vk::Format, vk::UniquePipeline>, 4> pipelines{};
 
     u64 runs = 0, draws = 0;
+    u64 skipped = 0; ///< candidate draws drawn at full size (they keep the adjusted alpha blend)
 };
 
 } // namespace Vulkan
