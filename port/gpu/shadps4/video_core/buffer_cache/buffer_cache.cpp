@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <bit>
 #include <cstdlib>
+#include <sys/sysctl.h>
 #include <magic_enum/magic_enum.hpp>
 #include "tlg_copy.h"
 #include "tlg_toggles.h"
@@ -218,10 +219,25 @@ void BufferCache::SmallGuestCopy(const TlgCopy::Item& item) {
 }
 
 void BufferCache::ExtendWriteFault(VAddr device_addr) {
+    // tlg: TLG_FAULT_WINDOW KiB (4-1024); 1024 on Macs with 24 GB or less, 256 on others
+    // (Bloodborne port #161: on a 16 GB M3 the game waited 30-55 ms a frame on these faults
+    // with 256; 1024 gave 26.6 instead of 20.5 FPS and a third fewer faults).
     static const u64 window = [] {
+        u64 memsize = 0;
+        size_t memsize_size = sizeof memsize;
+        if (sysctlbyname("hw.memsize", &memsize, &memsize_size, nullptr, 0) != 0) {
+            memsize = 0;
+        }
+        const bool small_mac = memsize != 0 && memsize <= (24ULL << 30);
         const char* env = std::getenv("TLG_FAULT_WINDOW");
-        const u64 kib = env ? std::strtoull(env, nullptr, 10) : 256;
-        return std::bit_ceil(std::clamp<u64>(kib, 4, 1024)) * 1024;
+        const u64 kib = env && *env ? std::strtoull(env, nullptr, 10) : small_mac ? 1024 : 256;
+        const u64 bytes = std::bit_ceil(std::clamp<u64>(kib, 4, 1024)) * 1024;
+        std::printf("Write faults: unprotect %llu KiB around each (%s)\n",
+                    static_cast<unsigned long long>(bytes / 1024),
+                    env && *env ? "TLG_FAULT_WINDOW"
+                    : small_mac ? "a Mac with 24 GB or less"
+                                : "default");
+        return bytes;
     }();
     if (window <= TRACKER_BYTES_PER_PAGE || TlgToggle::Disabled(TlgToggle::FaultWindow)) {
         return;
