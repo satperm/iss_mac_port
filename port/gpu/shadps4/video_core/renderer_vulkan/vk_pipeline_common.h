@@ -134,4 +134,8 @@ protected:
     mutable std::vector<std::pair<u64, vk::UniqueDescriptorUpdateTemplate>> push_templates;
 };
 
+/// tlg: on the recording thread, after a host pass pushed descriptors with its own layout: the
+/// next guest push sends every binding again (partial pushes assume their earlier bindings).
+void ForgetPushedDescriptors();
+
 } // namespace Vulkan

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <vector>
+#include <array>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -411,7 +412,12 @@ void VideoOutDriver::Flip(const Request& req) {
     static u64 shown_incomplete = 0;
     const u64 skipped_now = Vulkan::g_tlg_skipped_draws_total.load(std::memory_order_relaxed);
     const bool incomplete = skipped_now != skipped_seen;
+    const u64 skipped_frame = skipped_now - skipped_seen;
     skipped_seen = skipped_now;
+    // tlg: hold statistics: lengths of held runs (1, 2-3, 4-7, 8-15, 16+ frames) and skipped draws
+    // per held frame (1, 2-3, 4-7, 8-15, 16+), printed with the running totals.
+    static std::array<u64, 5> run_lengths{}, skipped_per_held{};
+    const auto bucket = [](u64 n) { return n <= 1 ? 0 : n <= 3 ? 1 : n <= 7 ? 2 : n <= 15 ? 3 : 4; };
     using HoldClock = std::chrono::steady_clock;
     static const auto env_ms = [](const char* name, long def) {
         const char* env = std::getenv(name);
@@ -430,16 +436,27 @@ void VideoOutDriver::Flip(const Request& req) {
         hold_enabled && incomplete && (after_load || held_in_row < hold_max) && req.frame;
     if (hold) {
         ++held_in_row;
+        ++skipped_per_held[bucket(skipped_frame)];
         if ((++held_total & 63) == 1) {
-            std::printf("Async hold: %llu frames with skipped draws kept off the screen so far, %llu shown\n",
+            std::printf("Async hold: %llu frames with skipped draws kept off the screen so far, %llu shown;"
+                        " runs 1/2-3/4-7/8-15/16+: %llu %llu %llu %llu %llu;"
+                        " skipped draws per held frame 1/2-3/4-7/8-15/16+: %llu %llu %llu %llu %llu\n",
                         static_cast<unsigned long long>(held_total),
-                        static_cast<unsigned long long>(shown_incomplete));
+                        static_cast<unsigned long long>(shown_incomplete),
+                        (unsigned long long)run_lengths[0], (unsigned long long)run_lengths[1],
+                        (unsigned long long)run_lengths[2], (unsigned long long)run_lengths[3],
+                        (unsigned long long)run_lengths[4], (unsigned long long)skipped_per_held[0],
+                        (unsigned long long)skipped_per_held[1], (unsigned long long)skipped_per_held[2],
+                        (unsigned long long)skipped_per_held[3], (unsigned long long)skipped_per_held[4]);
         }
         RunPresenter([this, frame = req.frame] { presenter->DropFrame(frame); });
     } else {
         if (incomplete && req.frame && (++shown_incomplete & 15) == 1) {
             std::printf("Async hold: %llu frames with skipped draws shown (limit reached)\n",
                         static_cast<unsigned long long>(shown_incomplete));
+        }
+        if (held_in_row) {
+            ++run_lengths[bucket(held_in_row)];
         }
         held_in_row = 0;
         RunPresenter([this, frame = req.frame, hdr = req.port->is_hdr] {

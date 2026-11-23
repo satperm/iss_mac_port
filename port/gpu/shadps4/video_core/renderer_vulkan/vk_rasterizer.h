@@ -25,6 +25,7 @@
 #include "video_core/renderer_vulkan/vk_constant_ring.h"
 #include "video_core/renderer_vulkan/vk_scene_resolution.h"
 #include "video_core/renderer_vulkan/vk_object_motion.h"
+#include "video_core/renderer_vulkan/vk_particles_half.h"
 #include "video_core/renderer_vulkan/vk_draw_pipe.h"
 #include "video_core/renderer_vulkan/vk_draw_prep.h"
 #include "video_core/renderer_vulkan/vk_temporal_upscaler.h"
@@ -252,6 +253,9 @@ private:
 
     void PrepareRenderState(const GraphicsPipeline* pipeline);
     RenderState BeginRendering(const GraphicsPipeline* pipeline);
+    /// tlg: TLG_PARTICLES_HALF: sends a candidate draw to the half-size image (true), or
+    /// composites an open run before any other draw.
+    bool RedirectParticles(const GraphicsPipeline* pipeline, RenderState& state);
     /// tlg: TLG_DRAW_COUNT_LOG=1: per flip, draws by render-target count (see LogFrameDraws).
     void CountDraw(const RenderState& state, const GraphicsPipeline* pipeline);
 
@@ -487,6 +491,7 @@ private:
     std::unique_ptr<SceneTargets> scene_targets;
     bool scene_started = false;
     std::unique_ptr<ObjectMotion> object_motion;
+    std::unique_ptr<ParticlesHalf> particles_half; ///< tlg: TLG_PARTICLES_HALF=1
     bool motion_draw = false;
     u64 motion_geometry{};    ///< vertex-stream identity of the current direct draw
     bool gbuffer_draw = false;

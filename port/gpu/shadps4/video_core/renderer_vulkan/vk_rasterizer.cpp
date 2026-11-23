@@ -95,6 +95,11 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
     scene_targets = std::make_unique<SceneTargets>(instance, scheduler, runtime, texture_cache);
     // Object motion first: it fixes the buffer addresses the motion shader variants embed.
     object_motion = std::make_unique<ObjectMotion>(instance, scheduler);
+    if (ParticlesHalf::Enabled()) {
+        particles_half = std::make_unique<ParticlesHalf>(instance, scheduler);
+        scheduler.SetEndRenderingHook(
+            [p = particles_half.get()](const RenderState& ended) { p->OnEndRendering(ended); });
+    }
     camera_motion = std::make_unique<CameraMotion>(instance, scheduler, texture_cache, runtime);
     camera_motion->SetObjectMotion(object_motion.get());
     upscaler = std::make_unique<TemporalUpscaler>(instance, scheduler, texture_cache, runtime,
@@ -140,6 +145,7 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
 
 Rasterizer::~Rasterizer() {
     scheduler.SetCompanion(nullptr);
+    scheduler.SetEndRenderingHook({});
     if (acb_fence_thread.joinable()) {
         acb_fence_thread.request_stop();
         acb_fence_cv.notify_all();
@@ -1729,7 +1735,8 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     if (!bound) {
         return;
     }
-    const auto state = BeginRendering(pipeline);
+    auto state = BeginRendering(pipeline);
+    const bool particles_redirected = particles_half && RedirectParticles(pipeline, state);
     // tlg: before anything of the draw itself is recorded, which has to go with it.
     SubmitIfWorkPiledUp(state);
     scheduler.CountWork();
@@ -1853,6 +1860,9 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
         RecordFrameInputs(pipeline, draw_prepared, &state, is_indexed, index_offset, nullptr);
     }
     run_timer.Mark(6);
+    if (particles_redirected) {
+        particles_half->EnsureRun();
+    }
     scheduler.BeginRendering(state);
     if (!pass_label.empty()) [[unlikely]] {
         scheduler.Record([label = std::move(pass_label)](vk::CommandBuffer cmdbuf) {
@@ -2305,7 +2315,8 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
             quad_indices = QuadIndexBuffer();
         }
     }
-    const auto state = BeginRendering(pipeline);
+    auto state = BeginRendering(pipeline);
+    const bool particles_redirected = particles_half && RedirectParticles(pipeline, state);
     // tlg: before anything of the draw itself is recorded, which has to go with it.
     SubmitIfWorkPiledUp(state);
     scheduler.CountWork();
@@ -2391,6 +2402,9 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     MarkPass(pipeline, state);
     if (FrameRecord::IsRecording()) [[unlikely]] {
         RecordFrameInputs(pipeline, nullptr, &state, is_indexed, 0, &indirect);
+    }
+    if (particles_redirected) {
+        particles_half->EnsureRun();
     }
     scheduler.BeginRendering(state);
     if (!pass_label.empty()) [[unlikely]] {
@@ -5502,6 +5516,19 @@ void Rasterizer::LogFrameDraws() {
     frame_shaders.clear();
     frame_targets.clear();
     frame_draws = frame_mrt_draws = frame_depth_draws = 0;
+}
+
+bool Rasterizer::RedirectParticles(const GraphicsPipeline* pipeline, RenderState& state) {
+    if (ParticlesHalf::Candidate(pipeline->GetGraphicsKey(),
+                                 pipeline->GetStage(Shader::SwStage::Fragment).pgm_hash) &&
+        cb_descs[0].first) {
+        const auto& image = texture_cache.GetImage(cb_descs[0].first);
+        if (particles_half->Redirect(state, target_scale, image.backing->image.image_ci.format)) {
+            return true;
+        }
+    }
+    particles_half->Close();
+    return false;
 }
 
 RenderState Rasterizer::BeginRendering(const GraphicsPipeline* pipeline) {

@@ -159,6 +159,8 @@ enum PerformancePreset: String, CaseIterable, Identifiable {
     /// Auto for every preset: Off (no shared memory, write-tracked guest pages) measured 23-25% slower on an
     /// M3 Max (truck 85 -> 65, village 77 -> 59) and crashed Rosetta on macOS 26.6 (issue #71).
     var particles: ParticleMode { .auto }
+    /// Fire and smoke at half resolution on slower Macs (village 4K: Lower 32.1 -> 36.4 FPS with it).
+    var particlesHalf: Bool { self != .standard }
     var shadowDetail: ShadowDetail { .full }
 }
 
@@ -179,6 +181,8 @@ struct LaunchSettings: Equatable {
     var holdFrameRate = HoldFrameRate.off
     var shadowDetail = ShadowDetail.full
     var particles = ParticleMode.auto
+    /// TLG_PARTICLES_HALF: fire and smoke drawn at half resolution (GPU-bound Macs).
+    var particlesHalf = false
     var textLanguage = "1"
     var voiceLanguage = ""
     var gpuProcess = true
@@ -199,7 +203,7 @@ struct LaunchSettings: Equatable {
         get {
             PerformancePreset.allCases.first {
                 $0.quality == quality && $0.fpsCap == fpsCap && $0.renderScale == renderScale && $0.particles == particles
-                    && $0.shadowDetail == shadowDetail
+                    && $0.shadowDetail == shadowDetail && $0.particlesHalf == particlesHalf
             }
         }
         set {
@@ -209,6 +213,7 @@ struct LaunchSettings: Equatable {
             renderScale = p.renderScale
             particles = p.particles
             shadowDetail = p.shadowDetail
+            particlesHalf = p.particlesHalf
         }
     }
 
@@ -238,6 +243,7 @@ struct LaunchSettings: Equatable {
         textLanguage = value("TLG_LANGUAGE").flatMap { code in GameLanguage.text.contains { $0.code == code } ? code : nil } ?? "1"
         voiceLanguage = value("TLG_AUDIO_LANGUAGE") ?? ""
         particles = value("TLG_PARTICLES").flatMap(ParticleMode.init(rawValue:)) ?? .auto
+        particlesHalf = flag("TLG_PARTICLES_HALF", false)
         gpuProcess = flag("TLG_GPU_PROCESS", true)
         keys = KeyMap(string: value(KeyMap.variable))
     }
@@ -263,6 +269,7 @@ struct LaunchSettings: Equatable {
         set("TLG_QUALITY_TARGET_FPS", holdFrameRate == .off ? nil : holdFrameRate.rawValue)
         set("TLG_SHADOW_CASCADES", shadowDetail == .full ? nil : shadowDetail.rawValue)
         set("TLG_PARTICLES", particles == .auto ? nil : particles.rawValue)
+        set("TLG_PARTICLES_HALF", particlesHalf ? "1" : nil)
         set("TLG_LANGUAGE", textLanguage)
         set("TLG_AUDIO_LANGUAGE", voiceLanguage.isEmpty ? nil : voiceLanguage)
         set("TLG_GPU_PROCESS", gpuProcess ? nil : "0")
