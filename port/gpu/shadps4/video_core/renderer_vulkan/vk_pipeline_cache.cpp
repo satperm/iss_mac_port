@@ -18,6 +18,7 @@
 #include <thread>
 #include <xxhash.h>
 #include "common/backports.h"
+#include "video_core/renderer_vulkan/vk_particles_half.h"
 #include "tlg_threads.h"
 #include "tlg_region.h"
 
@@ -1686,6 +1687,11 @@ bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
         }
     }
 
+    // tlg: TLG_PARTICLES_HALF: the half-resolution variant's blend (alpha = transmittance).
+    const auto* ps_info = sel.infos[static_cast<u32>(Shader::SwStage::Fragment)];
+    if (ps_info && ParticlesHalf::Candidate(key, ps_info->pgm_hash)) {
+        ParticlesHalf::AdjustKey(key);
+    }
     return true;
 }
 

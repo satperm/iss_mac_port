@@ -104,6 +104,14 @@ u64 HashWrite(const vk::WriteDescriptorSet& w) {
     return h | 1; // never 0 (0 = not pushed yet)
 }
 
+struct PushState {
+    VkCommandBuffer cmdbuf{};
+    VkPipelineLayout layout{};
+    vk::PipelineBindPoint bind_point{};
+    std::array<u64, 128> hashes{};
+};
+thread_local PushState push_state;
+
 /// Pushes the writes whose bindings changed since the previous push on this command buffer and
 /// layout (runs on the Vulkan recording thread).
 void PushChanged(vk::CommandBuffer cmdbuf, vk::PipelineBindPoint bind_point, vk::PipelineLayout layout,
@@ -112,13 +120,7 @@ void PushChanged(vk::CommandBuffer cmdbuf, vk::PipelineBindPoint bind_point, vk:
         cmdbuf.pushDescriptorSetKHR(bind_point, layout, 0, writes);
         return;
     }
-    struct State {
-        VkCommandBuffer cmdbuf{};
-        VkPipelineLayout layout{};
-        vk::PipelineBindPoint bind_point{};
-        std::array<u64, 128> hashes{};
-    };
-    static thread_local State state;
+    auto& state = push_state;
     if (state.cmdbuf != VkCommandBuffer(cmdbuf) || state.layout != VkPipelineLayout(layout) ||
         state.bind_point != bind_point) {
         state.cmdbuf = cmdbuf;
@@ -484,6 +486,10 @@ void Pipeline::RecordWaveSizes() const {
         std::printf("GPU: wave sizes after %u pipelines: %s\n", histogram.Pipelines(),
                     histogram.Summary().c_str());
     }
+}
+
+void ForgetPushedDescriptors() {
+    push_state.cmdbuf = {};
 }
 
 } // namespace Vulkan
