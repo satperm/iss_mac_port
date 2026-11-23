@@ -51,6 +51,10 @@ while pgrep -x tlg-probe >/dev/null && (( $(date +%s) < end )); do /bin/sleep 2;
 pgrep -x tlg-probe >/dev/null && echo "WARNING: the game is still running after the run"
 /bin/sleep 3
 osascript -e 'tell application id "io.github.satperm.iss-mac-port" to quit' >/dev/null 2>&1 || true
+# A run that ended with a status (TLG_TIMEOUT: 142) leaves the launcher's "the game stopped" dialog
+# open, which refuses the quit: end the launcher (arm64, never the Rosetta game process) after 10 s.
+for _ in 1 2 3 4 5 6 7 8 9 10; do pgrep -x ISS >/dev/null || break; sleep 1; done
+if pgrep -x ISS >/dev/null && ! pgrep -x tlg-probe >/dev/null; then pkill -TERM -x ISS || true; fi
 log=$(ls -t "$logs"/game-*.log 2>/dev/null | head -1)
 [[ -n $log && $log != "$before" ]] && cp "$log" "$dir/game.log" || echo "WARNING: no new session log in $logs"
 echo "$label $dir"
