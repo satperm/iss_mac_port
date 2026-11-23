@@ -3896,8 +3896,8 @@ void Rasterizer::OnSubmit() {
             const u64 length = std::min(HugeWarmSlice, bind.size - bind.cursor);
             bind.cursor = bind.cursor + length >= bind.size ? 0 : bind.cursor + length;
             boost::container::small_vector<std::pair<VAddr, u64>, 8> parts;
-            ForEachMappedRangeInRange(start, length, [&](const auto& range) {
-                parts.emplace_back(range.lower(), range.upper() - range.lower());
+            ForEachMappedRangeInRange(start, length, [&](VAddr range_start, VAddr range_end) {
+                parts.emplace_back(range_start, range_end - range_start);
             });
             for (const auto& [addr, part_size] : parts) {
                 if (part_size > 64_KB) {
@@ -6556,16 +6556,14 @@ bool Rasterizer::IsMapped(VAddr addr, u64 size) {
         // Memory range wrapped the address space, cannot be mapped.
         return false;
     }
-    const auto range = decltype(mapped_ranges)::interval_type::right_open(addr, addr + size);
-
     Common::RecursiveSharedLock lock{mapped_ranges_mutex};
-    return boost::icl::contains(mapped_ranges, range);
+    return mapped_ranges.Contains(addr, size);
 }
 
 void Rasterizer::MapMemory(VAddr addr, u64 size) {
     {
         std::scoped_lock lock{mapped_ranges_mutex};
-        mapped_ranges += decltype(mapped_ranges)::interval_type::right_open(addr, addr + size);
+        mapped_ranges.Add(addr, size);
     }
 }
 
@@ -6584,7 +6582,7 @@ void Rasterizer::UnmapMemory(VAddr addr, u64 size) {
     RunForeign([this, addr, size] { texture_cache.UnmapMemory(addr, size); });
     {
         std::scoped_lock lock{mapped_ranges_mutex};
-        mapped_ranges -= decltype(mapped_ranges)::interval_type::right_open(addr, addr + size);
+        mapped_ranges.Subtract(addr, size);
     }
 }
 
