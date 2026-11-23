@@ -229,6 +229,9 @@ struct LauncherView: View {
                     }
                     Text("Smoke, sparks, neon and rain are simulated on the GPU. Auto: shared memory (on, the default). Off: no GPU particles, fastest. All particles: exactly as on the PS4, much slower.")
                         .font(.caption).foregroundStyle(.secondary)
+                    Toggle("Fire and smoke at half resolution", isOn: $model.settings.particlesHalf)
+                    Text("Draws fire and smoke with a quarter of the pixels and blends them into the picture: up to 13% more FPS in fire scenes where the GPU is the limit (4K, slower Macs). Flames get slightly softer edges.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Renderer") {
                     Toggle("Native GPU process", isOn: $model.settings.gpuProcess)

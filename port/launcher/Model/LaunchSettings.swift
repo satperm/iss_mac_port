@@ -177,6 +177,8 @@ struct LaunchSettings: Equatable {
     var holdFrameRate = HoldFrameRate.off
     var shadowDetail = ShadowDetail.full
     var particles = ParticleMode.auto
+    /// TLG_PARTICLES_HALF: fire and smoke drawn at half resolution (GPU-bound Macs).
+    var particlesHalf = false
     var textLanguage = "1"
     var voiceLanguage = ""
     var gpuProcess = true
@@ -236,6 +238,7 @@ struct LaunchSettings: Equatable {
         textLanguage = value("TLG_LANGUAGE").flatMap { code in GameLanguage.text.contains { $0.code == code } ? code : nil } ?? "1"
         voiceLanguage = value("TLG_AUDIO_LANGUAGE") ?? ""
         particles = value("TLG_PARTICLES").flatMap(ParticleMode.init(rawValue:)) ?? .auto
+        particlesHalf = flag("TLG_PARTICLES_HALF", false)
         gpuProcess = flag("TLG_GPU_PROCESS", true)
         keys = KeyMap(string: value(KeyMap.variable))
     }
@@ -261,6 +264,7 @@ struct LaunchSettings: Equatable {
         set("TLG_QUALITY_TARGET_FPS", holdFrameRate == .off ? nil : holdFrameRate.rawValue)
         set("TLG_SHADOW_CASCADES", shadowDetail == .full ? nil : shadowDetail.rawValue)
         set("TLG_PARTICLES", particles == .auto ? nil : particles.rawValue)
+        set("TLG_PARTICLES_HALF", particlesHalf ? "1" : nil)
         set("TLG_LANGUAGE", textLanguage)
         set("TLG_AUDIO_LANGUAGE", voiceLanguage.isEmpty ? nil : voiceLanguage)
         set("TLG_GPU_PROCESS", gpuProcess ? nil : "0")
