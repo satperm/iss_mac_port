@@ -739,19 +739,32 @@ static float exposure_margin(void) {
     if (!strcmp(e, "off")) return 0;
     return (float)atof(e);
 }
+/* A tile's luminance term as the GPU may have written it: finite, not exactly 0 (unwritten). */
+static int exposure_candidate(float v) {
+    return isfinite(v) && v != 0.0f;
+}
 static void exposure_robust(float *values, uint64_t count, uint64_t *clamped) {
     static float d = -1;
     static int read;
     if (!read) { read = 1; d = exposure_margin(); }
     if (d <= 0 || count > 4096) return;
+    /* Tiles the GPU did not measure stand for the median of those it did. At a 4K output the game sums
+     * 900 tiles where 1080p has 225, and every other call 50-275 come back exactly 0 (unwritten) and
+     * ~180 far below the rest (-43, -1.3e5, -1.7e38) or NaN: the sum swung by up to 1e39 and the coals
+     * scene went dark at random (2026-11-23). Real tiles stay within ~1 of the median (-0.7..0 at
+     * 1080p), so anything more than 4 below it is not a measurement. No 1080p value is affected. */
     float sorted[4096];
     uint64_t n = 0;
-    for (uint64_t i = 0; i < count; ++i) if (isfinite(values[i])) sorted[n++] = values[i];
+    for (uint64_t i = 0; i < count; ++i)
+        if (exposure_candidate(values[i])) sorted[n++] = values[i];
     if (n == 0) return;
     qsort(sorted, n, sizeof(float), exposure_cmp);
-    const float limit = sorted[n / 2] + d;
-    for (uint64_t i = 0; i < count; ++i)
-        if (isfinite(values[i]) && values[i] > limit) { values[i] = limit; ++*clamped; }
+    const float median = sorted[n / 2];
+    const float floor = median - 4.0f, limit = median + d;
+    for (uint64_t i = 0; i < count; ++i) {
+        if (!exposure_candidate(values[i]) || values[i] < floor) { values[i] = median; ++*clamped; }
+        else if (values[i] > limit) { values[i] = limit; ++*clamped; }
+    }
 }
 /* The sum's caller (eboot 0x192f9e) keeps the eye adaptation: a ring of the last measurements
  * ([rbx+0x1eb48] values, +0x1eb50 capacity, +0x1eb54 count, +0x1eb60 their average) and the adapted value
@@ -773,6 +786,23 @@ static int exposure_caller_state(uint64_t frame, struct exposure_state *st, uint
     *base = rbx;
     return 1;
 }
+/* The caller keeps the ring's sum as a running float ([rbx+0x1eb5c]: minus the value it replaces, plus
+ * the new one; the average [rbx+0x1eb60] = sum / count). Its values are tiny (exp of the tile sum, ~1e-20
+ * at a 4K output against ~1e-18 at 1080p), so rounding left in the running sum drifted it below zero
+ * after a few hundred frames and the eye adaptation collapsed (4K coals, 2026-11-23). Before the caller
+ * updates it, the sum is recomputed from the ring itself (part of the exposure fix). */
+static void exposure_ring_exact(uint64_t frame) {
+    if (exposure_margin() <= 0 || frame < 0x100000) return;
+    const uint64_t rbx = *(const uint64_t *)(uintptr_t)(frame - 0x28);
+    if (rbx < 0x100000) return;
+    const float *ring = *(const float *const *)(uintptr_t)(rbx + 0x1eb48);
+    const uint32_t capacity = *(const uint32_t *)(uintptr_t)(rbx + 0x1eb50);
+    const uint32_t count = *(const uint32_t *)(uintptr_t)(rbx + 0x1eb54);
+    if (!ring || (uintptr_t)ring < 0x100000 || capacity == 0 || capacity > 256 || count > capacity) return;
+    double sum = 0;
+    for (uint32_t i = 0; i < count; ++i) sum += ring[i];
+    *(float *)(uintptr_t)(rbx + 0x1eb5c) = (float)sum;
+}
 static void exposure_sum_log(float *values, uint64_t count, uint64_t frame) {
     static uint64_t calls;
     ++calls;
@@ -782,6 +812,7 @@ static void exposure_sum_log(float *values, uint64_t count, uint64_t frame) {
     }
     uint64_t clamped = 0;
     exposure_robust(values, count, &clamped);
+    exposure_ring_exact(frame);
     static int log = -1;
     if (log < 0) { const char *e = getenv("TLG_EXPOSURE_LOG"); log = e && *e == '1'; }
     if (!log) return;
