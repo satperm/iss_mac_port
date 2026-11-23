@@ -133,7 +133,7 @@ In the launcher:
 
 | Setting | Options |
 |---|---|
-| Smoke and sparks | **Auto** (on, the default), Off (no GPU particles, fastest), All particles (exactly as on the PS4, much slower) |
+| Smoke and sparks | **Auto** (on, the default and the fastest), Off (no GPU particles, but slower on most Macs and it crashed on macOS 26), All particles (exactly as on the PS4, much slower) |
 | Detail | Original (as on the PS4), Lower, Lowest (the game's own lower settings: particles, high-resolution textures, pedestrians; for slower Macs) |
 | Frame rate cap | Display (the display's refresh rate, at most 120; default), 60, 30 (steadier on slower Macs) |
 | Render scale | 100% (default) down to 50%: the game draws a smaller picture and scales it up; more FPS where the GPU is the limit, softer image |
