@@ -924,6 +924,12 @@ public:
         rendering_observer = observer;
     }
 
+    /// tlg: called after a render pass's end is recorded (outside the pass), on the thread
+    /// that ended it (ParticlesHalf composites there).
+    void SetEndRenderingHook(std::function<void(const RenderState&)> hook) {
+        end_rendering_hook = std::move(hook);
+    }
+
     /// Whether a render pass with exactly this state is open.
     [[nodiscard]] bool IsRenderingWith(const RenderState& state) const {
         return is_rendering && render_state == state;
@@ -1066,6 +1072,7 @@ private:
     RenderState render_state;
     bool is_rendering = false;
     RenderingObserver* rendering_observer = nullptr; ///< tlg
+    std::function<void(const RenderState&)> end_rendering_hook; ///< tlg
     // tlg: threaded recording
     std::unique_ptr<RecordChunk> record_chunk;
     void (*owner_hook)(void*, void*) = nullptr;

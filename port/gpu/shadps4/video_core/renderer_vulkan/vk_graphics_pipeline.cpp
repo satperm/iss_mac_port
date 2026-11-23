@@ -544,6 +544,22 @@ GraphicsPipeline::GraphicsPipeline(
                           vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA
                     : key.write_masks[i],
         };
+        // tlg: TLG_BLEND_PROBE=1: each new pipeline's blend state per colour attachment.
+        static const bool blend_probe = std::getenv("TLG_BLEND_PROBE") != nullptr;
+        if (blend_probe) {
+            std::printf("Blend probe: vs %08x ps %08x cb%u fmt %u/%u en %d color %u/%u/%u alpha %u/%u/%u "
+                        "mask %x depth %u\n",
+                        infos[u32(Shader::SwStage::Vertex)]
+                            ? u32(infos[u32(Shader::SwStage::Vertex)]->pgm_hash) : 0u,
+                        infos[u32(Shader::SwStage::Fragment)]
+                            ? u32(infos[u32(Shader::SwStage::Fragment)]->pgm_hash) : 0u, i,
+                        u32(key.color_buffers[i].data_format), u32(target_format),
+                        int(control.enable), u32(color_equation.src_factor),
+                        u32(color_equation.function), u32(color_equation.dst_factor),
+                        u32(alpha_equation.src_factor), u32(alpha_equation.function),
+                        u32(alpha_equation.dst_factor), u32(key.write_masks[i]),
+                        u32(key.z_format));
+        }
         square_attachments[i] = vk::PipelineColorBlendAttachmentState{
             .blendEnable = true,
             .srcColorBlendFactor = vk::BlendFactor::eZero,

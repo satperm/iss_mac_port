@@ -409,6 +409,9 @@ void Scheduler::EndRendering() {
             RecordFullBarrier(cmdbuf);
         }
     });
+    if (end_rendering_hook) {
+        end_rendering_hook(pass_end_state);
+    }
     if (rendering_observer) {
         rendering_observer->OnAfterEndRendering();
     }
