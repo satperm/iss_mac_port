@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "video_core/renderer_vulkan/vk_particles_half.h"
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -276,6 +277,18 @@ bool ParticlesHalf::Redirect(RenderState& state, std::array<float, 2>& target_sc
         }
         StartRun();
         ++runs;
+        // Every 10 s: runs (each one a clear and a full-screen composite) and draws.
+        static auto window = std::chrono::steady_clock::now();
+        static u64 window_runs = 0, window_draws = 0;
+        const auto now = std::chrono::steady_clock::now();
+        if (now - window >= std::chrono::seconds(10)) {
+            std::printf("Particles: %llu half-resolution runs, %llu draws in the last 10 s\n",
+                        (unsigned long long)(runs - window_runs),
+                        (unsigned long long)(draws - window_draws));
+            window = now;
+            window_runs = runs;
+            window_draws = draws;
+        }
         target_view = color.image_view;
         target_layout = color.image_layout;
         target_format = format;
