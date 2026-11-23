@@ -157,6 +157,8 @@ enum PerformancePreset: String, CaseIterable, Identifiable {
         }
     }
     var particles: ParticleMode { self == .slowest ? .off : .auto }
+    /// Fire and smoke at half resolution on slower Macs (village 4K: Lower 32.1 -> 36.4 FPS with it).
+    var particlesHalf: Bool { self != .standard }
     var shadowDetail: ShadowDetail { .full }
 }
 
@@ -199,7 +201,7 @@ struct LaunchSettings: Equatable {
         get {
             PerformancePreset.allCases.first {
                 $0.quality == quality && $0.fpsCap == fpsCap && $0.renderScale == renderScale && $0.particles == particles
-                    && $0.shadowDetail == shadowDetail
+                    && $0.shadowDetail == shadowDetail && $0.particlesHalf == particlesHalf
             }
         }
         set {
@@ -209,6 +211,7 @@ struct LaunchSettings: Equatable {
             renderScale = p.renderScale
             particles = p.particles
             shadowDetail = p.shadowDetail
+            particlesHalf = p.particlesHalf
         }
     }
 
