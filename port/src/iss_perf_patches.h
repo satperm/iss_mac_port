@@ -184,11 +184,37 @@ static int iss_usleep_spin(unsigned char *image, uint64_t size) {
     return 1;
 }
 
+/* Exposure tile buffers (default on; TLG_EXPOSURE_BUFFERS=0 off): the game allocates its per-tile
+ * luminance buffers (two pairs, eboot 0x171300 and 0x172310) for 625 tiles (2500 bytes, a V# of 625
+ * 4-byte elements). A 4K output measures 900 tiles (5120x1440: 800): the compute shader's writes past
+ * 625 were dropped and the CPU summed 1,100 bytes of whatever followed (2026-11-23, PR #78 has the
+ * capture). 1024 elements / 4096 bytes cover every output; smaller outputs use the first n as before. */
+static void iss_exposure_buffers(unsigned char *image, uint64_t size) {
+    const char *env = getenv("TLG_EXPOSURE_BUFFERS");
+    if (env && env[0] == '0') return;
+    static const unsigned char bytes_old[5] = {0xbe, 0xc4, 0x09, 0x00, 0x00}; /* mov esi, 2500 */
+    static const unsigned char count_old[5] = {0xb9, 0x71, 0x02, 0x00, 0x00}; /* mov ecx, 625 */
+    static const unsigned char bytes_new[5] = {0xbe, 0x00, 0x10, 0x00, 0x00}; /* mov esi, 4096 */
+    static const unsigned char count_new[5] = {0xb9, 0x00, 0x04, 0x00, 0x00}; /* mov ecx, 1024 */
+    const IssPerfBytes original[] = {
+        {0x17132a, bytes_old, 5}, {0x17134e, count_old, 5}, {0x171374, bytes_old, 5}, {0x171398, count_old, 5},
+        {0x172340, bytes_old, 5}, {0x172363, count_old, 5}, {0x172387, bytes_old, 5}, {0x1723aa, count_old, 5},
+    };
+    const IssPerfBytes patched[] = {
+        {0x17132a, bytes_new, 5}, {0x17134e, count_new, 5}, {0x171374, bytes_new, 5}, {0x171398, count_new, 5},
+        {0x172340, bytes_new, 5}, {0x172363, count_new, 5}, {0x172387, bytes_new, 5}, {0x1723aa, count_new, 5},
+    };
+    if (!iss_perf_matches(image, size, original, 8, "TLG_EXPOSURE_BUFFERS")) return;
+    iss_perf_write(image, patched, 8);
+    puts("Performance patches: exposure tile buffers for 1024 tiles (4K outputs measure all 900)");
+}
+
 static void iss_perf_patches(unsigned char *image, uint64_t size) {
     iss_perf_mode(image, size);
     iss_shadow_cascades(image, size);
     iss_dump_code(image, size);
     iss_usleep_spin(image, size);
+    iss_exposure_buffers(image, size);
     const int late = iss_particle_late_read(image, size);
     iss_particle_light_one_submit(image, size, late);
 }
