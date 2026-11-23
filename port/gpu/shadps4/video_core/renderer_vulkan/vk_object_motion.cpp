@@ -122,7 +122,9 @@ void ObjectMotion::OnFrameStart() {
         params_ticks[slot] = 0;
     }
     params_used = 0;
-    written = false;
+    for (size_t i = 0; i < target_count; ++i) {
+        targets[i].written = false;
+    }
     scheduler.EndRendering();
     // Last frame's stores must be visible to this frame's loads. Also finish old reads
     // before the ping-pong half they reference is reused for writes.
@@ -162,18 +164,37 @@ u32 ObjectMotion::PrepareDraw(const DrawInfo& draw) {
     return index;
 }
 
-void ObjectMotion::EnsureImage(u32 width, u32 height) {
-    if (image && width == image_width && height == image_height) {
-        return;
+const ObjectMotion::Target* ObjectMotion::FindTarget(u32 width, u32 height) const noexcept {
+    for (size_t i = 0; i < target_count; ++i) {
+        if (targets[i].width == width && targets[i].height == height) {
+            return &targets[i];
+        }
+    }
+    return nullptr;
+}
+
+ObjectMotion::Target& ObjectMotion::EnsureTarget(u32 width, u32 height) {
+    if (const Target* found = FindTarget(width, height)) {
+        current = const_cast<Target*>(found);
+        return *current;
+    }
+    if (target_count == MaxTargets) {
+        // Many sizes (live resolution changes): start over. Recorded work may still use the old
+        // images, so this is the only place that waits.
+        scheduler.Finish();
+        for (auto& target : targets) {
+            target.view.reset(); // before its image
+            target.image = VideoCore::UniqueImage{};
+            target.width = target.height = 0;
+            target.written = false;
+            target.layout = vk::ImageLayout::eUndefined;
+        }
+        target_count = 0;
     }
     const auto device = instance.GetDevice();
-    if (image) {
-        scheduler.Finish();
-    }
-    view.reset();
-    image_layout = vk::ImageLayout::eUndefined;
-    image = VideoCore::UniqueImage(device, instance.GetAllocator());
-    image.Create(vk::ImageCreateInfo{
+    Target& target = targets[target_count++];
+    target.image = VideoCore::UniqueImage(device, instance.GetAllocator());
+    target.image.Create(vk::ImageCreateInfo{
         .imageType = vk::ImageType::e2D,
         .format = vk::Format::eR32G32B32A32Sfloat,
         .extent = {width, height, 1},
@@ -185,25 +206,29 @@ void ObjectMotion::EnsureImage(u32 width, u32 height) {
                  vk::ImageUsageFlagBits::eTransferSrc,
         .initialLayout = vk::ImageLayout::eUndefined,
     });
-    view = Check(device.createImageViewUnique({
-        .image = vk::Image(image),
+    target.view = Check(device.createImageViewUnique({
+        .image = vk::Image(target.image),
         .viewType = vk::ImageViewType::e2D,
         .format = vk::Format::eR32G32B32A32Sfloat,
         .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
     }));
-    image_width = width;
-    image_height = height;
-    written = false;
+    target.width = width;
+    target.height = height;
+    target.written = false;
+    target.layout = vk::ImageLayout::eUndefined;
+    std::printf("Object motion: image %ux%u (%zu sizes)\n", width, height, target_count);
+    current = &target;
+    return target;
 }
 
 void ObjectMotion::Attach(RenderState& state, u32 width, u32 height) {
     constexpr u32 slot = Shader::MotionVectors::Output;
-    EnsureImage(width, height);
+    Target& target = EnsureTarget(width, height);
     auto& attachment = state.color_attachments[slot];
     attachment = {};
-    attachment.image_view = *view;
+    attachment.image_view = *target.view;
     attachment.image_layout = vk::ImageLayout::eColorAttachmentOptimal;
-    if (!written || image_layout != vk::ImageLayout::eColorAttachmentOptimal) {
+    if (!target.written || target.layout != vk::ImageLayout::eColorAttachmentOptimal) {
         // Clear once per frame; later reads must not erase the validity of this history.
         scheduler.EndRendering();
         const vk::ImageMemoryBarrier2 barrier{
@@ -212,9 +237,9 @@ void ObjectMotion::Attach(RenderState& state, u32 width, u32 height) {
             .dstStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
             .dstAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite |
                              vk::AccessFlagBits2::eColorAttachmentRead,
-            .oldLayout = image_layout,
+            .oldLayout = target.layout,
             .newLayout = vk::ImageLayout::eColorAttachmentOptimal,
-            .image = vk::Image(image),
+            .image = vk::Image(target.image),
             .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
         };
         // Recorded in order on the recording thread: CommandBuffer() here switched the rest of
@@ -222,30 +247,35 @@ void ObjectMotion::Attach(RenderState& state, u32 width, u32 height) {
         scheduler.Record([barrier](vk::CommandBuffer cmd) {
             cmd.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &barrier});
         });
-        image_layout = vk::ImageLayout::eColorAttachmentOptimal;
-        attachment.is_clear = !written;
-        written = true;
+        target.layout = vk::ImageLayout::eColorAttachmentOptimal;
+        attachment.is_clear = !target.written;
+        target.written = true;
     }
     state.num_color_attachments = std::max<u16>(state.num_color_attachments, slot + 1);
 }
 
 vk::ImageView ObjectMotion::PrepareRead(vk::CommandBuffer cmdbuf, u32 width, u32 height,
                                         bool& valid) {
-    EnsureImage(std::max(image_width, 1u), std::max(image_height, 1u));
-    valid = written && width == image_width && height == image_height;
+    Target* target = const_cast<Target*>(FindTarget(width, height));
+    valid = target && target->written;
+    if (!target) {
+        // No pass of this size wrote vectors: the compose pass only needs some image to bind.
+        target = current ? current : &EnsureTarget(1, 1);
+    }
+    current = target;
     const vk::ImageMemoryBarrier2 barrier{
         .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
         .srcAccessMask = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
         .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
         .dstAccessMask = vk::AccessFlagBits2::eShaderRead,
-        .oldLayout = image_layout,
+        .oldLayout = target->layout,
         .newLayout = vk::ImageLayout::eGeneral,
-        .image = vk::Image(image),
+        .image = vk::Image(target->image),
         .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
     };
     cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &barrier});
-    image_layout = vk::ImageLayout::eGeneral;
-    return *view;
+    target->layout = vk::ImageLayout::eGeneral;
+    return *target->view;
 }
 
 } // namespace Vulkan

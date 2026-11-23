@@ -54,15 +54,27 @@ public:
     vk::ImageView PrepareRead(vk::CommandBuffer cmdbuf, u32 width, u32 height, bool& valid);
     /// The image of the last PrepareRead (layout General), or null.
     [[nodiscard]] vk::ImageView View() const noexcept {
-        return view ? *view : vk::ImageView{};
+        return current && current->view ? *current->view : vk::ImageView{};
     }
     [[nodiscard]] vk::Image Image(u32 width, u32 height) const noexcept {
-        return written && width == image_width && height == image_height
-            ? vk::Image(image) : vk::Image{};
+        const Target* target = FindTarget(width, height);
+        return target && target->written ? vk::Image(target->image) : vk::Image{};
     }
 
 private:
-    void EnsureImage(u32 width, u32 height);
+    /// One motion image per render-target size (Bloodborne port #160): one image that followed
+    /// the size waited for the GPU (Scheduler::Finish) at every change and lost the frame's
+    /// vectors when passes of two sizes alternated.
+    struct Target {
+        VideoCore::UniqueImage image;
+        vk::UniqueImageView view;
+        u32 width = 0, height = 0;
+        bool written = false; ///< this frame's vectors are in the image
+        vk::ImageLayout layout = vk::ImageLayout::eUndefined;
+    };
+    static constexpr size_t MaxTargets = 8;
+    const Target* FindTarget(u32 width, u32 height) const noexcept;
+    Target& EnsureTarget(u32 width, u32 height);
 
     const Instance& instance;
     Scheduler& scheduler;
@@ -85,11 +97,9 @@ private:
 
     u64 frame = 0;
     u32 params_used = 0;
-    VideoCore::UniqueImage image;
-    vk::UniqueImageView view;
-    u32 image_width = 0, image_height = 0;
-    bool written = false; ///< this frame's vectors are in the image
-    vk::ImageLayout image_layout = vk::ImageLayout::eUndefined;
+    std::array<Target, MaxTargets> targets;
+    size_t target_count = 0;
+    Target* current = nullptr; ///< of the last Attach/PrepareRead
 };
 
 } // namespace Vulkan
