@@ -32,6 +32,7 @@
 #include "tlg_threads.h"
 
 namespace Vulkan {
+extern std::atomic<u64> g_tlg_cmdbuf_begins; // defined below (push constant dedupe, vk_pipeline_common.cpp)
 
 std::mutex Scheduler::submit_mutex;
 
@@ -777,6 +778,7 @@ void Scheduler::AllocateWorkerCommandBuffers() {
 
     current_cmdbuf = command_pool.Commit();
     Check(current_cmdbuf.begin(begin_info));
+    g_tlg_cmdbuf_begins.fetch_add(1, std::memory_order_release);
 
     // Invalidate dynamic state so it gets applied to the new command buffer.
     dynamic_state.Invalidate();
@@ -790,6 +792,9 @@ void Scheduler::AllocateWorkerCommandBuffers() {
     }
 #endif
 }
+
+/// tlg: command buffers begun so far (any scheduler): recorded state caches start over.
+std::atomic<u64> g_tlg_cmdbuf_begins{0};
 
 void Scheduler::SubmitExecution(SubmitInfo& info) {
     // tlg: TLG_ACB_QUEUE: the companion queue's recorded work first; this submission waits for it.
@@ -896,6 +901,7 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
             current_cmdbuf = command_pool.Commit();
             Check(current_cmdbuf.begin(vk::CommandBufferBeginInfo{
                 .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit}));
+            g_tlg_cmdbuf_begins.fetch_add(1, std::memory_order_release);
         });
         KickRecording(true); // the submission is the last command of its chunk
         dynamic_state.Invalidate();

@@ -266,6 +266,8 @@ bool Pipeline::PushWithTemplate(Scheduler& scheduler, vk::PipelineLayout layout,
     return true;
 }
 
+extern std::atomic<u64> g_tlg_cmdbuf_begins; // vk_scheduler.cpp
+
 void Pipeline::BindResources(DescriptorWrites& set_writes, u32 count,
                              const Shader::PushData& push_data) const {
     BindResources(scheduler, set_writes, count, push_data);
@@ -278,7 +280,36 @@ void Pipeline::BindResources(Scheduler& scheduler, DescriptorWrites& set_writes,
     const auto stage_flags = IsCompute() ? vk::ShaderStageFlagBits::eCompute : AllGraphicsStageBits;
     const vk::PipelineLayout layout = *pipeline_layout;
     scheduler.Record([layout, stage_flags, push_data](vk::CommandBuffer cmdbuf) {
-        cmdbuf.pushConstants(layout, stage_flags, 0u, sizeof(push_data), &push_data);
+        // tlg: TLG_PUSH_DEDUPE (default on): the same constants for the same layout on the same
+        // command buffer as the previous push are skipped (on the recording thread, the tightest
+        // stage). MoltenVK keeps pushed constants and sends them again when the pipeline changes.
+        static const bool dedupe = [] {
+            const char* env = std::getenv("TLG_PUSH_DEDUPE");
+            return !(env && *env == '0');
+        }();
+        thread_local VkCommandBuffer last_cmdbuf{};
+        thread_local u64 last_begins = ~0ull;
+        const u64 begins = g_tlg_cmdbuf_begins.load(std::memory_order_acquire);
+        thread_local VkPipelineLayout last_layout{};
+        thread_local vk::ShaderStageFlags last_flags{};
+        thread_local Shader::PushData last{};
+        thread_local u64 pushes = 0, skipped = 0;
+        if (dedupe && last_cmdbuf == VkCommandBuffer(cmdbuf) && last_begins == begins &&
+            last_layout == VkPipelineLayout(layout) && last_flags == stage_flags &&
+            std::memcmp(&last, &push_data, sizeof(push_data)) == 0) {
+            ++skipped;
+        } else {
+            cmdbuf.pushConstants(layout, stage_flags, 0u, sizeof(push_data), &push_data);
+            last_cmdbuf = cmdbuf;
+            last_begins = begins;
+            last_layout = layout;
+            last_flags = stage_flags;
+            std::memcpy(&last, &push_data, sizeof(push_data));
+        }
+        if ((++pushes & 0x7FFFF) == 0 && std::getenv("TLG_PUSH_STATS")) {
+            std::printf("Push constants: %llu of %llu skipped as repeats\n",
+                        (unsigned long long)skipped, (unsigned long long)pushes);
+        }
     });
 
     // Bind descriptor set.
