@@ -27,7 +27,8 @@ bool NameCommandBuffers() {
             const char* env = std::getenv(name);
             return env && *env && *env != '0';
         };
-        return on("TLG_CMDBUF_NAMES") || on("TLG_DRAW_LABELS") || on("TLG_PASS_LABELS");
+        return on("TLG_CMDBUF_NAMES") || on("TLG_DRAW_LABELS") || on("TLG_PASS_LABELS") ||
+               on("TLG_CS_LABELS");
     }();
     return named;
 }
