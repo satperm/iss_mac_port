@@ -85,6 +85,10 @@ std::filesystem::path JobFile();
 /// one record resumes after it instead of failing again at every start.
 inline constexpr const char* DoneFile = "precompiled.txt";
 inline constexpr const char* ProgressFile = "precompile-progress.txt";
+/// Pipelines the game built while playing that the job file did not have (the same shaders with
+/// other render state): appended while playing, compiled with the job file the next time the
+/// whole compilation runs (a new version, an OS update, a cold driver cache). TLG_PRECOMPILE_LEARN=0: off.
+inline constexpr const char* LearnedFile = "learned-jobs.bin";
 
 } // namespace Precompile
 } // namespace Vulkan

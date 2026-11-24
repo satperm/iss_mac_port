@@ -1336,9 +1336,6 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
     }
     TlgRegion::NotePipeline('g', std::hash<GraphicsPipelineKey>{}(sel.graphics_key),
                             graphics_pipelines.contains(sel.graphics_key));
-    if (Precompile::CaptureEnabled() && !graphics_pipelines.contains(sel.graphics_key)) {
-        Precompile::CaptureGraphics(sel);
-    }
     // tlg: TLG_GFX_DEFERRED_BIND: the pipeline is built on a compiler thread when the driver's
     // cache misses it, so this draw waits for it at the bind rather than being skipped: the
     // asynchronous path above, which skips it, is left for the case where that is not possible.
@@ -1367,6 +1364,10 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
             goto compile_now;
         }
         if (!pending_graphics.contains(sel.graphics_key) && compiler->HasCapacity()) {
+            // A pipeline being built (the learned file, vk_precompile.h): not on every lookup.
+            if (Precompile::CaptureEnabled()) {
+                Precompile::CaptureGraphics(sel);
+            }
             PhaseTimer capture{g_tlg_snapshot_ns};
             auto build = std::make_shared<AsyncGraphicsCompilation>();
             build->selection = sel;
@@ -1433,6 +1434,9 @@ compile_now:
     if (is_new) {
         const auto pipeline_hash = std::hash<GraphicsPipelineKey>{}(sel.graphics_key);
         LOG_INFO(Render_Vulkan, "Compiling graphics pipeline {:#x}", pipeline_hash);
+        if (Precompile::CaptureEnabled()) {
+            Precompile::CaptureGraphics(sel);
+        }
         CompileTimer timer{pipeline_hash, 'g'};
 
         GraphicsPipeline::SerializationSupport sdata{};
