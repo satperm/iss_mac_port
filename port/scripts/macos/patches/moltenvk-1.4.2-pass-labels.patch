@@ -1,7 +1,8 @@
 diff --git a/MoltenVK/MoltenVK/Commands/MVKCmdDebug.mm b/MoltenVK/MoltenVK/Commands/MVKCmdDebug.mm
+index 9936a2e..cc434fe 100644
 --- a/MoltenVK/MoltenVK/Commands/MVKCmdDebug.mm
 +++ b/MoltenVK/MoltenVK/Commands/MVKCmdDebug.mm
-@@ -72,5 +72,11 @@
+@@ -72,5 +72,18 @@ void MVKCmdDebugMarkerEnd::encode(MVKCommandEncoder* cmdEncoder) {
  #pragma mark MVKCmdDebugMarkerInsert
  
  void MVKCmdDebugMarkerInsert::encode(MVKCommandEncoder* cmdEncoder) {
@@ -9,6 +10,13 @@ diff --git a/MoltenVK/MoltenVK/Commands/MVKCmdDebug.mm b/MoltenVK/MoltenVK/Comma
 +	// show time per kind of render pass.
 +	if (cmdEncoder->_mtlRenderEncoder && [_markerName hasPrefix: @"tlgpass "]) {
 +		[cmdEncoder->_mtlRenderEncoder setLabel: _markerName];
++		return;
++	}
++	// iss_mac_port: "tlgcs ..." (TLG_CS_LABELS=1, diagnostic) gives the next dispatch a compute
++	// encoder of its own named after it, so GPU traces show time per compute shader.
++	if (!cmdEncoder->_mtlRenderEncoder && [_markerName hasPrefix: @"tlgcs "]) {
++		cmdEncoder->endCurrentMetalEncoding();
++		[cmdEncoder->getMTLComputeEncoder(kMVKCommandUseDispatch) setLabel: _markerName];
 +		return;
 +	}
  	[cmdEncoder->getMTLEncoder() insertDebugSignpost: _markerName];

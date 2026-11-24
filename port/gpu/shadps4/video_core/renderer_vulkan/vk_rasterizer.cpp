@@ -1182,7 +1182,19 @@ DrawLabel MakeDrawLabel(const char* kind, u64 vs, u64 ps, u32 a, u32 b) {
         const char* env = std::getenv("TLG_DRAW_LABELS");
         return env && *env == '1';
     }();
+    // TLG_CS_LABELS=1: "tlgcs <hash> <x>x<y>" before each dispatch only; the patched MoltenVK
+    // gives that dispatch a compute encoder of its own named after it (GPU time per compute shader
+    // in a Metal System Trace; one encoder per dispatch costs time, diagnostics only).
+    static const bool cs_labels = [] {
+        const char* env = std::getenv("TLG_CS_LABELS");
+        return env && *env == '1';
+    }();
     DrawLabel label;
+    if (cs_labels && std::strstr(kind, "cs")) {
+        std::snprintf(label.text.data(), label.text.size(), "tlgcs %s %llx %ux%u", kind,
+                      static_cast<unsigned long long>(vs), a, b);
+        return label;
+    }
     if (enabled) {
         std::snprintf(label.text.data(), label.text.size(), "%s vs %llx ps %llx %u x %u", kind,
                       static_cast<unsigned long long>(vs), static_cast<unsigned long long>(ps),
