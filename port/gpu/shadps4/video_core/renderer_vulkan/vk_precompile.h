@@ -74,6 +74,7 @@ void CaptureCompute(const PipelineSelection& sel, const AmdGpu::ComputeProgram& 
 
 struct Result {
     u32 records = 0, graphics = 0, compute = 0, failed = 0, skipped = 0;
+    double build_ms = 0.0; ///< time the driver spent building the pipelines (all threads)
 };
 
 /// The job file of this game: TLG_PRECOMPILE_JOBS, else <gpu user>/cache/<serial>-jobs.bin

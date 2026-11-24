@@ -14,6 +14,9 @@
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#ifdef __APPLE__
+#include <sys/sysctl.h>
+#endif
 #include "common/assert.h"
 #include "common/assert_scope.h"
 #include "common/thread.h"
@@ -364,6 +367,19 @@ void PlaceStage(Arena& arena, const Precompile::Stage& stage, u64& address,
 } // namespace
 
 namespace {
+/// The OS build ("25B78"): an OS update replaces Metal's compiler and clears its shader cache, so
+/// the pipelines must be built again even though this cache still has them.
+std::string OsBuild() {
+#ifdef __APPLE__
+    char build[64] = {};
+    size_t size = sizeof(build) - 1;
+    if (sysctlbyname("kern.osversion", build, &size, nullptr, 0) == 0) {
+        return build;
+    }
+#endif
+    return "-";
+}
+
 std::string ReadSmallFile(const std::filesystem::path& path) {
     std::ifstream in(path);
     return std::string{std::istreambuf_iterator<char>(in), {}};
@@ -400,10 +416,14 @@ bool PipelineCache::PrecompileFirstStart(const std::function<void(u32 total)>& s
         uuid_hash = uuid_hash * 1099511628211ull ^ byte;
     }
     const std::string fingerprint =
-        fmt::format("{} {} {} {:x}:{:x}:{:x}:{:x}\n", size, stamp, ShaderBinaryVersionForCache(),
+        fmt::format("{} {} {} {:x}:{:x}:{:x}:{:x} {}\n", size, stamp, ShaderBinaryVersionForCache(),
                     instance.GetVendorID(), instance.GetDeviceID(), instance.GetDriverVersion(),
-                    uuid_hash);
-    if (ReadSmallFile(folder / Precompile::DoneFile) == fingerprint) {
+                    uuid_hash, OsBuild());
+    // The done file: the fingerprint, then the milliseconds one pipeline took in that compilation.
+    const auto done_text = ReadSmallFile(folder / Precompile::DoneFile);
+    const bool done = done_text.size() >= fingerprint.size() &&
+                      done_text.compare(0, fingerprint.size(), fingerprint) == 0;
+    if (done && !ColdDriverCache(jobs, std::strtod(done_text.c_str() + fingerprint.size(), nullptr))) {
         return false;
     }
     std::vector<Precompile::Record> records;
@@ -445,6 +465,15 @@ bool PipelineCache::PrecompileFirstStart(const std::function<void(u32 total)>& s
         }
         progress(done, total);
     });
+    ReleasePrecompiledModules();
+    // The baseline for the next starts: the same sample, now that the driver's cache is warm.
+    const double baseline = ProbeSample(jobs);
+    WriteSmallFile(folder / Precompile::DoneFile, fingerprint + fmt::format("{:.3f}\n", baseline));
+    std::filesystem::remove(progress_path, ec);
+    return true;
+}
+
+void PipelineCache::ReleasePrecompiledModules() {
     // Release what the compilation loaded: the game loads each program again when it first uses
     // it (LoadProgramFromCache), so this start does not keep the whole game's shaders in memory.
     Storage::DataBase::Instance().WaitIdle();
@@ -465,10 +494,47 @@ bool PipelineCache::PrecompileFirstStart(const std::function<void(u32 total)>& s
     }
     std::printf("Precompile: released %zu shader modules (they load again on first use)\n",
                 released);
-    WriteSmallFile(folder / Precompile::DoneFile, fingerprint);
-    std::filesystem::remove(progress_path, ec);
-    return true;
 }
+
+bool PipelineCache::ColdDriverCache(const std::filesystem::path& jobs, double baseline_ms) {
+    // tlg: the driver's own cache (Metal's shader cache under MoltenVK) can be lost while this
+    // cache still has every pipeline: an OS update, or Metal evicting entries. The game then
+    // compiles hundreds of pipelines when a save loads (a black screen for ~10 s, 17 FPS).
+    // Build a sample of the job file and compare the time per pipeline with the same sample
+    // built right after this machine's last full compilation (the driver's cache warm then).
+    const char* probe_env = std::getenv("TLG_PRECOMPILE_PROBE");
+    if (baseline_ms <= 0.0 || (probe_env && *probe_env == '0')) {
+        return false;
+    }
+    const double per = ProbeSample(jobs);
+    const bool cold = per > 3.0 * baseline_ms;
+    std::printf("Precompile: probe %.2f ms per pipeline, %.2f ms after the last full compilation: "
+                "the driver's cache is %s\n",
+                per, baseline_ms, cold ? "cold, compiling again" : "warm");
+    return cold;
+}
+
+double PipelineCache::ProbeSample(const std::filesystem::path& jobs) {
+    std::vector<Precompile::Record> records;
+    if (!Precompile::ReadJobs(jobs, records) || records.size() < 1000) {
+        return 0.0;
+    }
+    constexpr size_t Sample = 96;
+    std::vector<Precompile::Record> sample;
+    const size_t step = records.size() / Sample;
+    for (size_t i = step / 2; i < records.size() && sample.size() < Sample; i += step) {
+        if (records[i].kind == 0) {
+            sample.push_back(std::move(records[i]));
+        }
+    }
+    records.clear();
+    // The driver's time only: translating the shaders is slower in a fresh process.
+    const auto run = Precompile(sample, nullptr);
+    ReleasePrecompiledModules();
+    const u32 built = run.graphics + run.compute;
+    return built >= 16 ? run.build_ms / built : 0.0;
+}
+
 
 namespace {
 /// One pipeline for the build threads: copies of what the translator chose for a record, and the
@@ -486,6 +552,7 @@ struct BuildJob {
     GraphicsPipeline::SerializationSupport graphics_data{};
     ComputePipeline::SerializationSupport compute_data{};
     std::string error; ///< empty: built
+    double build_ms = 0.0; ///< the driver's time for this pipeline
 };
 
 /// The threads that build pipelines while the GPU thread translates the next records: building
@@ -604,6 +671,7 @@ Precompile::Result PipelineCache::Precompile(
     }
     const auto build = [this, &caches](BuildJob& job, unsigned index) {
         Shader::Info::replay_flats = &job.flats;
+        const auto build_started = std::chrono::steady_clock::now();
         try {
             const Common::ScopedAssertThrows recoverable;
             auto& cache = caches.empty() ? *pipeline_cache : *caches[index];
@@ -623,6 +691,9 @@ Precompile::Result PipelineCache::Precompile(
                 job.error = "unknown error";
             }
         }
+        job.build_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                                 build_started)
+                           .count();
         Shader::Info::replay_flats = nullptr;
     };
     std::optional<BuildPool> pool;
@@ -634,6 +705,7 @@ Precompile::Result PipelineCache::Precompile(
     const auto collect = [&](std::vector<std::unique_ptr<BuildJob>> jobs) {
         for (auto& job : jobs) {
             in_flight.erase(job->record);
+            result.build_ms += job->build_ms;
             if (!job->error.empty()) {
                 if (result.failed < 20) {
                     std::printf("Precompile: record %u failed: %s\n", job->record + 1,
