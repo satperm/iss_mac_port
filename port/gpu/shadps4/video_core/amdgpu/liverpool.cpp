@@ -227,7 +227,14 @@ void Liverpool::Process(std::stop_token stoken) {
                 }
                 task = queue.submits.front();
             }
+            // tlg: TLG_ACB_LANE: the compute queues' packets go to the draw pipe's lane 1.
+            if (rasterizer) {
+                rasterizer->SetPipeLane(curr_qid != GfxQueueId ? 1 : 0);
+            }
             task.resume();
+            if (rasterizer) {
+                rasterizer->SetPipeLane(0);
+            }
 
             if (task.done()) {
                 task.destroy();
@@ -1649,11 +1656,16 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 }
                 // tlg: a fence handed to the draw recording thread counts as written: that
                 // thread runs everything in stream order.
+                bool gfx_wait_from_compute = false;
                 if (u32 value; wait_reg_mem->mem_space.Value() ==
                                    PM4CmdWaitRegMem::MemSpace::Memory &&
                                !TlgToggle::Disabled(TlgToggle::PendingFenceWaits) &&
-                               PendingFenceValue(wait_reg_mem->Address<VAddr>(), value) &&
+                               PendingFenceValue(wait_reg_mem->Address<VAddr>(), value, &gfx_wait_from_compute) &&
                                wait_reg_mem->TestValue(value)) {
+                    // TLG_ACB_LANE: a compute fence may still be queued in the compute lane.
+                    if (gfx_wait_from_compute) {
+                        rasterizer->GatePipeLane(0);
+                    }
                     break;
                 }
                 // tlg: TLG_UNIFIED_MEMORY: a fence the recording thread deferred to GPU completion
@@ -2231,6 +2243,8 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
                 // A graphics fence in stream order: with its own queue, this queue must wait for
                 // the graphics work before it.
                 if (!wait_from_compute) {
+                    // TLG_ACB_LANE: and the compute lane waits for the graphics packets before it.
+                    rasterizer->GatePipeLane(1);
                     rasterizer->RunInOrder(&RunAcbAfterMainWork, &wait_from_compute, 1);
                 }
                 break;

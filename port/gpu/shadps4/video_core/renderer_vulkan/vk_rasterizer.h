@@ -164,6 +164,18 @@ public:
     [[nodiscard]] bool DrawPipeIdle() const {
         return !draw_pipe || draw_pipe->Idle();
     }
+    /// tlg: TLG_ACB_LANE=1 (docs/DESIGN_ACB_LANE.md): stage A posts the game's compute-queue
+    /// packets into lane 1 of the draw pipe, which the recording thread serves first.
+    static bool AcbLaneEnabled();
+    /// Stage A: the lane for the packets that follow (1: a compute queue is being decoded).
+    void SetPipeLane(u32 lane);
+    /// Stage A: the next packet of `lane` waits for everything queued so far in the other lane
+    /// (a wait of `lane` was met by a fence the other lane still has to write).
+    void GatePipeLane(u32 lane) {
+        if (draw_pipe && AcbLaneEnabled()) {
+            draw_pipe->GateNext(lane);
+        }
+    }
     /// tlg: the draw recording thread's CPU clock id (Linux) and thread id (Windows), for the
     /// frame statistics; -1/0 when the pipe is off or the thread has not started.
     [[nodiscard]] int DrawPipeCpuClock() const {
@@ -699,6 +711,7 @@ private:
     void AcbFenceThread(std::stop_token stop);
     void AcbDeferFence(Common::UniqueFunction<void>&& write);
     static void AcbIdle(void* rasterizer);
+    static void AcbLaneIdle(void* rasterizer);
     /// The scheduler a compute-queue dispatch records into, or null for the main one.
     Scheduler* AcbTarget(const Shader::Info& cs, u32 flags, u64 main_records);
     /// The compute queue's next submission waits for what the main scheduler recorded so far.
