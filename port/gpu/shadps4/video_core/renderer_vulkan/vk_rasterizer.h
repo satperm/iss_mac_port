@@ -250,6 +250,7 @@ private:
 
     void PrepareRenderState(const GraphicsPipeline* pipeline);
     RenderState BeginRendering(const GraphicsPipeline* pipeline);
+    void MarkOverwrittenTargets(const GraphicsPipeline* pipeline, RenderState& state);
     /// tlg: TLG_PARTICLES_HALF: sends a candidate draw to the half-size image (true), or
     /// composites an open run before any other draw.
     bool RedirectParticles(const GraphicsPipeline* pipeline, RenderState& state);

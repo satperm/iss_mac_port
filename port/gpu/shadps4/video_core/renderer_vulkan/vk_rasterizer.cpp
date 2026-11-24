@@ -5543,6 +5543,40 @@ bool Rasterizer::RedirectParticles(const GraphicsPipeline* pipeline, RenderState
     return false;
 }
 
+void Rasterizer::MarkOverwrittenTargets(const GraphicsPipeline* pipeline, RenderState& state) {
+    // tlg: TLG_FS_DISCARD=1 (experiment): a pass that begins with a full-screen triangle
+    // (vs b94242a8), no blending, all channels written, no depth or stencil and no discard in the
+    // pixel shader overwrites its colour targets: loadOp DontCare saves reading them into tile
+    // memory (a 4K RGBA16F target is 66 MB).
+    static const bool on = [] {
+        const char* env = std::getenv("TLG_FS_DISCARD");
+        return env && *env == '1';
+    }();
+    if (!on || !pipeline || state.depth_stencil_attachment.has_depth ||
+        state.depth_stencil_attachment.has_stencil || !scheduler.WillBeginRendering(state)) {
+        return;
+    }
+    if (u32(pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash) != 0xb94242a8u) {
+        return;
+    }
+    const auto* ps = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
+    if (!ps || ps->has_discard) {
+        return;
+    }
+    const auto& key = pipeline->GetGraphicsKey();
+    const vk::ColorComponentFlags all = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+                                        vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
+    u16 mask = 0;
+    for (u32 i = 0; i < state.num_color_attachments && i < AmdGpu::NUM_COLOR_BUFFERS; ++i) {
+        const auto& cb = state.color_attachments[i];
+        if (cb.image_view && !cb.is_clear && !key.blend_controls[i].enable &&
+            key.write_masks[i] == all) {
+            mask |= u16(1u << i);
+        }
+    }
+    state.discard_mask = mask;
+}
+
 RenderState Rasterizer::BeginRendering(const GraphicsPipeline* pipeline) {
     // tlg: RenderStateMemo (see BeginMemo).
     const bool memo_on = !TlgToggle::Disabled(TlgToggle::RenderStateMemo) && !FrameCapture::Active();
@@ -5588,6 +5622,7 @@ RenderState Rasterizer::BeginRendering(const GraphicsPipeline* pipeline) {
     }
     begin_memo.valid = false;
     RenderState state = BeginRenderingFull(pipeline);
+    MarkOverwrittenTargets(pipeline, state);
     if (memo_on && !attachment_feedback_loop) {
         // (is_clear of the depth attachment shares its bytes with has_depth.)
         bool clears = state.depth_stencil_attachment.depth_clear ||

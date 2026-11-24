@@ -284,7 +284,9 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
         color_attachments[i] = vk::RenderingAttachmentInfo{
             .imageView = cb.image_view,
             .imageLayout = cb.image_layout,
-            .loadOp = cb.is_clear ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad,
+            .loadOp = cb.is_clear                              ? vk::AttachmentLoadOp::eClear
+                      : (render_state.discard_mask >> i) & 1u ? vk::AttachmentLoadOp::eDontCare
+                                                              : vk::AttachmentLoadOp::eLoad,
             .storeOp = vk::AttachmentStoreOp::eStore,
             .clearValue = vk::ClearValue{.color = vk::ClearColorValue{.uint32 = cb.clear_value}},
         };

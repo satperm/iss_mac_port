@@ -59,6 +59,10 @@ struct RenderState {
     u16 height;
     u16 num_layers;
     u16 num_color_attachments;
+    /// tlg: colour attachments whose old contents the pass's first draw overwrites (loadOp
+    /// DontCare, TLG_FS_DISCARD). Not part of the comparison: it only matters when a pass begins.
+    u16 discard_mask = 0;
+    u16 discard_pad[3] = {};
 
     bool operator==(const RenderState& other) const noexcept {
         // tlg: the size fields, depth and the attachments in use only (a whole-struct memcmp of
