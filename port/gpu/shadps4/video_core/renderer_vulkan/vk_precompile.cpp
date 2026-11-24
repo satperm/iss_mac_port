@@ -135,16 +135,27 @@ void PutStage(std::vector<u8>& out, Shader::SwStage sw, const Shader::Info& info
 struct Capture {
     std::mutex mutex;
     std::ofstream out;
+    std::ofstream keys; ///< <file>.keys: the key of every record, so later starts skip them too
     std::unordered_set<u64> seen;
     u32 records = 0;
+    bool full = false;
 };
 
 Capture* OpenCapture() {
     static Capture* capture = [] () -> Capture* {
-        const char* path = std::getenv("TLG_PRECOMPILE_CAPTURE");
-        if (!path || !*path) {
-            return nullptr;
+        const char* env = std::getenv("TLG_PRECOMPILE_CAPTURE");
+        std::string learned;
+        if (!env || !*env) {
+            // tlg: by default, while the first-start compilation is in use (run_macos.sh sets
+            // TLG_PRECOMPILE_JOBS), new pipelines go to the cache folder's learned file.
+            const char* jobs = std::getenv("TLG_PRECOMPILE_JOBS");
+            const char* learn = std::getenv("TLG_PRECOMPILE_LEARN");
+            if (!jobs || !*jobs || (learn && *learn == '0')) {
+                return nullptr;
+            }
+            learned = (Storage::GameCacheDir() / LearnedFile).string();
         }
+        const char* path = learned.empty() ? env : learned.c_str();
         auto* c = new Capture;
         const bool fresh = !std::filesystem::exists(path);
         c->out.open(path, std::ios::binary | std::ios::app);
@@ -157,7 +168,17 @@ Capture* OpenCapture() {
             c->out.write(FileMagic, sizeof(FileMagic));
             c->out.write(reinterpret_cast<const char*>(&FileVersion), sizeof(FileVersion));
         }
-        std::printf("Precompile capture: appending new pipelines to %s\n", path);
+        const std::string keys_path = std::string{path} + ".keys";
+        if (!fresh) {
+            std::ifstream in(keys_path, std::ios::binary);
+            u64 key = 0;
+            while (in.read(reinterpret_cast<char*>(&key), sizeof(key))) {
+                c->seen.insert(key);
+            }
+        }
+        c->keys.open(keys_path, std::ios::binary | (fresh ? std::ios::trunc : std::ios::app));
+        std::printf("Precompile capture: appending new pipelines to %s (%zu known)\n", path,
+                    c->seen.size());
         return c;
     }();
     return capture;
@@ -165,11 +186,19 @@ Capture* OpenCapture() {
 
 void Write(Capture& capture, u64 key, const std::vector<u8>& record) {
     std::scoped_lock lock{capture.mutex};
-    if (!capture.seen.insert(key).second) {
+    // At most 64 MB (~14,000 pipelines): the learned file only ever grows.
+    if (capture.full || !capture.seen.insert(key).second) {
+        return;
+    }
+    if (capture.out.tellp() > std::streamoff(64ll << 20)) {
+        capture.full = true;
+        std::printf("Precompile capture: the file is full (64 MB), no more pipelines\n");
         return;
     }
     capture.out.write(reinterpret_cast<const char*>(record.data()), record.size());
     capture.out.flush();
+    capture.keys.write(reinterpret_cast<const char*>(&key), sizeof(key));
+    capture.keys.flush();
     ++capture.records;
 }
 
@@ -429,6 +458,17 @@ bool PipelineCache::PrecompileFirstStart(const std::function<void(u32 total)>& s
     std::vector<Precompile::Record> records;
     if (!Precompile::ReadJobs(jobs, records)) {
         return false;
+    }
+    // The pipelines learned while playing, after the job file's (a damaged file is set aside).
+    if (const auto learned = folder / Precompile::LearnedFile; std::filesystem::exists(learned, ec)) {
+        std::vector<Precompile::Record> more;
+        if (Precompile::ReadJobs(learned, more)) {
+            std::printf("Precompile: %zu pipelines learned while playing\n", more.size());
+            records.insert(records.end(), std::make_move_iterator(more.begin()),
+                           std::make_move_iterator(more.end()));
+        } else {
+            std::filesystem::rename(learned, folder / (std::string{Precompile::LearnedFile} + ".bad"), ec);
+        }
     }
     // A record that crashed the last start is skipped (it compiles in game, as before).
     // "<record>|<crashes>|<fingerprint>": after three starts that stopped while compiling, it
