@@ -548,7 +548,9 @@ bool PipelineCache::ColdDriverCache(const std::filesystem::path& jobs, double ba
         return false;
     }
     const double per = ProbeSample(jobs);
-    const bool cold = per > 3.0 * baseline_ms;
+    // Cold measured 37x the baseline on an M3 Max (125 ms against 3.4 ms): 8x leaves room for a
+    // busy Mac at start without compiling everything again for nothing.
+    const bool cold = per > 8.0 * baseline_ms;
     std::printf("Precompile: probe %.2f ms per pipeline, %.2f ms after the last full compilation: "
                 "the driver's cache is %s\n",
                 per, baseline_ms, cold ? "cold, compiling again" : "warm");
