@@ -410,7 +410,28 @@ GraphicsPipeline::GraphicsPipeline(
         });
     }
     stage = u32(Shader::SwStage::Fragment);
-    if (infos[stage]) {
+    // tlg: TLG_DEPTH_ONLY_NO_PS=1 (experiment): a pass with no colour target whose pixel shader
+    // cannot change the result (no discard, no depth export, no stores) is rasterised for depth
+    // only, without the pixel shader (shadow maps, depth prepasses).
+    static const bool depth_only_no_ps = [] {
+        const char* env = std::getenv("TLG_DEPTH_ONLY_NO_PS");
+        return env && *env == '1';
+    }();
+    const auto useless_ps = [&](const Shader::Info& info) {
+        if (key.num_color_attachments != 0 || info.has_discard || info.has_storage_images ||
+            info.stores.Get(Shader::IR::Attribute::Depth)) {
+            return false;
+        }
+        for (const auto& buffer : info.buffers) {
+            if (buffer.is_written) {
+                return false;
+            }
+        }
+        return true;
+    };
+    if (infos[stage] && depth_only_no_ps && useless_ps(*infos[stage])) {
+        // no fragment stage
+    } else if (infos[stage]) {
         shader_stages.emplace_back(vk::PipelineShaderStageCreateInfo{
             .stage = vk::ShaderStageFlagBits::eFragment,
             .module = modules[stage],
