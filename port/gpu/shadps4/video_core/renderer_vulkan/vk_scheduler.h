@@ -915,7 +915,10 @@ public:
         Record([copy = std::forward<Func>(copy), this,
                 seq = ++host_copies_issued](vk::CommandBuffer) {
             copy();
-            host_copies_done.store(seq, std::memory_order_release);
+            // Two recording threads (TLG_RECORD_THREADS=2) finish copies out of order.
+            u64 done = host_copies_done.load(std::memory_order_relaxed);
+            while (done < seq && !host_copies_done.compare_exchange_weak(done, seq, std::memory_order_release)) {
+            }
         });
     }
 
@@ -1107,6 +1110,19 @@ private:
     std::vector<std::unique_ptr<RecordChunk>> free_chunks;
     bool recorder_busy = false;
     std::atomic<size_t> queued_chunks{0}; ///< recorder_queue.size() for lock-free polling
+    /// tlg: TLG_RECORD_THREADS=2: a second recording thread. The recorded stream falls into
+    /// segments, one command buffer each (a submission ends one); the two threads record
+    /// alternate segments and submit them strictly in order (lane_turn).
+    bool two_lanes = false;
+    std::jthread recorder_thread2;
+    std::deque<std::unique_ptr<RecordChunk>> recorder_queue2;
+    bool recorder_busy2 = false;
+    std::atomic<size_t> queued_chunks2{0};
+    vk::CommandBuffer cmdbuf2; ///< lane 1's command buffer
+    u32 seg_lane = 0;          ///< caller side: the lane the current segment goes to
+    u64 seg_seq = 0;           ///< caller side: asynchronous submissions recorded so far
+    std::atomic<u64> lane_turn{0}; ///< asynchronous submissions done so far
+    void RecorderLoop(std::stop_token stoken, u32 lane);
     bool recorder_sleeping = false; ///< waiting on recorder_cv (guarded by recorder_mutex)
     std::atomic<u32> work_since_submit{0}; ///< tlg: CountWork(), reset by each submission
     std::atomic<u32> tess_indirect_since_submit{0}; ///< tlg: CountTessIndirect(), the same

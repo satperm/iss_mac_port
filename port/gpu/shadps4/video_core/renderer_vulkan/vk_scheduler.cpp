@@ -60,6 +60,15 @@ Scheduler::Scheduler(const Instance& instance, bool threaded_recording)
         record_chunk = AcquireChunk();
         recorder_thread = std::jthread(std::bind_front(&Scheduler::RecorderThread, this));
         recording_threaded = true;
+        const char* lanes = std::getenv("TLG_RECORD_THREADS");
+        if (lanes && std::atoi(lanes) >= 2) {
+            two_lanes = true;
+            cmdbuf2 = command_pool.Commit(true);
+            Check(cmdbuf2.begin(vk::CommandBufferBeginInfo{
+                .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit}));
+            recorder_thread2 = std::jthread([this](std::stop_token st) { RecorderLoop(st, 1); });
+            std::printf("GPU: two Vulkan recording threads (TLG_RECORD_THREADS=2)\n");
+        }
     }
 #if TRACY_GPU_ENABLED
     profiler_scope = reinterpret_cast<tracy::VkCtxScope*>(std::malloc(sizeof(tracy::VkCtxScope)));
@@ -73,8 +82,14 @@ Scheduler::~Scheduler() {
     if (recorder_thread.joinable()) {
         SyncRecording();
         recorder_thread.request_stop();
+        if (recorder_thread2.joinable()) {
+            recorder_thread2.request_stop();
+        }
         recorder_cv.notify_all();
         recorder_thread.join();
+        if (recorder_thread2.joinable()) {
+            recorder_thread2.join();
+        }
     }
 #if TRACY_GPU_ENABLED
     std::free(profiler_scope);
@@ -533,19 +548,24 @@ void Scheduler::KickRecording(bool force) {
     bool wake;
     {
         std::scoped_lock lk{recorder_mutex};
+        auto& queue = seg_lane == 0 ? recorder_queue : recorder_queue2;
         for (auto& chunk : full_chunks) {
-            recorder_queue.push_back(std::move(chunk));
+            queue.push_back(std::move(chunk));
         }
         if (!record_chunk->Empty()) {
-            recorder_queue.push_back(std::move(record_chunk));
+            queue.push_back(std::move(record_chunk));
         }
-        wake = recorder_sleeping;
-        queued_chunks.store(recorder_queue.size(), std::memory_order_release);
+        wake = recorder_sleeping || two_lanes;
+        (seg_lane == 0 ? queued_chunks : queued_chunks2).store(queue.size(), std::memory_order_release);
     }
     full_chunks.clear();
     // A busy recorder picks the new chunks up by itself: waking it is a syscall per draw.
     if (wake) {
-        recorder_cv.notify_one();
+        if (two_lanes) {
+            recorder_cv.notify_all();
+        } else {
+            recorder_cv.notify_one();
+        }
     }
     if (!record_chunk) {
         record_chunk = AcquireChunk();
@@ -567,7 +587,16 @@ void Scheduler::SyncRecording() {
     const u64 start = sync_stats ? clock_gettime_nsec_np(CLOCK_UPTIME_RAW) : 0;
     {
         std::unique_lock lk{recorder_mutex};
-        recorder_idle_cv.wait(lk, [this] { return recorder_queue.empty() && !recorder_busy; });
+        recorder_idle_cv.wait(lk, [this] {
+            return recorder_queue.empty() && !recorder_busy && recorder_queue2.empty() &&
+                   !recorder_busy2;
+        });
+    }
+    // Both threads idle: the current segment moves to lane 0, where the caller's direct paths
+    // (CommandBuffer(), the synchronous submission) find it as current_cmdbuf.
+    if (two_lanes && seg_lane == 1) {
+        std::swap(current_cmdbuf, cmdbuf2);
+        seg_lane = 0;
     }
     if (sync_stats) {
         static std::mutex stats_mutex;
@@ -611,7 +640,15 @@ void Scheduler::SyncRecording() {
 }
 
 void Scheduler::RecorderThread(std::stop_token stoken) {
-    Common::SetCurrentThreadName("tlg:VkRecorder");
+    RecorderLoop(stoken, 0);
+}
+
+void Scheduler::RecorderLoop(std::stop_token stoken, u32 lane) {
+    Common::SetCurrentThreadName(lane == 0 ? "tlg:VkRecorder" : "tlg:VkRecorder2");
+    auto& my_queue = lane == 0 ? recorder_queue : recorder_queue2;
+    auto& my_busy = lane == 0 ? recorder_busy : recorder_busy2;
+    auto& my_queued = lane == 0 ? queued_chunks : queued_chunks2;
+    auto& my_cmdbuf = lane == 0 ? current_cmdbuf : cmdbuf2;
     // tlg: this thread's CPU clock (frame stats), as the GPU command thread does. The first
     // recorder to start keeps the slot (the draw scheduler's; a presenter scheduler records
     // much less).
@@ -644,7 +681,7 @@ void Scheduler::RecorderThread(std::stop_token stoken) {
         }());
         const auto spin_until = std::chrono::steady_clock::now() + spin_time;
         const auto spin_start = std::chrono::steady_clock::now();
-        for (u32 spins = 1; queued_chunks.load(std::memory_order_acquire) == 0; ++spins) {
+        for (u32 spins = 1; my_queued.load(std::memory_order_acquire) == 0; ++spins) {
             Common::CpuRelax();
             // The clock is read every 256 pauses, not per iteration.
             if (!(spins & 255) &&
@@ -663,23 +700,23 @@ void Scheduler::RecorderThread(std::stop_token stoken) {
         {
             std::unique_lock lk{recorder_mutex};
             recorder_sleeping = true;
-            recorder_cv.wait(lk, stoken, [this] { return !recorder_queue.empty(); });
+            recorder_cv.wait(lk, stoken, [&] { return !my_queue.empty(); });
             recorder_sleeping = false;
-            if (recorder_queue.empty()) {
+            if (my_queue.empty()) {
                 return; // stop requested
             }
-            chunk = std::move(recorder_queue.front());
-            recorder_queue.pop_front();
-            queued_chunks.store(recorder_queue.size(), std::memory_order_release);
-            recorder_busy = true;
+            chunk = std::move(my_queue.front());
+            my_queue.pop_front();
+            my_queued.store(my_queue.size(), std::memory_order_release);
+            my_busy = true;
         }
-        // current_cmdbuf only changes after SyncRecording(), which waits for this thread.
-        chunk->Execute(current_cmdbuf);
+        // This lane's command buffer only changes in a submission or after SyncRecording().
+        chunk->Execute(my_cmdbuf);
         {
             std::scoped_lock lk{recorder_mutex};
             free_chunks.push_back(std::move(chunk));
-            recorder_busy = false;
-            if (recorder_queue.empty()) {
+            my_busy = false;
+            if (my_queue.empty()) {
                 recorder_idle_cv.notify_all();
             }
         }
@@ -775,7 +812,7 @@ void Scheduler::AllocateWorkerCommandBuffers() {
         .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
     };
 
-    current_cmdbuf = command_pool.Commit();
+    current_cmdbuf = command_pool.Commit(two_lanes);
     Check(current_cmdbuf.begin(begin_info));
 
     // Invalidate dynamic state so it gets applied to the new command buffer.
@@ -862,7 +899,8 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
         // waits for all of them (TlgCopy::WaitAsync) before it submits.
         TlgCopy::FlushBatch();
         const u64 copies = host_copies_issued;
-        Record([this, copy = info, copies](vk::CommandBuffer cmdbuf) mutable {
+        Record([this, copy = info, copies, lane = seg_lane, seq = seg_seq,
+                signal_value](vk::CommandBuffer cmdbuf) mutable {
             while (host_copies_done.load(std::memory_order_acquire) < copies) {
                 std::this_thread::yield();
             }
@@ -888,16 +926,29 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
                 .signalSemaphoreCount = copy.num_signal_semas,
                 .pSignalSemaphores = copy.signal_semas.data(),
             };
+            // Submissions in the order they were recorded (two lanes record in parallel).
+            while (lane_turn.load(std::memory_order_acquire) != seq) {
+                std::this_thread::yield();
+            }
             const auto result = [&] {
                 const auto queue_lock = LockQueueInSubmit();
                 return submit_queue.submit(submit_info, copy.fence);
             }();
             ASSERT_MSG(result != vk::Result::eErrorDeviceLost, "Device lost during submit");
-            current_cmdbuf = command_pool.Commit();
-            Check(current_cmdbuf.begin(vk::CommandBufferBeginInfo{
+            if (two_lanes) {
+                command_pool.SetSubmitted(cmdbuf, signal_value);
+            }
+            lane_turn.store(seq + 1, std::memory_order_release);
+            auto& next = lane == 0 ? current_cmdbuf : cmdbuf2;
+            next = command_pool.Commit(two_lanes);
+            Check(next.begin(vk::CommandBufferBeginInfo{
                 .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit}));
         });
         KickRecording(true); // the submission is the last command of its chunk
+        ++seg_seq;
+        if (two_lanes) {
+            seg_lane ^= 1u; // the next segment goes to the other recording thread
+        }
         dynamic_state.Invalidate();
         if (split) {
             lk.unlock();
@@ -944,6 +995,9 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
         return submit_queue.submit(submit_info, info.fence);
     }();
     ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
+    if (two_lanes) {
+        command_pool.SetSubmitted(current_cmdbuf, signal_value);
+    }
 
     work_semaphore.Refresh();
     AllocateWorkerCommandBuffers();

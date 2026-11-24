@@ -59,7 +59,10 @@ public:
 
     void Allocate(std::size_t begin, std::size_t end) override;
 
-    vk::CommandBuffer Commit();
+    vk::CommandBuffer Commit(bool pending = false);
+    /// tlg: the tick a buffer committed as pending (two recording threads: it is submitted
+    /// later than the next tick) will signal; until then the reset thread leaves it alone.
+    void SetSubmitted(vk::CommandBuffer buffer, u64 tick);
 
 private:
     /// tlg: (default; TLG_CMD_PRERESET=0 off) every command buffer has a pool of its own, and a thread resets each

@@ -170,10 +170,17 @@ void CommandPool::ResetThread(std::stop_token stop) {
             const char* env = std::getenv("TLG_CMD_RESET_POLL");
             return !(env && *env == '0');
         }();
+        const auto reread = [&] {
+            std::scoped_lock lock{slot_mutex};
+            if (!in_flight.empty() && in_flight.front().buffer == slot.buffer) {
+                slot.tick = in_flight.front().tick;
+            }
+        };
         while (poll && !work_semaphore->IsFree(slot.tick)) {
             if (stop.stop_requested()) {
                 return;
             }
+            reread();
             work_semaphore->Refresh();
             if (!work_semaphore->IsFree(slot.tick)) {
                 std::this_thread::sleep_for(std::chrono::microseconds(250));
@@ -183,6 +190,11 @@ void CommandPool::ResetThread(std::stop_token stop) {
         while (!work_semaphore->IsFree(slot.tick)) {
             if (stop.stop_requested()) {
                 return;
+            }
+            reread();
+            if (slot.tick == ~0ull) {
+                std::this_thread::sleep_for(std::chrono::microseconds(250));
+                continue;
             }
             const vk::SemaphoreWaitInfo wait_info = {
                 .semaphoreCount = 1,
@@ -219,7 +231,17 @@ void CommandPool::Allocate(std::size_t begin, std::size_t end) {
     }
 }
 
-vk::CommandBuffer CommandPool::Commit() {
+void CommandPool::SetSubmitted(vk::CommandBuffer buffer, u64 tick) {
+    std::scoped_lock lock{slot_mutex};
+    for (auto& slot : in_flight) {
+        if (slot.buffer == buffer) {
+            slot.tick = tick;
+            break;
+        }
+    }
+}
+
+vk::CommandBuffer CommandPool::Commit(bool pending) {
     if (prereset) {
         Slot slot{};
         {
@@ -232,7 +254,7 @@ vk::CommandBuffer CommandPool::Commit() {
         if (!slot.buffer) {
             slot = NewSlot();
         }
-        slot.tick = work_semaphore->CurrentTick();
+        slot.tick = pending ? ~0ull : work_semaphore->CurrentTick();
         {
             std::scoped_lock lock{slot_mutex};
             in_flight.push_back(slot);
