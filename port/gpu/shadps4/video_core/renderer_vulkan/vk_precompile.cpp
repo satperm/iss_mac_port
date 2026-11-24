@@ -186,13 +186,14 @@ Capture* OpenCapture() {
 
 void Write(Capture& capture, u64 key, const std::vector<u8>& record) {
     std::scoped_lock lock{capture.mutex};
-    // At most 64 MB (~14,000 pipelines): the learned file only ever grows.
+    // At most 32 MB (~7,000 pipelines): the learned file only ever grows, and each record costs
+    // the next full compilation a pipeline build.
     if (capture.full || !capture.seen.insert(key).second) {
         return;
     }
-    if (capture.out.tellp() > std::streamoff(64ll << 20)) {
+    if (capture.out.tellp() > std::streamoff(32ll << 20)) {
         capture.full = true;
-        std::printf("Precompile capture: the file is full (64 MB), no more pipelines\n");
+        std::printf("Precompile capture: the file is full (32 MB), no more pipelines\n");
         return;
     }
     capture.out.write(reinterpret_cast<const char*>(record.data()), record.size());

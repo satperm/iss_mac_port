@@ -103,7 +103,7 @@ The first start prepares the shaders once: about a minute with no window while i
 your game files, then up to about two minutes on a "Compiling shaders" screen (measured on an M3 Max).
 It needs about 900 MB of disk space and runs again when the game files, the port or macOS change, or when
 macOS has dropped its own shader cache. Later starts skip it. Pipelines the game first builds while you
-play are remembered (up to 64 MB) and compiled with the rest the next time it runs. To skip it entirely, set `TLG_PRECOMPILE=0`; shaders then compile during play and stutter.
+play are remembered (up to 32 MB) and compiled with the rest the next time it runs. To skip it entirely, set `TLG_PRECOMPILE=0`; shaders then compile during play and stutter.
 
 Without the app, from a Terminal:
 
