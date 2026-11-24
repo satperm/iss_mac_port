@@ -714,11 +714,28 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     };
 
     draw_scheduler.EndRendering();
-    const auto cmdbuf = draw_scheduler.CommandBuffer();
-    cmdbuf.pipelineBarrier2(vk::DependencyInfo{
-        .imageMemoryBarrierCount = 1,
-        .pImageMemoryBarriers = &pre_barrier,
-    });
+    // tlg: without a frame dump the frame's commands are recorded on the Vulkan recording thread
+    // like the game's: taking the command buffer here waited for that thread twice a frame
+    // (~0.7 ms a frame on the truck). TLG_PRESENT_DIRECT=1: as before.
+    static const bool present_direct = [] {
+        const char* env = std::getenv("TLG_PRESENT_DIRECT");
+        return env && *env == '1';
+    }();
+    const bool deferred = !frame_dump && !present_direct && draw_scheduler.IsRecordingDeferred();
+    const auto cmdbuf = deferred ? vk::CommandBuffer{} : draw_scheduler.CommandBuffer();
+    if (deferred) {
+        draw_scheduler.Record([pre_barrier](vk::CommandBuffer cmd) {
+            cmd.pipelineBarrier2(vk::DependencyInfo{
+                .imageMemoryBarrierCount = 1,
+                .pImageMemoryBarriers = &pre_barrier,
+            });
+        });
+    } else {
+        cmdbuf.pipelineBarrier2(vk::DependencyInfo{
+            .imageMemoryBarrierCount = 1,
+            .pImageMemoryBarriers = &pre_barrier,
+        });
+    }
 
     VideoCore::ImageViewInfo view_info{};
     view_info.format = GetFrameViewFormat(attribute.attrib.pixel_format);
@@ -749,7 +766,13 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
             .image = display.image,
             .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
         };
-        cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &to_read});
+        if (deferred) {
+            draw_scheduler.Record([to_read](vk::CommandBuffer cmd) {
+                cmd.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &to_read});
+            });
+        } else {
+            cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &to_read});
+        }
     } else {
         auto& image = texture_cache.GetImage(image_id);
         if (frame_dump) {
@@ -782,14 +805,23 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
         fsr_settings.use_rcas &&
         TlgGraphics::FsrPassRuns(fsr_settings.enable, true, int(image_size.width), int(image_size.height),
                                   int(frame->width), int(frame->height));
-    image_view = fsr_pass.Render(cmdbuf, image_view, image_size, {frame->width, frame->height},
-                                 fsr_settings, frame->is_hdr);
-
     // Vulkan has no sRGB variant of the 10-bit format, so an A2R10G10B10Srgb buffer reaches
     // the post process pass still sRGB encoded and has to be decoded there instead.
     pp_settings.srgb_input =
         attribute.attrib.pixel_format == Libraries::VideoOut::PixelFormat::A2R10G10B10Srgb;
-    pp_pass.Render(cmdbuf, image_view, image_size, *frame, pp_settings);
+    if (deferred) {
+        // FSR and the post process pass only use the command buffer and their own resources.
+        draw_scheduler.Record([this, frame, image_view, image_size, fsr = fsr_settings,
+                               pp = pp_settings](vk::CommandBuffer cmd) mutable {
+            const auto view = fsr_pass.Render(cmd, image_view, image_size,
+                                              {frame->width, frame->height}, fsr, frame->is_hdr);
+            pp_pass.Render(cmd, view, image_size, *frame, pp);
+        });
+    } else {
+        image_view = fsr_pass.Render(cmdbuf, image_view, image_size, {frame->width, frame->height},
+                                     fsr_settings, frame->is_hdr);
+        pp_pass.Render(cmdbuf, image_view, image_size, *frame, pp_settings);
+    }
     if (frame_dump) {
         // The presented image as the swapchain blit reads it (General after the pass).
         const vk::MemoryBarrier2 done{.srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,

@@ -791,6 +791,9 @@ void Scheduler::AllocateWorkerCommandBuffers() {
 #endif
 }
 
+/// tlg: the scheduler whose recording thread submits (TLG_ASYNC_SUBMIT), for waits on its ticks.
+static std::atomic<const Scheduler*> g_async_scheduler{nullptr};
+
 void Scheduler::SubmitExecution(SubmitInfo& info) {
     // tlg: TLG_ACB_QUEUE: the companion queue's recorded work first; this submission waits for it.
     if (companion) {
@@ -856,13 +859,14 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
         return !(env && *env == '0');
     }();
     if (async_submit && IsRecordingDeferred() && !own_queue) {
+        g_async_scheduler.store(this, std::memory_order_release);
         info.AddSignal(work_semaphore.Handle(), signal_value);
         ImGui::Core::TextureManager::Submit();
         // This thread's pending copy batch goes to the copy threads now: the recording thread
         // waits for all of them (TlgCopy::WaitAsync) before it submits.
         TlgCopy::FlushBatch();
         const u64 copies = host_copies_issued;
-        Record([this, copy = info, copies](vk::CommandBuffer cmdbuf) mutable {
+        Record([this, copy = info, copies, signal_value](vk::CommandBuffer cmdbuf) mutable {
             while (host_copies_done.load(std::memory_order_acquire) < copies) {
                 std::this_thread::yield();
             }
@@ -893,6 +897,7 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
                 return submit_queue.submit(submit_info, copy.fence);
             }();
             ASSERT_MSG(result != vk::Result::eErrorDeviceLost, "Device lost during submit");
+            issued_tick.store(signal_value, std::memory_order_release);
             current_cmdbuf = command_pool.Commit();
             Check(current_cmdbuf.begin(vk::CommandBufferBeginInfo{
                 .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit}));
@@ -939,10 +944,21 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     if (!own_queue) {
         ImGui::Core::TextureManager::Submit();
     }
+    // tlg: a wait on the asynchronously submitting scheduler's ticks: its submission must be in
+    // the queue first (see WaitIssued).
+    if (const Scheduler* async = g_async_scheduler.load(std::memory_order_acquire);
+        async && async != this && async->submit_queue == submit_queue) {
+        for (u32 i = 0; i < info.num_wait_semas; ++i) {
+            if (info.wait_semas[i] == async->work_semaphore.Handle()) {
+                async->WaitIssued(info.wait_ticks[i]);
+            }
+        }
+    }
     const auto submit_result = [&] {
         const auto queue_lock = own_queue ? std::unique_lock<std::mutex>{} : LockQueueInSubmit();
         return submit_queue.submit(submit_info, info.fence);
     }();
+    issued_tick.store(signal_value, std::memory_order_release);
     ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
 
     work_semaphore.Refresh();

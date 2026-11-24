@@ -980,6 +980,14 @@ public:
     static inline std::atomic<u64> direct_recordings{0};
 
     /// Returns the current command buffer tick.
+    /// tlg: waits until the submission that signals `tick` has been submitted to the queue.
+    /// Another queue's command buffer may wait for a tick not yet signalled, but one committed
+    /// earlier on the same Metal queue waits forever (the queue runs them in order).
+    void WaitIssued(u64 tick) const {
+        while (issued_tick.load(std::memory_order_acquire) < tick) {
+            std::this_thread::yield();
+        }
+    }
     [[nodiscard]] u64 CurrentTick() const noexcept {
         return work_semaphore.CurrentTick();
     }
@@ -1112,6 +1120,9 @@ private:
     std::atomic<u32> tess_indirect_since_submit{0}; ///< tlg: CountTessIndirect(), the same
     bool direct_mode = false; ///< the command buffer is recorded on the caller's thread
     u64 host_copies_issued = 0;
+    /// tlg: the highest tick whose submission reached the queue (TLG_ASYNC_SUBMIT: the
+    /// recording thread submits after the caller moved on).
+    std::atomic<u64> issued_tick{0};
     std::atomic<u64> host_copies_done{0};
     std::atomic<u64> deferred_signals_issued{0}; ///< by the thread recording (A or B)
     std::shared_ptr<std::atomic<u64>> deferred_signals_done =
