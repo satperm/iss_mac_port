@@ -847,6 +847,64 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
         // Until the next submission's first timestamp: mostly the GPU waiting for it.
         profiler->Mark(0x5B317ull, [] { return std::string{"(between submissions: GPU idle)"}; });
     }
+    // tlg: the recording thread ends, submits and replaces the command buffer itself, after the
+    // commands queued before this point, so this thread no longer waits for it (~77 submissions
+    // a frame, ~1.6 ms of waiting a frame on the truck; truck +3.4%, Seattle +4.1%).
+    // TLG_ASYNC_SUBMIT=0: this thread waits and submits, as before.
+    static const bool async_submit = [] {
+        const char* env = std::getenv("TLG_ASYNC_SUBMIT");
+        return !(env && *env == '0');
+    }();
+    if (async_submit && IsRecordingDeferred() && !own_queue) {
+        info.AddSignal(work_semaphore.Handle(), signal_value);
+        ImGui::Core::TextureManager::Submit();
+        // This thread's pending copy batch goes to the copy threads now: the recording thread
+        // waits for all of them (TlgCopy::WaitAsync) before it submits.
+        TlgCopy::FlushBatch();
+        const u64 copies = host_copies_issued;
+        Record([this, copy = info, copies](vk::CommandBuffer cmdbuf) mutable {
+            while (host_copies_done.load(std::memory_order_acquire) < copies) {
+                std::this_thread::yield();
+            }
+            TlgCopy::WaitAsync();
+            Check(cmdbuf.end());
+            static constexpr std::array<vk::PipelineStageFlags, 4> masks = {
+                vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eColorAttachmentOutput,
+                vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eAllCommands,
+            };
+            const vk::TimelineSemaphoreSubmitInfo timeline_si = {
+                .waitSemaphoreValueCount = copy.num_wait_semas,
+                .pWaitSemaphoreValues = copy.wait_ticks.data(),
+                .signalSemaphoreValueCount = copy.num_signal_semas,
+                .pSignalSemaphoreValues = copy.signal_ticks.data(),
+            };
+            const vk::SubmitInfo submit_info = {
+                .pNext = &timeline_si,
+                .waitSemaphoreCount = copy.num_wait_semas,
+                .pWaitSemaphores = copy.wait_semas.data(),
+                .pWaitDstStageMask = masks.data(),
+                .commandBufferCount = 1U,
+                .pCommandBuffers = &cmdbuf,
+                .signalSemaphoreCount = copy.num_signal_semas,
+                .pSignalSemaphores = copy.signal_semas.data(),
+            };
+            const auto result = [&] {
+                const auto queue_lock = LockQueueInSubmit();
+                return submit_queue.submit(submit_info, copy.fence);
+            }();
+            ASSERT_MSG(result != vk::Result::eErrorDeviceLost, "Device lost during submit");
+            current_cmdbuf = command_pool.Commit();
+            Check(current_cmdbuf.begin(vk::CommandBufferBeginInfo{
+                .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit}));
+        });
+        KickRecording(true); // the submission is the last command of its chunk
+        dynamic_state.Invalidate();
+        if (split) {
+            lk.unlock();
+        }
+        PopPendingOperations();
+        return;
+    }
     SyncRecording();
     // Guest memory copies into staging read by this submission (copy threads).
     WaitHostCopies();
