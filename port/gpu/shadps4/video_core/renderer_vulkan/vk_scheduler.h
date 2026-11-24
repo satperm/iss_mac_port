@@ -626,9 +626,25 @@ public:
     }
 
     void Execute(vk::CommandBuffer cmdbuf) {
+        // tlg: TLG_STAGE_DELAY_C_NS (diagnostic): a busy wait per recorded command on the Vulkan
+        // recording thread; the FPS lost per nanosecond tells how much of the critical path it is.
+        static const u64 delay_ns = [] {
+            const char* env = std::getenv("TLG_STAGE_DELAY_C_NS");
+            return env ? std::strtoull(env, nullptr, 10) : 0ull;
+        }();
+        static std::atomic<u64> delayed{0};
         for (CommandBase* command = first; command;) {
             CommandBase* const next = command->next;
             command->Execute(cmdbuf);
+            if (delay_ns) [[unlikely]] {
+                const u64 end = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) + delay_ns;
+                while (clock_gettime_nsec_np(CLOCK_UPTIME_RAW) < end) {
+                }
+                if ((delayed.fetch_add(1, std::memory_order_relaxed) & 0x3FFFF) == 0) {
+                    std::printf("Stage C delay: %llu commands so far\n",
+                                (unsigned long long)delayed.load(std::memory_order_relaxed));
+                }
+            }
             command->~CommandBase();
             command = next;
         }
