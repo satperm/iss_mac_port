@@ -585,60 +585,56 @@ void Rasterizer::NotePendingGpuWrite(VAddr address, u64 size) {
     if (!draw_pipe || !size) {
         return;
     }
-    // tlg: entries were only dropped by PendingWriteOverlaps, and only on checks inside the
-    // bounds; ISS's particle dispatches note ~1,500 writes a frame at ever new ranges and the scan
-    // below walked hundreds of finished entries (42% of a dispatch on the GPU command thread).
-    // Drop what the recording thread has done every 32 notes (TLG_PENDING_PRUNE=0: as before).
-    static const bool prune = [] {
-        const char* env = std::getenv("TLG_PENDING_PRUNE");
-        return !(env && *env == '0');
-    }();
-    if (prune && (++pending_notes & 31) == 0 && !pending_writes.empty()) {
-        const u64 done = draw_pipe->Consumed();
-        std::erase_if(pending_writes, [&](const PendingWrite& write) { return done >= write.position; });
-        pending_min = ~VAddr{0};
-        pending_max = 0;
-        for (const auto& write : pending_writes) {
-            pending_min = std::min(pending_min, write.begin);
-            pending_max = std::max(pending_max, write.end);
-        }
+    // tlg: pending_writes holds disjoint ranges keyed by start (a range merged from several notes
+    // keeps the latest position: it counts as pending a little longer, which only keeps buffers
+    // off the stream path). ISS's particle dispatches note ~1,500 writes a frame and the checks
+    // below run ~10,000 times a frame; a vector scan of ~140 entries per check was ~13% of the
+    // GPU command thread. Drop what the recording thread has done every 32 notes.
+    if ((++pending_notes & 31) == 0 && !pending_writes.empty()) {
+        PrunePendingWrites(draw_pipe->Consumed());
     }
-    // Draws write the same buffers over and over: an entry for the range only moves on.
     const u64 position = draw_pipe->Head();
-    const VAddr end = address + size;
-    for (auto& write : pending_writes) {
-        if (address <= write.end && write.begin <= end) {
-            write.begin = std::min(write.begin, address);
-            write.end = std::max(write.end, end);
-            write.position = position;
-            pending_min = std::min(pending_min, address);
-            pending_max = std::max(pending_max, end);
-            return;
+    VAddr begin = address;
+    VAddr end = address + size;
+    auto it = pending_writes.upper_bound(begin);
+    if (it != pending_writes.begin()) {
+        const auto prev = std::prev(it);
+        if (prev->second.end >= begin) {
+            begin = prev->first;
+            end = std::max(end, prev->second.end);
+            it = pending_writes.erase(prev);
         }
     }
-    pending_writes.push_back({address, end, position});
-    pending_min = std::min(pending_min, address);
+    while (it != pending_writes.end() && it->first <= end) {
+        end = std::max(end, it->second.end);
+        it = pending_writes.erase(it);
+    }
+    pending_writes.emplace_hint(it, begin, PendingWrite{end, position});
+    pending_min = std::min(pending_min, begin);
     pending_max = std::max(pending_max, end);
+}
+
+void Rasterizer::PrunePendingWrites(u64 done) {
+    std::erase_if(pending_writes, [&](const auto& entry) { return done >= entry.second.position; });
+    pending_min = pending_writes.empty() ? ~VAddr{0} : pending_writes.begin()->first;
+    pending_max = pending_writes.empty() ? 0 : std::prev(pending_writes.end())->second.end;
 }
 
 bool Rasterizer::PendingWriteOverlaps(VAddr address, u64 size) {
     if (pending_writes.empty() || address >= pending_max || address + size <= pending_min) {
         return false;
     }
-    // Now and then drop entries whose writes the recording thread has done: the bounds shrink.
     const u64 done = draw_pipe->Consumed();
-    if ((++pending_checks & 63) == 0) {
-        std::erase_if(pending_writes, [&](const PendingWrite& write) { return done >= write.position; });
-        pending_min = ~VAddr{0};
-        pending_max = 0;
-        for (const auto& write : pending_writes) {
-            pending_min = std::min(pending_min, write.begin);
-            pending_max = std::max(pending_max, write.end);
-        }
+    if ((++pending_checks & 1023) == 0) {
+        PrunePendingWrites(done);
     }
     const VAddr end = address + size;
-    for (const auto& write : pending_writes) {
-        if (address < write.end && write.begin < end && done < write.position) {
+    auto it = pending_writes.upper_bound(address);
+    if (it != pending_writes.begin() && std::prev(it)->second.end > address) {
+        --it;
+    }
+    for (; it != pending_writes.end() && it->first < end; ++it) {
+        if (done < it->second.position) {
             return true;
         }
     }

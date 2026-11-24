@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
+
+#include <map>
 #include <condition_variable>
 #include <deque>
 #include <mutex>
@@ -721,11 +723,11 @@ private:
         VAddr address;
     };
     struct PendingWrite {
-        VAddr begin;
         VAddr end;
         u64 position;
     };
-    std::vector<PendingWrite> pending_writes;
+    std::map<VAddr, PendingWrite> pending_writes; ///< disjoint ranges by start
+    void PrunePendingWrites(u64 done);
     VAddr pending_min = ~VAddr{0}, pending_max = 0; ///< bounds of pending_writes
     u32 pending_notes = 0; ///< tlg: NotePendingGpuWrite calls, for its pruning
     u32 pending_checks = 0;
