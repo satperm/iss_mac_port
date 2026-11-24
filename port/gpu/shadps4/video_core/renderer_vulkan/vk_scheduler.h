@@ -1117,6 +1117,7 @@ private:
     std::jthread recorder_thread2;
     std::deque<std::unique_ptr<RecordChunk>> recorder_queue2;
     bool recorder_busy2 = false;
+    bool recorder_sleeping2 = false;
     std::atomic<size_t> queued_chunks2{0};
     vk::CommandBuffer cmdbuf2; ///< lane 1's command buffer
     u32 seg_lane = 0;          ///< caller side: the lane the current segment goes to

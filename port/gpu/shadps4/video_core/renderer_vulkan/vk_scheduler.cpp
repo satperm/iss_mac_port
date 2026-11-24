@@ -555,7 +555,7 @@ void Scheduler::KickRecording(bool force) {
         if (!record_chunk->Empty()) {
             queue.push_back(std::move(record_chunk));
         }
-        wake = recorder_sleeping || two_lanes;
+        wake = seg_lane == 0 ? recorder_sleeping : recorder_sleeping2;
         (seg_lane == 0 ? queued_chunks : queued_chunks2).store(queue.size(), std::memory_order_release);
     }
     full_chunks.clear();
@@ -699,9 +699,10 @@ void Scheduler::RecorderLoop(std::stop_token stoken, u32 lane) {
         std::unique_ptr<RecordChunk> chunk;
         {
             std::unique_lock lk{recorder_mutex};
-            recorder_sleeping = true;
+            auto& my_sleeping = lane == 0 ? recorder_sleeping : recorder_sleeping2;
+            my_sleeping = true;
             recorder_cv.wait(lk, stoken, [&] { return !my_queue.empty(); });
-            recorder_sleeping = false;
+            my_sleeping = false;
             if (my_queue.empty()) {
                 return; // stop requested
             }
