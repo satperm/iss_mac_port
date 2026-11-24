@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <filesystem>
+
 #include <functional>
 #include <unordered_map>
 #include <unordered_set>
@@ -192,6 +194,13 @@ public:
     /// yet (or a crash interrupted it). `start(total)` before the first record; false: nothing to do.
     bool PrecompileFirstStart(const std::function<void(u32 total)>& start,
                               const std::function<void(u32 done, u32 total)>& progress);
+    /// tlg: whether the driver lost its cache of the precompiled pipelines (a sample is built
+    /// and timed against `baseline_ms` per pipeline, the last full compilation's).
+    bool ColdDriverCache(const std::filesystem::path& jobs, double baseline_ms);
+    /// tlg: ms per pipeline to build a fixed sample of the job file (0: too few to tell).
+    double ProbeSample(const std::filesystem::path& jobs);
+    /// tlg: frees the shader modules a precompilation loaded (the game loads them again).
+    void ReleasePrecompiledModules();
 
     using Result = std::tuple<const Shader::Info*, vk::ShaderModule,
                               std::optional<Shader::Gcn::FetchShaderData>, u64>;
