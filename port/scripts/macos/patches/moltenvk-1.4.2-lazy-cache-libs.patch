@@ -1,0 +1,125 @@
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.h b/MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.h
+index c5b7499..2b66d0e 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.h
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.h
+@@ -24,6 +24,8 @@
+ #include "MVKSmallVector.h"
+ #include <MoltenVKShaderConverter/SPIRVToMSLConverter.h>
+ #include <mutex>
++#include <memory>
++#include <atomic>
+ 
+ #import <Metal/Metal.h>
+ 
+@@ -147,12 +149,18 @@ protected:
+ 	void compileLibrary(const std::string& msl,
+ 						const std::vector<std::pair<uint32_t, MVKShaderMacroValue> >* specializationMacroDef = nullptr);
+ 	void compressMSL(const std::string& msl);
++	void ensureLazyLibrary();
+ 	void decompressMSL(std::string& msl);
+-	MVKCompressor<std::string>& getCompressedMSL() { return _compressedMSL; }
++	MVKCompressor<std::string>& getCompressedMSL() { return *_compressedMSL; }
+ 
+ 	MVKVulkanAPIDeviceObject* _owner;
+ 	id<MTLLibrary> _mtlLibrary;
+-	MVKCompressor<std::string> _compressedMSL;
++	/** tlg: shared between copies (pipeline cache merges copy every library: one MSL copy per cache). */
++	std::shared_ptr<MVKCompressor<std::string>> _compressedMSL = std::make_shared<MVKCompressor<std::string>>();
++	/** tlg: read from a pipeline cache; compiled on first use (MVK_TLG_LAZY_CACHE_LIBS=1). */
++	bool _lazy = false;
++	std::atomic<bool> _lazyDone{false};
++	std::mutex _lazyLock;
+ 	mvk::SPIRVToMSLConversionResultInfo _shaderConversionResultInfo;
+ 
+ 	/** When true, representing a library created with source, but never specialized */
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.mm b/MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.mm
+index 3aa44a4..c51e0d0 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.mm
+@@ -73,6 +73,7 @@ MVKMTLFunction MVKShaderLibrary::getMTLFunction(const VkSpecializationInfo* pSpe
+ 												VkPipelineCreationFeedback* pShaderFeedback,
+ 												MVKShaderModule* shaderModule) {
+ 
++	ensureLazyLibrary();
+ 	if ( !_mtlLibrary ) { return MVKMTLFunctionNull; }
+ 
+ 	id<MTLLibrary> lib = _mtlLibrary;
+@@ -102,7 +103,7 @@ MVKMTLFunction MVKShaderLibrary::getMTLFunction(const VkSpecializationInfo* pSpe
+ 			if (entry != _specializationVariants.end()) {
+ 				lib = entry->second->_mtlLibrary;
+ 			} else {
+-				MVKShaderLibrary *new_mvklib = new MVKShaderLibrary(_owner, _shaderConversionResultInfo, _compressedMSL, &spec_list);
++				MVKShaderLibrary *new_mvklib = new MVKShaderLibrary(_owner, _shaderConversionResultInfo, *_compressedMSL, &spec_list);
+ 				_specializationVariants[spec_list] = new_mvklib;
+ 				lib = new_mvklib->_mtlLibrary;
+ 			}
+@@ -188,14 +189,15 @@ void MVKShaderLibrary::setWorkgroupSize(uint32_t x, uint32_t y, uint32_t z) {
+ // Sets the cached MSL source code, after first compressing it.
+ void MVKShaderLibrary::compressMSL(const string& msl) {
+ 	uint64_t startTime = getPerformanceTimestamp();
+-	_compressedMSL.compress(msl, getMVKConfig().shaderSourceCompressionAlgorithm);
++	_compressedMSL = std::make_shared<MVKCompressor<std::string>>();
++	_compressedMSL->compress(msl, getMVKConfig().shaderSourceCompressionAlgorithm);
+ 	addPerformanceInterval(getPerformanceStats().shaderCompilation.mslCompress, startTime);
+ }
+ 
+ // Decompresses the cached MSL into the string.
+ void MVKShaderLibrary::decompressMSL(string& msl) {
+ 	uint64_t startTime = getPerformanceTimestamp();
+-	_compressedMSL.decompress(msl);
++	_compressedMSL->decompress(msl);
+ 	addPerformanceInterval(getPerformanceStats().shaderCompilation.mslDecompress, startTime);
+ }
+ 
+@@ -219,12 +221,33 @@ MVKShaderLibrary::MVKShaderLibrary(MVKVulkanAPIDeviceObject* owner,
+ 	_maySpecializeWithMacro(specializationMacroDef == nullptr) {
+ 
+ 	_shaderConversionResultInfo = resultInfo;
+-	_compressedMSL = compressedMSL;
++	_compressedMSL = std::make_shared<MVKCompressor<std::string>>(compressedMSL);
++	// tlg: a library read from a pipeline cache (no specialization) is compiled when a pipeline first
++	// needs it. Compiling all of them in vkCreatePipelineCache took minutes with a cold Metal cache.
++	static const bool lazy = [] {
++		const char* e = getenv("MVK_TLG_LAZY_CACHE_LIBS");
++		return e && e[0] == '1';
++	}();
++	if (lazy && !specializationMacroDef) {
++		_mtlLibrary = nil;
++		_lazy = true;
++		return;
++	}
+ 	string msl;
+ 	decompressMSL(msl);
+ 	compileLibrary(msl, specializationMacroDef);
+ }
+ 
++void MVKShaderLibrary::ensureLazyLibrary() {
++	if ( !_lazy || _lazyDone.load(std::memory_order_acquire) ) { return; }
++	std::lock_guard<std::mutex> lock(_lazyLock);
++	if (_lazyDone.load(std::memory_order_relaxed)) { return; }
++	string msl;
++	decompressMSL(msl);
++	compileLibrary(msl);
++	_lazyDone.store(true, std::memory_order_release);
++}
++
+ void MVKShaderLibrary::compileLibrary(const string& msl,
+ 									  const vector<pair<uint32_t, MVKShaderMacroValue> >* specializationMacroDef) {
+ 	MVKShaderLibraryCompiler* slc = new MVKShaderLibraryCompiler(_owner);
+@@ -276,6 +299,7 @@ MVKShaderLibrary::MVKShaderLibrary(const MVKShaderLibrary& other) :
+ 	_mtlLibrary = [other._mtlLibrary retain];
+ 	_shaderConversionResultInfo = other._shaderConversionResultInfo;
+ 	_compressedMSL = other._compressedMSL;
++	_lazy = other._lazy && !other._lazyDone.load(std::memory_order_acquire) && !_mtlLibrary;
+ }
+ 
+ MVKShaderLibrary& MVKShaderLibrary::operator=(const MVKShaderLibrary& other) {
+@@ -286,6 +310,8 @@ MVKShaderLibrary& MVKShaderLibrary::operator=(const MVKShaderLibrary& other) {
+ 	_owner = other._owner;
+ 	_shaderConversionResultInfo = other._shaderConversionResultInfo;
+ 	_compressedMSL = other._compressedMSL;
++	_lazy = other._lazy && !other._lazyDone.load(std::memory_order_acquire) && !_mtlLibrary;
++	_lazyDone.store(false, std::memory_order_relaxed);
+ 	return *this;
+ }
+ 
