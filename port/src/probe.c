@@ -1206,6 +1206,72 @@ static void install_iss_pitch_safeguard(const char *app0, Segment *segments, uin
     puts("Camera pitch safeguard: enabled (unzoomed full diagonal at pitch limit only)");
 }
 
+/* Black city fix (from HayatoG/iss_pc beta 2026-11-23). The game installs from the disc in PlayGo
+ * stages; each of its 71 world sections belongs to one chunk, and a section whose chunk is in a later
+ * stage also waits for that stage's install package (section +0x3C from the world data; +0x46 = still
+ * loading). The overcast "dismal" time of day lives in chunk 50 (pgc_i2), gated on install_i2, which
+ * a PS4 loads once the Blu-ray install has finished. Here PlayGo reports every chunk local from the
+ * start and nothing ever loads install_i2, so dismal never streams in: no time of day is active and
+ * Seattle stays black on saves that want it (#71, #89). The section setup (eboot 0x3c3b10) reads the
+ * wait at 0x3c3bf5 (sar ax,8; cwde); "xor eax,eax" there makes it 0, as on a fully installed PS4.
+ * Applied only when the bytes match; ISS_INSTALL_GATE_FIX=0 turns it off. */
+enum { ISS_INSTALL_GATE_SITE = 0x3c3bf0u };
+static const unsigned char iss_install_gate_before[] = {
+    0x66,0x41,0x8b,0x46,0x24, 0x66,0xc1,0xf8,0x08, 0x98, 0x89,0x43,0x3c, 0x49,0x8b,0x4e,0x20,
+    0x89,0x4b,0x40, 0x48,0xc1,0xe9,0x31, 0x80,0xe1,0x01, 0x66,0x85,0xc0, 0x88,0x4b,0x48, 0x0f,0x95,0x43,0x46};
+static uint32_t iss_install_gate_counts[256];
+static void report_iss_install_gate(void) {
+    printf("Black city fix: section install-package waits:");
+    for (int i = 0; i < 256; ++i) if (iss_install_gate_counts[i]) printf(" %d=%u", i, iss_install_gate_counts[i]);
+    printf("\n");
+}
+static void *iss_install_gate_watch(void *arg) {
+    (void)arg;
+    for (;;) { sleep(10); report_iss_install_gate(); fflush(stdout); }
+    return NULL;
+}
+static void install_iss_install_gate(const char *app0, uint64_t size) {
+    const char *off = getenv("ISS_INSTALL_GATE_FIX");
+    const char *diag = getenv("ISS_INSTALL_GATE_LOG");
+    if (off && off[0] == '0' && !(diag && diag[0] == '1')) { puts("Black city fix: off (ISS_INSTALL_GATE_FIX=0)"); return; }
+    char path[4096], serial[32] = "";
+    snprintf(path, sizeof(path), "%s/sce_sys/param.sfo", app0 ? app0 : ".");
+    sfo_value(path, "TITLE_ID", serial, sizeof(serial), NULL);
+    if (strcmp(serial, "CUSA00223") && strcmp(serial, "CUSA00004")) return;
+    if (size < ISS_INSTALL_GATE_SITE + sizeof(iss_install_gate_before) ||
+        memcmp(image + ISS_INSTALL_GATE_SITE, iss_install_gate_before, sizeof(iss_install_gate_before))) {
+        puts("Black city fix: not applied (game code not as expected); no writes");
+        return;
+    }
+    const char *log = getenv("ISS_INSTALL_GATE_LOG");
+    const int fix = !(off && off[0] == '0');
+    if (log && log[0] == '1') {
+        /* Diagnostics: count each section's install-package wait value; replays the 17 bytes it replaces. */
+        unsigned char *stub = allocate(page_size), *q = stub;
+        static const unsigned char head[] = {0x66,0x41,0x8b,0x46,0x24, 0x66,0xc1,0xf8,0x08, 0x98, 0x48,0xb9};
+        memcpy(q, head, sizeof(head)); q += sizeof(head);
+        uintptr_t table = (uintptr_t)iss_install_gate_counts; memcpy(q, &table, 8); q += 8;
+        static const unsigned char count[] = {0x3d,0xff,0,0,0, 0x77,0x04, 0xf0,0xff,0x04,0x81};
+        memcpy(q, count, sizeof(count)); q += sizeof(count);
+        if (fix) { *q++ = 0x31; *q++ = 0xc0; }
+        static const unsigned char tail[] = {0x89,0x43,0x3c, 0x49,0x8b,0x4e,0x20, 0xff,0x25,0,0,0,0};
+        memcpy(q, tail, sizeof(tail)); q += sizeof(tail);
+        uintptr_t back = (uintptr_t)image + ISS_INSTALL_GATE_SITE + 17; memcpy(q, &back, 8);
+        protect(stub, page_size, 5);
+        static const unsigned char jump[] = {0xff,0x25,0,0,0,0};
+        memcpy(image + ISS_INSTALL_GATE_SITE, jump, 6);
+        uintptr_t target = (uintptr_t)stub; memcpy(image + ISS_INSTALL_GATE_SITE + 6, &target, 8);
+        memset(image + ISS_INSTALL_GATE_SITE + 14, 0x90, 3);
+        pthread_t watcher; /* the game is usually ended by a signal: report every 10 s instead of atexit */
+        if (!pthread_create(&watcher, NULL, iss_install_gate_watch, NULL)) pthread_detach(watcher);
+        printf("Black city fix: %s, counting install-package waits (ISS_INSTALL_GATE_LOG=1)\n", fix ? "on" : "off");
+        return;
+    }
+    static const unsigned char after[] = {0x31, 0xc0, 0x0f, 0x1f, 0x00}; /* xor eax,eax; nop dword [rax] */
+    memcpy(image + ISS_INSTALL_GATE_SITE + 5, after, sizeof(after));
+    puts("Black city fix: world sections do not wait for the Blu-ray install packages (dismal sky streams in)");
+}
+
 /* G3PATCH2 (patches.py): the patches' image base, then byte writes at image offsets, applied
  * after relocation. A write may replace a whole base-relative pointer slot (60/90 FPS++ swap
  * function pointers): the patch holds the address at the patches' base, rebased here. */
@@ -1789,6 +1855,7 @@ int main(int argc, char **argv) {
     if (gpu_enabled) install_iss_hud_trace(app0, segments, ns, size);
     if (gpu_enabled) install_iss_camera_speed(app0, segments, ns, size);
     if (gpu_enabled) install_iss_pitch_safeguard(app0, segments, ns, size);
+    install_iss_install_gate(app0, size);
     if (gpu_enabled) install_iss_mouse_aim(app0, segments, ns, size);
     if (gpu_enabled) install_iss_karma(app0, segments, ns, size, karma_before_runtime_rewrites);
     if (gpu_enabled) iss_perf_patches(image, size); /* TLG_PERF_MODE, TLG_PARTICLE_LATE_READ, ... */
