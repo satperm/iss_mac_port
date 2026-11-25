@@ -1,0 +1,64 @@
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
+@@ -2578,10 +2578,40 @@
+ 													 uint64_t startTime) {
+ 	if (_isExternallySynchronized) {
+ 		return getShaderLibraryImpl(pContext, shaderModule, pipeline, pShaderFeedback, startTime);
+-	} else {
++	}
++	// tlg: MVK_TLG_UNLOCKED_CONVERT=1: the SPIR-V -> MSL conversion runs without the cache lock (the
++	// converter keeps no state), so threads sharing one cache convert in parallel. Found again after
++	// the conversion: when another thread added the same library meanwhile, that one is used.
++	static const bool unlocked = [] {
++		const char* e = getenv("MVK_TLG_UNLOCKED_CONVERT");
++		return e && e[0] == '1';
++	}();
++	if ( !unlocked ) {
+ 		lock_guard<mutex> lock(_shaderCacheLock);
+ 		return getShaderLibraryImpl(pContext, shaderModule, pipeline, pShaderFeedback, startTime);
++	}
++	{
++		lock_guard<mutex> lock(_shaderCacheLock);
++		MVKShaderLibrary* shLib = getShaderLibraryCache(shaderModule->getKey())->findShaderLibrary(pContext, pShaderFeedback, startTime);
++		if (shLib) {
++			if (pShaderFeedback) { mvkEnableFlags(pShaderFeedback->flags, VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT); }
++			return shLib;
++		}
+ 	}
++	if (pipeline->shouldFailOnPipelineCompileRequired()) { return nullptr; }
++	SPIRVToMSLConversionConfiguration config = *pContext;
++	SPIRVToMSLConversionResult conversionResult;
++	if ( !shaderModule->convert(&config, conversionResult) ) { return nullptr; }
++	lock_guard<mutex> lock(_shaderCacheLock);
++	MVKShaderLibraryCache* slCache = getShaderLibraryCache(shaderModule->getKey());
++	MVKShaderLibrary* shLib = slCache->findShaderLibrary(pContext, pShaderFeedback, startTime);
++	if ( !shLib ) {
++		*pContext = config;
++		shLib = slCache->addShaderLibrary(pContext, conversionResult);
++		markDirty();
++	}
++	if (pShaderFeedback) { pShaderFeedback->duration += mvkGetElapsedNanoseconds(startTime); }
++	return shLib;
+ }
+ 
+ MVKShaderLibrary* MVKPipelineCache::getShaderLibraryImpl(SPIRVToMSLConversionConfiguration* pContext,
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.mm
+@@ -209,6 +209,17 @@
+ 
+ 	_shaderConversionResultInfo = conversionResult.resultInfo;
+ 	compressMSL(conversionResult.msl);
++	// tlg: with MVK_TLG_UNLOCKED_CONVERT=1 a new library also compiles on first use, outside the
++	// pipeline cache's lock (this constructor runs under it).
++	static const bool lazyNew = [] {
++		const char* e = getenv("MVK_TLG_UNLOCKED_CONVERT");
++		return e && e[0] == '1';
++	}();
++	if (lazyNew) {
++		_mtlLibrary = nil;
++		_lazy = true;
++		return;
++	}
+ 	compileLibrary(conversionResult.msl);
+ }
+ 

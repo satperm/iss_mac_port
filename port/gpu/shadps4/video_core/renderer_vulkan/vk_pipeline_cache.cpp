@@ -458,6 +458,18 @@ struct PipelineCache::DriverCacheSaver {
     bool over_limit_logged = false;
 };
 
+// tlg: TLG_SHARED_PIPELINE_CACHE=1: the compiler threads create their pipelines with the main
+// VkPipelineCache instead of one seeded copy each (six copies of every cached shader library:
+// ~1 GB after the first-start compilation). Needs MVK_TLG_UNLOCKED_CONVERT=1, or MoltenVK converts
+// one shader at a time under the cache's lock.
+vk::PipelineCache PipelineCache::SharedWorkerCache() const {
+    static const bool shared = [] {
+        const char* v = std::getenv("TLG_SHARED_PIPELINE_CACHE");
+        return v && v[0] == '1';
+    }();
+    return shared ? *pipeline_cache : vk::PipelineCache{};
+}
+
 bool PipelineCache::SaveDriverCache() {
     // The save is optional (0xCydral 4f16e00): an allocation failure on the saver thread must not
     // end the game; it is skipped and tried again later.
@@ -477,18 +489,25 @@ bool PipelineCache::SaveDriverCacheUnchecked() {
         return true;
     }
     const auto device = instance.GetDevice();
-    auto [scratch_result, scratch] = device.createPipelineCacheUnique({});
-    if (scratch_result != vk::Result::eSuccess) {
-        return false;
+    vk::Result result;
+    std::vector<u8> blob;
+    if (SharedWorkerCache()) {
+        // TLG_SHARED_PIPELINE_CACHE: everything is in the main cache, written as it is.
+        std::tie(result, blob) = device.getPipelineCacheData(*pipeline_cache);
+    } else {
+        auto [scratch_result, scratch] = device.createPipelineCacheUnique({});
+        if (scratch_result != vk::Result::eSuccess) {
+            return false;
+        }
+        std::vector<vk::PipelineCache> sources{*pipeline_cache};
+        for (const auto& cache : worker_pipeline_caches) {
+            sources.push_back(*cache);
+        }
+        if (device.mergePipelineCaches(*scratch, sources) != vk::Result::eSuccess) {
+            return false;
+        }
+        std::tie(result, blob) = device.getPipelineCacheData(*scratch);
     }
-    std::vector<vk::PipelineCache> sources{*pipeline_cache};
-    for (const auto& cache : worker_pipeline_caches) {
-        sources.push_back(*cache);
-    }
-    if (device.mergePipelineCaches(*scratch, sources) != vk::Result::eSuccess) {
-        return false;
-    }
-    auto [result, blob] = device.getPipelineCacheData(*scratch);
     if (result != vk::Result::eSuccess || blob.size() < sizeof(VkPipelineCacheHeaderVersionOne)) {
         return false;
     }
@@ -1049,6 +1068,9 @@ void PipelineCache::SeedWorkerCaches() {
         return on;
     }();
     const u64 built = num_new_pipelines + warmup_pipelines_loaded;
+    if (SharedWorkerCache()) {
+        return; // the compiler threads use the main cache: nothing to seed
+    }
     if (worker_caches_seeded && (!reseed || built == worker_seed_marker)) {
         return;
     }
@@ -1390,7 +1412,8 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
                 auto& s = build->selection;
                 build->pipeline = std::make_unique<GraphicsPipeline>(
                     instance, scheduler, desc_heap, profile, s.graphics_key,
-                    *worker_pipeline_caches[AsyncCompiler::WorkerIndex()],
+                    SharedWorkerCache() ? SharedWorkerCache()
+                                        : *worker_pipeline_caches[AsyncCompiler::WorkerIndex()],
                     s.infos, s.runtime_infos, s.fetch_shader, s.modules, build->data, false);
                 // tlg: which background compile a stutter belongs to (TLG_GPU_LOG=info/debug).
                 LOG_INFO(Render_Vulkan, "tlg: compiled graphics pipeline {:#x} ({}) in {:.1f} ms",
@@ -1442,7 +1465,7 @@ compile_now:
         GraphicsPipeline::SerializationSupport sdata{};
         // tlg: TLG_GFX_DEFERRED_BIND builds the pipeline on the compiler threads when the driver's
         // cache misses it; the layouts and the create-info stay valid for the build.
-        const GraphicsBuilder builder{compiler.get(), worker_pipeline_caches};
+        const GraphicsBuilder builder{compiler.get(), worker_pipeline_caches, SharedWorkerCache()};
         const bool async = compiler && !EmulatorSettings.IsShaderCollect();
         it.value() = std::make_unique<GraphicsPipeline>(
             instance, scheduler, desc_heap, profile, sel.graphics_key, *pipeline_cache, sel.infos,
@@ -1498,7 +1521,7 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
         // tlg: built on the compiler threads when the driver hasn't cached it (the dispatch
         // binds it once built, vk_compute_pipeline.cpp). Not while collecting shaders: their
         // pipelines are erased on a reload, with a build perhaps still running.
-        const ComputeBuilder builder{compiler.get(), worker_pipeline_caches};
+        const ComputeBuilder builder{compiler.get(), worker_pipeline_caches, SharedWorkerCache()};
         const bool async = compiler && !EmulatorSettings.IsShaderCollect();
         it.value() = std::make_unique<ComputePipeline>(instance, scheduler, desc_heap, profile,
                                                        *pipeline_cache, compute_key, *sel.infos[0],

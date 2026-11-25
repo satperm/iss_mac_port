@@ -173,6 +173,7 @@ ComputePipeline::ComputePipeline(const Instance& instance, Scheduler& scheduler,
         }
         auto state = std::make_shared<Build>();
         const auto caches = builder->caches;
+        const vk::PipelineCache shared_cache = builder->shared;
         const bool deferred_bind = scheduler.RecordsOnThread();
         // With the Vulkan recording thread, the dispatch binds the pipeline there (Handle()
         // waits for it), so the GPU thread goes on and the next new pipelines are built
@@ -181,9 +182,9 @@ ComputePipeline::ComputePipeline(const Instance& instance, Scheduler& scheduler,
         // Otherwise one is built here without optimizations, several times quicker on some
         // drivers, and the optimized one replaces it (SwapInOptimized).
         const bool queued = builder->compiler->Submit(
-            [state, create, caches, deferred_bind, debug_str] {
+            [state, create, caches, shared_cache, deferred_bind, debug_str] {
                 const auto start = std::chrono::steady_clock::now();
-                auto built = create(*caches[AsyncCompiler::WorkerIndex()], {});
+                auto built = create(shared_cache ? shared_cache : *caches[AsyncCompiler::WorkerIndex()], {});
                 LOG_INFO(Render_Vulkan, "tlg: compute pipeline {} built on a compiler thread in "
                          "{:.1f} ms{}", debug_str,
                          std::chrono::duration<double, std::milli>(

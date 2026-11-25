@@ -28,6 +28,7 @@ class AsyncCompiler;
 struct ComputeBuilder {
     AsyncCompiler* compiler;
     std::span<const vk::UniquePipelineCache> caches; ///< one per compiler thread
+    vk::PipelineCache shared{}; ///< TLG_SHARED_PIPELINE_CACHE: every thread uses this one
 };
 
 struct ComputePipelineKey {

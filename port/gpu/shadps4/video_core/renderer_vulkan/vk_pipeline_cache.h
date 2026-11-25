@@ -279,6 +279,7 @@ private:
     std::unique_ptr<AsyncCompiler> compiler, capture_compiler;
     std::vector<vk::UniquePipelineCache> worker_pipeline_caches;
     bool worker_caches_seeded = false;
+    vk::PipelineCache SharedWorkerCache() const;
     /// tlg: main-cache pipelines (sync compiles and warm-up builds) the workers were seeded with;
     /// the merges repeat once this grows (SeedWorkerCaches).
     u64 worker_seed_marker = 0;

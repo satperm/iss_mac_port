@@ -716,9 +716,10 @@ void GraphicsPipeline::CreatePipeline(const std::shared_ptr<PipelineCreateInfoBl
     // recording thread, which waits for this.
     auto build_state = std::make_shared<Build>();
     const auto caches = builder->caches;
+    const vk::PipelineCache shared_cache = builder->shared;
     Pipeline::deferred_binds.fetch_add(1, std::memory_order_relaxed);
     const bool queued = builder->compiler->Submit(
-        [this, block, state = build_state, caches, square, debug_str] {
+        [this, block, state = build_state, caches, shared_cache, square, debug_str] {
             const auto job_started = Clock::now();
             SCOPE_EXIT {
                 g_tlg_pipeline_total_ns += NsSince(job_started);
@@ -726,7 +727,7 @@ void GraphicsPipeline::CreatePipeline(const std::shared_ptr<PipelineCreateInfoBl
             };
             const vk::Device device = instance.GetDevice();
             const auto& create_info = square ? block->square_info : block->pipeline_info;
-            auto built = CreateGraphicsPipelineNow(device, *caches[AsyncCompiler::WorkerIndex()],
+            auto built = CreateGraphicsPipelineNow(device, shared_cache ? shared_cache : *caches[AsyncCompiler::WorkerIndex()],
                                                   create_info, {}, debug_str);
             ASSERT_MSG(built.result == vk::Result::eSuccess,
                        "Failed to create graphics pipeline: {}", vk::to_string(built.result));
