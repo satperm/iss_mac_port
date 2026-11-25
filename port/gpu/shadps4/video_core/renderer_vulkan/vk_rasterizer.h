@@ -258,6 +258,7 @@ private:
 
 public:
     void LogFrameDraws();
+    void DeadDepthFrame();
 
 private:
     u32 frame_draws = 0, frame_mrt_draws = 0, frame_depth_draws = 0;

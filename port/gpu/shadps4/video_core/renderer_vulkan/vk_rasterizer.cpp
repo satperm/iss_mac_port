@@ -4827,6 +4827,38 @@ AddrTexLog& AddrTex() {
 }
 } // namespace
 
+// tlg: TLG_DEAD_DEPTH=1 (diagnostic): how much stored depth is cleared again before anything reads it
+// (a later pass loading it, or a shader sampling it). Weighted by pixels; printed every 300 frames.
+namespace {
+struct DeadDepthState { bool written = false, read = false; u64 pixels = 0; };
+bool DeadDepthOn() {
+    static const bool on = [] { const char* e = std::getenv("TLG_DEAD_DEPTH"); return e && *e == '1'; }();
+    return on;
+}
+std::unordered_map<u32, DeadDepthState> g_dead_depth;
+u32 g_dead_last = ~0u;
+u64 g_dead_stores = 0, g_dead_dead = 0, g_dead_read = 0, g_dead_frames = 0;
+u64 g_dead_px_stores = 0, g_dead_px_dead = 0, g_dead_px_unread = 0;
+void DeadDepthTarget(u32 index, bool clear, u64 pixels) {
+    auto& st = g_dead_depth[index];
+    if (index != g_dead_last) {
+        if (clear) {
+            if (st.written && !st.read) { ++g_dead_dead; g_dead_px_dead += st.pixels; }
+        } else if (st.written) {
+            st.read = true; // loaded by a new pass
+        }
+        if (st.written) { if (st.read) ++g_dead_read; }
+        st = {true, false, pixels};
+        ++g_dead_stores; g_dead_px_stores += pixels;
+        g_dead_last = index;
+    }
+}
+void DeadDepthSampled(u32 index) {
+    auto it = g_dead_depth.find(index);
+    if (it != g_dead_depth.end()) it->second.read = true;
+}
+} // namespace
+
 void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* prepared,
                               Shader::Backend::Bindings& binding, u32& write_index,
                               bool& barrier, bool on_helper) {
@@ -5125,6 +5157,7 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
             }
             auto& image_view = texture_cache.FindTexture(
                 image_id, desc, memo_entry ? &memo_entry->view_memo : nullptr, !on_helper);
+            if (DeadDepthOn()) [[unlikely]] DeadDepthSampled(image_id.index);
             const auto binding = image.binding;
 
             // tlg: a proxied scene image sampled with normalized coordinates reads the proxy:
@@ -5459,6 +5492,23 @@ void Rasterizer::CountDraw(const RenderState& state, const GraphicsPipeline* pip
     }
     frame_mrt_draws += state.num_color_attachments >= 3 ? 1 : 0;
     frame_depth_draws += state.depth_stencil_attachment.image_view ? 1 : 0;
+}
+
+
+void Rasterizer::DeadDepthFrame() {
+    if (!DeadDepthOn()) [[likely]] return;
+    for (auto& [index, st] : g_dead_depth)
+        if (st.written && !st.read) g_dead_px_unread += st.pixels;
+    for (auto& [index, st] : g_dead_depth) st.read = true; // carried over: assume the next frame may read
+    g_dead_last = ~0u;
+    if (++g_dead_frames % 300 == 0) {
+        std::printf("Dead depth: %llu frames: %.1f depth stores a frame, %.1f cleared unread, %.1f read; "
+                    "pixels: %.1f%% cleared unread, %.1f%% unread at frame end (of %.1f Mpx a frame)\n",
+                    (unsigned long long)g_dead_frames, g_dead_stores / 300.0, g_dead_dead / 300.0,
+                    g_dead_read / 300.0, 100.0 * g_dead_px_dead / std::max<u64>(g_dead_px_stores, 1),
+                    100.0 * g_dead_px_unread / std::max<u64>(g_dead_px_stores, 1), g_dead_px_stores / 300.0 / 1e6);
+        g_dead_stores = g_dead_dead = g_dead_read = g_dead_px_stores = g_dead_px_dead = g_dead_px_unread = 0;
+    }
 }
 
 void Rasterizer::LogFrameDraws() {
@@ -5934,6 +5984,9 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
             attachment.clear_value[0] = is_depth_clear ? std::bit_cast<u32>(regs.depth_clear) : 0u;
             attachment.has_depth = true;
             attachment.depth_clear = is_depth_clear;
+            if (DeadDepthOn()) [[unlikely]]
+                DeadDepthTarget(image_id.index, is_depth_clear,
+                                u64(image.info.size.width) * image.info.size.height);
         }
         if (regs.depth_buffer.StencilValid()) {
             attachment.clear_value[1] = is_stencil_clear ? regs.stencil_clear : 0u;

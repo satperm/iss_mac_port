@@ -435,6 +435,7 @@ void RunIssTemporalMarker(Vulkan::Rasterizer& rasterizer, const u8* data) {
 void SignalFlip(Vulkan::Rasterizer& rasterizer, const u8*) {
     rasterizer.WaitDeferredSignals();
     rasterizer.LogFrameDraws();
+    rasterizer.DeadDepthFrame();
     // TLG_GPU_PROFILE: frames end at flips when no upscaler finds the display pass.
     if (auto* profiler = Vulkan::GpuProfiler::Get()) {
         profiler->BeginFrame(true);

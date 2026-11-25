@@ -290,12 +290,22 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
         };
     }
 
+    // TLG_DIAG_STORE_BOUND (diagnostic, breaks the picture): 1 = depth and stencil not stored,
+    // 2 = stencil only, 3 = colour too. Upper bound of what store-op elision could gain.
+    static const int store_bound = [] {
+        const char* e = std::getenv("TLG_DIAG_STORE_BOUND");
+        return e ? std::atoi(e) : 0;
+    }();
+    if (store_bound == 3)
+        for (u32 i = 0; i < render_state.num_color_attachments; ++i)
+            color_attachments[i].storeOp = vk::AttachmentStoreOp::eDontCare;
     const auto& db = render_state.depth_stencil_attachment;
     const vk::RenderingAttachmentInfo depth_attachment = {
         .imageView = db.image_view,
         .imageLayout = db.image_layout,
         .loadOp = db.depth_clear ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad,
-        .storeOp = vk::AttachmentStoreOp::eStore,
+        .storeOp = (store_bound == 1 || store_bound == 3) ? vk::AttachmentStoreOp::eDontCare
+                                                          : vk::AttachmentStoreOp::eStore,
         .clearValue =
             vk::ClearValue{.depthStencil = vk::ClearDepthStencilValue{.depth = std::bit_cast<float>(
                                                                           db.clear_value[0])}},
@@ -304,7 +314,7 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
         .imageView = db.image_view,
         .imageLayout = db.image_layout,
         .loadOp = db.stencil_clear ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad,
-        .storeOp = vk::AttachmentStoreOp::eStore,
+        .storeOp = store_bound ? vk::AttachmentStoreOp::eDontCare : vk::AttachmentStoreOp::eStore,
         .clearValue = vk::ClearValue{.depthStencil =
                                          vk::ClearDepthStencilValue{.stencil = db.clear_value[1]}},
     };
