@@ -129,9 +129,16 @@ export MTL_HUD_ENABLED=${MTL_HUD_ENABLED:-1}
 # Quad lists (particles) as indexed triangles instead of MoltenVK's tessellation emulation, the
 # indexed ones expanded on the GPU (2026-10-31): burning building 21-25 -> 30-34 FPS, 9.1 -> 6.5 GB,
 # bridge 28-37 -> 35-43, same picture. TLG_MAC_QUAD_INDEX=0 restores tessellation.
-# BP08 (the driver VkPipelineCache blob, ~80 MB) off: loading it hung ~half of the starts at
-# "driver pipeline cache loaded" in both modes (2026-11-01: 0 of 4 hangs without it).
-export TLG_BP08=${TLG_BP08:-0}
+# BP08: the driver VkPipelineCache blob (MoltenVK's SPIR-V -> MSL results) is kept between sessions, so
+# pipelines met in game skip the conversion (Seattle walk 2026-11-25: 12-16 -> 4-8 ms a pipeline, worst
+# frames after the load 215-429 -> <= 55 ms). Off until 2026-11-25: MoltenVK compiled every cached library
+# inside vkCreatePipelineCache, which took minutes with a cold Metal cache (the "hang at driver pipeline
+# cache loaded"). patches/moltenvk-1.4.2-lazy-cache-libs.patch compiles them on first use
+# (MVK_TLG_LAZY_CACHE_LIBS=1) and shares their MSL between caches; LZFSE keeps the file ~4x smaller
+# (106 MB against 435 MB after the first-start compilation) and memory +0.5 GB.
+export TLG_BP08=${TLG_BP08:-1}
+export MVK_TLG_LAZY_CACHE_LIBS=${MVK_TLG_LAZY_CACHE_LIBS:-1}
+export MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM=${MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM:-1}
 export TLG_MAC_QUAD_INDEX=${TLG_MAC_QUAD_INDEX:-1}
 # The renderer as a native arm64 process next to the game (out/tlggpu-host; docs/macos/
 # GPU_PROCESS_PLAN.md): burning building ~36 -> ~44 FPS, bridge the same (2026-11-01).
