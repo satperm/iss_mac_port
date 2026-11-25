@@ -66,7 +66,7 @@ done
 # The patched MoltenVK only (patches/moltenvk-1.4.2-*.patch): the stock one lacks the fixes the port
 # is measured with (the 0.1.x releases up to 0.1.18 shipped it by mistake: bootstrap_deps.sh).
 for marker in MVK_TLG_CONCURRENT_DISPATCH MVK_TLG_LAZY_CACHE_LIBS; do
-    strings -a deps/x86_64/lib/libMoltenVK.dylib | grep -q "$marker" ||
+    strings -a deps/x86_64/lib/libMoltenVK.dylib | grep -c -- "$marker" >/dev/null ||
         { echo "deps/x86_64/lib/libMoltenVK.dylib is not the patched build ($marker missing): run build_moltenvk.sh" >&2; exit 1; }
 done
 install -m755 deps/x86_64/lib/libMoltenVK.dylib "$contents/Frameworks/"   # already universal, patched
