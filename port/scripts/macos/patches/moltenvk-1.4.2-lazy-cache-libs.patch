@@ -1,5 +1,5 @@
 diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.h b/MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.h
-index c5b7499..2b66d0e 100644
+index c5b7499..fa579d2 100644
 --- a/MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.h
 +++ b/MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.h
 @@ -24,6 +24,8 @@
@@ -28,12 +28,12 @@ index c5b7499..2b66d0e 100644
 +	/** tlg: read from a pipeline cache; compiled on first use (MVK_TLG_LAZY_CACHE_LIBS=1). */
 +	bool _lazy = false;
 +	std::atomic<bool> _lazyDone{false};
-+	std::mutex _lazyLock;
++	mutable std::mutex _lazyLock;
  	mvk::SPIRVToMSLConversionResultInfo _shaderConversionResultInfo;
  
  	/** When true, representing a library created with source, but never specialized */
 diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.mm b/MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.mm
-index 3aa44a4..c51e0d0 100644
+index 3aa44a4..e06b5ea 100644
 --- a/MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.mm
 +++ b/MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.mm
 @@ -73,6 +73,7 @@ MVKMTLFunction MVKShaderLibrary::getMTLFunction(const VkSpecializationInfo* pSpe
@@ -106,7 +106,11 @@ index 3aa44a4..c51e0d0 100644
  void MVKShaderLibrary::compileLibrary(const string& msl,
  									  const vector<pair<uint32_t, MVKShaderMacroValue> >* specializationMacroDef) {
  	MVKShaderLibraryCompiler* slc = new MVKShaderLibraryCompiler(_owner);
-@@ -276,6 +299,7 @@ MVKShaderLibrary::MVKShaderLibrary(const MVKShaderLibrary& other) :
+@@ -273,12 +296,16 @@ MVKShaderLibrary::MVKShaderLibrary(const MVKShaderLibrary& other) :
+ 	_maySpecializeWithMacro(other._maySpecializeWithMacro),
+ 	_specializationVariants(other._specializationVariants) {
+ 
++	std::lock_guard<std::mutex> lock(other._lazyLock);	// tlg: not while other compiles lazily
  	_mtlLibrary = [other._mtlLibrary retain];
  	_shaderConversionResultInfo = other._shaderConversionResultInfo;
  	_compressedMSL = other._compressedMSL;
@@ -114,7 +118,12 @@ index 3aa44a4..c51e0d0 100644
  }
  
  MVKShaderLibrary& MVKShaderLibrary::operator=(const MVKShaderLibrary& other) {
-@@ -286,6 +310,8 @@ MVKShaderLibrary& MVKShaderLibrary::operator=(const MVKShaderLibrary& other) {
++	if (this == &other) { return *this; }
++	std::lock_guard<std::mutex> lock(other._lazyLock);	// tlg: not while other compiles lazily
+ 	if (_mtlLibrary != other._mtlLibrary) {
+ 		[_mtlLibrary release];
+ 		_mtlLibrary = [other._mtlLibrary retain];
+@@ -286,6 +313,8 @@ MVKShaderLibrary& MVKShaderLibrary::operator=(const MVKShaderLibrary& other) {
  	_owner = other._owner;
  	_shaderConversionResultInfo = other._shaderConversionResultInfo;
  	_compressedMSL = other._compressedMSL;

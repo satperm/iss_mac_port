@@ -1,0 +1,36 @@
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm b/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
+index 7eae64c..217177b 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
+@@ -2815,12 +2819,26 @@ void MVKPipelineCache::markDirty() {
+ }
+ 
+ VkResult MVKPipelineCache::mergePipelineCaches(uint32_t srcCacheCount, const VkPipelineCache* pSrcCaches) {
+-	if (!_isMergeInternallySynchronized) {
+-		return mergePipelineCachesImpl(srcCacheCount, pSrcCaches);
+-	} else {
+-		lock_guard<mutex> lock(_shaderCacheLock);
+-		return mergePipelineCachesImpl(srcCacheCount, pSrcCaches);
++	// tlg: lock the destination and each source (unless the app synchronizes them): the port merges
++	// caches that compiler threads are adding to (seeding, saving), which raced on their maps.
++	// scoped_lock takes both without a lock-order deadlock.
++	for (uint32_t srcIdx = 0; srcIdx < srcCacheCount; srcIdx++) {
++		MVKPipelineCache* srcPLC = (MVKPipelineCache*)pSrcCaches[srcIdx];
++		if (srcPLC == this) { continue; }
++		if (_isExternallySynchronized && srcPLC->_isExternallySynchronized) {
++			mergePipelineCachesImpl(1, &pSrcCaches[srcIdx]);
++		} else if (_isExternallySynchronized) {
++			lock_guard<mutex> lock(srcPLC->_shaderCacheLock);
++			mergePipelineCachesImpl(1, &pSrcCaches[srcIdx]);
++		} else if (srcPLC->_isExternallySynchronized) {
++			lock_guard<mutex> lock(_shaderCacheLock);
++			mergePipelineCachesImpl(1, &pSrcCaches[srcIdx]);
++		} else {
++			scoped_lock lock(_shaderCacheLock, srcPLC->_shaderCacheLock);
++			mergePipelineCachesImpl(1, &pSrcCaches[srcIdx]);
++		}
+ 	}
++	return VK_SUCCESS;
+ }
+ 
+ VkResult MVKPipelineCache::mergePipelineCachesImpl(uint32_t srcCacheCount, const VkPipelineCache* pSrcCaches) {
