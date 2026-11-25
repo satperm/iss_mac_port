@@ -170,8 +170,12 @@ JSON
 fi
 # The release MoltenVK crashes at start-up in its present callbacks (MoltenVK #2791); with Xcode,
 # replace it by v1.4.2 built with patches/moltenvk-1.4.2-drawable-race.patch (build_moltenvk.sh).
+# The path is absolute: this script has changed into port/ above, so "$(dirname "$0")" no longer
+# resolves from a relative invocation. Until 2026-11-25 that made the release CI print "No such file"
+# and ship the stock MoltenVK without any of the patches; a failed build now stops the script.
 if [[ $ARCH == x86_64 ]] && ! stamp MoltenVK-patched && command -v xcodebuild >/dev/null; then
-    bash "$(dirname "$0")/build_moltenvk.sh" && done_stamp MoltenVK-patched
+    bash "$ROOT/scripts/macos/build_moltenvk.sh" || { echo "patched MoltenVK build failed" >&2; exit 1; }
+    done_stamp MoltenVK-patched
 fi
 
 echo

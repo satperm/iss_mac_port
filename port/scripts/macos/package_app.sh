@@ -63,6 +63,12 @@ set_rpath "$contents/Frameworks/libtlggpu.dylib" @loader_path
 for lib in libvulkan.1 libSDL3.0 libavformat.61 libavcodec.61 libswscale.8 libswresample.5 libavutil.59; do
     universal "$lib.dylib" "deps/x86_64/lib/$lib.dylib" "deps/arm64/lib/$lib.dylib"
 done
+# The patched MoltenVK only (patches/moltenvk-1.4.2-*.patch): the stock one lacks the fixes the port
+# is measured with (the 0.1.x releases up to 0.1.18 shipped it by mistake: bootstrap_deps.sh).
+for marker in MVK_TLG_CONCURRENT_DISPATCH MVK_TLG_LAZY_CACHE_LIBS; do
+    strings -a deps/x86_64/lib/libMoltenVK.dylib | grep -q "$marker" ||
+        { echo "deps/x86_64/lib/libMoltenVK.dylib is not the patched build ($marker missing): run build_moltenvk.sh" >&2; exit 1; }
+done
 install -m755 deps/x86_64/lib/libMoltenVK.dylib "$contents/Frameworks/"   # already universal, patched
 # Every @rpath dependency must be in the bundle, and nothing may link outside it and the system.
 for file in "$contents"/MacOS/* "$contents"/Frameworks/*; do
