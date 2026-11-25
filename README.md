@@ -101,9 +101,11 @@ Open **ISS.app** (in the repository folder; you can drag it to the Dock). The fi
 
 The first start prepares the shaders once: about a minute with no window while it lists them from
 your game files, then up to about two minutes on a "Compiling shaders" screen (measured on an M3 Max).
-It needs about 900 MB of disk space and runs again when the game files, the port or macOS change, or when
+It needs about 1 GB of disk space and runs again when the game files, the port or macOS change, or when
 macOS has dropped its own shader cache. Later starts skip it. Pipelines the game first builds while you
-play are remembered (up to 32 MB) and compiled with the rest the next time it runs. To skip it entirely, set `TLG_PRECOMPILE=0`; shaders then compile during play and stutter.
+play are remembered (up to 32 MB) and compiled with the rest the next time it runs. The Metal shader
+source MoltenVK makes from them is kept as well (about 100 MB more), so pipelines met while playing
+build two to three times faster from the second session on. To skip it entirely, set `TLG_PRECOMPILE=0`; shaders then compile during play and stutter.
 
 Without the app, from a Terminal:
 
