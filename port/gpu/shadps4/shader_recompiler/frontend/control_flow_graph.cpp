@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <unordered_map>
+#include <span>
 #include "common/assert.h"
 #include "common/backports.h"
 #include "common/logging/log.h"
@@ -45,6 +47,29 @@ static IR::Condition MakeCondition(const GcnInst& inst) {
     default:
         return IR::Condition::True;
     }
+}
+
+// tlg: BP13 (shadPS4 #5708): the first scalar ALU instruction inside an EXEC scope that can run
+// outside it: it does not access EXEC or VCC and nothing earlier in the scope wrote a scalar register.
+// -1 if there is none.
+static bool IsExecOrVccField(OperandField f) {
+    return f == OperandField::VccLo || f == OperandField::VccHi || f == OperandField::VccZ ||
+           f == OperandField::ExecLo || f == OperandField::ExecHi || f == OperandField::ExecZ;
+}
+static s32 FindScalarSplit(std::span<const GcnInst> list, s32 begin, s32 end) {
+    for (s32 i = begin; i < end; ++i) {
+        const auto& inst = list[i];
+        if (inst.category == InstCategory::ScalarALU) {
+            const auto ev = [](const InstOperand& op) { return IsExecOrVccField(op.field); };
+            return std::ranges::any_of(inst.src, ev) || std::ranges::any_of(inst.dst, ev) ? -1 : i;
+        }
+        if (std::ranges::any_of(inst.dst, [](const InstOperand& op) {
+                return op.field != OperandField::VectorGPR && op.field != OperandField::Undefined;
+            })) {
+            return -1;
+        }
+    }
+    return -1;
 }
 
 static bool IgnoresExecMask(const GcnInst& inst) {
@@ -184,9 +209,15 @@ void CFG::SplitDivergenceScopes() {
                (inst.opcode == Opcode::S_ANDN2_B64 && inst.dst[0].field == OperandField::ExecLo);
     };
 
+    // tlg: BP13: epilogue blocks that continue a scope split at a scalar instruction, with the
+    // index the scope continues after.
+    std::unordered_map<const Block*, s32> continued_scopes;
     for (auto blk = blocks.begin(); blk != blocks.end(); blk++) {
         auto next_blk = std::next(blk);
         s32 curr_begin = -1;
+        if (const auto it = continued_scopes.find(&*blk); it != continued_scopes.end()) {
+            curr_begin = it->second;
+        }
         for (size_t index = blk->begin_index; index <= blk->end_index; index++) {
             const auto& inst = inst_list[index];
             const bool is_close = is_close_scope(inst);
@@ -219,6 +250,22 @@ void CFG::SplitDivergenceScopes() {
                     while (IgnoresExecMask(inst_list[curr_end])) {
                         --curr_end;
                     }
+                    // tlg: BP13 (shadPS4 #5708): a scalar ALU instruction between vector ones runs
+                    // for the whole wave, but invocations outside the scope skip all of it: end
+                    // the scope before it and continue it after (EXEC is the same there).
+                    s32 split = -1;
+                    if (Common::Backports::On(Common::Backports::Id::ScalarOutOfScope)) {
+                        split = FindScalarSplit(inst_list, curr_begin, curr_end);
+                        if (split > curr_begin) {
+                            Common::Backports::Hit(Common::Backports::Id::ScalarOutOfScope);
+                            curr_end = split - 1;
+                            while (IgnoresExecMask(inst_list[curr_end])) {
+                                --curr_end;
+                            }
+                        } else {
+                            split = -1;
+                        }
+                    }
 
                     // Create a new block for the divergence scope.
                     Block* block = block_pool.Create();
@@ -244,6 +291,9 @@ void CFG::SplitDivergenceScopes() {
                         epi_block->branch_false = blk->branch_false;
                         epi_block->num_predecessors = 2;
                         blocks.insert_before(next_blk, *epi_block);
+                        if (split >= 0) {
+                            continued_scopes.emplace(epi_block, curr_end); // tlg: BP13
+                        }
 
                         // Have divergence block always jump to epilogue block.
                         block->cond = IR::Condition::True;
