@@ -120,6 +120,8 @@ void NameGraphicsPipeline(vk::Device device, vk::Pipeline pipeline, bool square,
 }
 } // namespace
 
+extern std::atomic<bool> g_tlg_driver_cache_warm; // vk_precompile.cpp
+
 bool GraphicsDeferredBindEnabled(const Instance& instance, const Scheduler& scheduler) {
     // tlg: on by default since 2026-11-26 (TLG_GFX_DEFERRED_BIND=0 off): with the precompiled
     // cache only the shader stages load at start, so every pipeline met in a session is built
@@ -135,8 +137,14 @@ bool GraphicsDeferredBindEnabled(const Instance& instance, const Scheduler& sche
         }
         return false;
     }();
-    return requested && scheduler.RecordsOnThread() &&
-           instance.IsPipelineCreationCacheControlSupported();
+    // Only while the driver's cache is known warm (vk_precompile.cpp): with a cold one each wait is
+    // a full compile. TLG_GFX_DEFERRED_BIND=1 forces it on.
+    static const bool forced = [] {
+        const char* v = std::getenv("TLG_GFX_DEFERRED_BIND");
+        return v && *v == '1';
+    }();
+    return requested && (forced || g_tlg_driver_cache_warm.load(std::memory_order_relaxed)) &&
+           scheduler.RecordsOnThread() && instance.IsPipelineCreationCacheControlSupported();
 }
 
 GraphicsPipeline::GraphicsPipeline(
