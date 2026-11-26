@@ -1,0 +1,48 @@
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.mm	2026-11-27 01:59:38
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.mm	2026-11-27 01:59:38
+@@ -386,11 +386,26 @@
+ 	return nullptr;
+ }
+ 
++// tlg: the cached copy keeps only the interface variables and resource bindings the shader uses.
++// matches() and alignWith() ignore the others (alignWith() resets them to unused), so lookups are
++// unchanged, while a wide pipeline layout no longer stores its whole binding list once per
++// library (~95k libraries: ~400 MB in the port's GPU process) and the linear lookups get shorter.
++static SPIRVToMSLConversionConfiguration mvkTlgUsedOnly(const SPIRVToMSLConversionConfiguration& cfg) {
++	SPIRVToMSLConversionConfiguration used;
++	used.options = cfg.options;
++	for (const auto& si : cfg.shaderInputs) { if (si.outIsUsedByShader) { used.shaderInputs.push_back(si); } }
++	for (const auto& so : cfg.shaderOutputs) { if (so.outIsUsedByShader) { used.shaderOutputs.push_back(so); } }
++	for (const auto& rb : cfg.resourceBindings) { if (rb.outIsUsedByShader) { used.resourceBindings.push_back(rb); } }
++	used.discreteDescriptorSets = cfg.discreteDescriptorSets;
++	used.dynamicBufferDescriptors = cfg.dynamicBufferDescriptors;
++	return used;
++}
++
+ // Adds and returns a new shader library configured from the specified conversion configuration.
+ MVKShaderLibrary* MVKShaderLibraryCache::addShaderLibrary(const SPIRVToMSLConversionConfiguration* pShaderConfig,
+ 														  const SPIRVToMSLConversionResult& conversionResult) {
+ 	MVKShaderLibrary* shLib = new MVKShaderLibrary(_owner, conversionResult);
+-	_shaderLibraries.emplace_back(*pShaderConfig, shLib);
++	_shaderLibraries.emplace_back(mvkTlgUsedOnly(*pShaderConfig), shLib);
+ 	return shLib;
+ }
+ 
+@@ -399,7 +414,7 @@
+ 														  const SPIRVToMSLConversionResultInfo& resultInfo,
+ 														  const MVKCompressor<std::string> compressedMSL) {
+ 	MVKShaderLibrary* shLib = new MVKShaderLibrary(_owner, resultInfo, compressedMSL);
+-	_shaderLibraries.emplace_back(*pShaderConfig, shLib);
++	_shaderLibraries.emplace_back(mvkTlgUsedOnly(*pShaderConfig), shLib);
+ 	return shLib;
+ }
+ 
+@@ -408,7 +423,7 @@
+ 	if ( !other ) { return; }
+ 	for (auto& otherPair : other->_shaderLibraries) {
+ 		if ( !findShaderLibrary(&otherPair.first) ) {
+-			_shaderLibraries.emplace_back(otherPair.first, new MVKShaderLibrary(*otherPair.second));
++			_shaderLibraries.emplace_back(mvkTlgUsedOnly(otherPair.first), new MVKShaderLibrary(*otherPair.second));
+ 			_shaderLibraries.back().second->_owner = _owner;
+ 		}
+ 	}
