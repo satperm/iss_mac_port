@@ -168,6 +168,91 @@ do {
     }
 }
 
+// Detailed benchmark: Perf line parsing, aggregation, verdict, report privacy.
+do {
+    let sample = "2026-11-26T10:00:00Z <6> Perf: fps=59.8 ft_p50=16.6 ft_p99=21.0 ft_p999=34.2 ft_max=41.0 held=2 gpu_busy=71 cpu.main=48 cpu.DrawScan=31 cpu.DrawRec=62 cpu.VkRecorder=55 cpu.ShaderCompile=3 draws=9800 passes=162 dispatches=1100 new_pipes=0 faults=1200 copy_mb=38 fp_probe_mb=2900 fp_host_mb=4600 swap_mb=0 pressure=0 therm=0 future_key=7 bad=x nan=nan"
+    let w = DetailedBenchmark.parse(line: Substring(sample))
+    check(w?["fps"] == 59.8 && w?["cpu.DrawRec"] == 62 && w?["fp_host_mb"] == 4600, "perf line parsed")
+    check(w?["future_key"] == 7 && w?["bad"] == nil && w?["nan"] == nil, "unknown keys kept, junk dropped")
+    check(DetailedBenchmark.parse(line: "Frame stats: 60.0 FPS, worst frame 20.0 ms") == nil, "not a perf line")
+    check(DetailedBenchmark.parse(line: "Perf: ")?.values == nil, "empty perf line")
+    check(DetailedBenchmark.parse(line: "Perf: fps=30")?["gpu_busy"] == nil, "missing keys stay missing")
+
+    func log(_ n: Int, fps: Double, gpu: Double?, drawRec: Double = 40, extra: String = "") -> String {
+        (0..<n).map { i in
+            "Perf: fps=\(fps + Double(i % 2)) ft_p99=\(20 + i) " + (gpu.map { "gpu_busy=\($0) " } ?? "")
+                + "cpu.main=30 cpu.DrawRec=\(drawRec) fp_probe_mb=3000 fp_host_mb=5000 pressure=0 therm=\(i > 3 ? 1 : 0) swap_mb=0 \(extra)"
+        }.joined(separator: "\n")
+    }
+    func phase(_ text: String, scale: Int = 100, measured: Int = 8) -> DetailedBenchmark.Phase? {
+        DetailedBenchmark.phase(log: text, measured: measured, renderScale: scale, duration: 90)
+    }
+    check(phase(log(9, fps: 50, gpu: 50)) == nil, "too few windows")
+    let p = phase(log(12, fps: 50, gpu: 50))!
+    check(p.windows.count == 8 && p.warmup.count == 4 && p.hasPerf, "last 8 windows measured")
+    check(p.median("fps") == 50.5 && p.worst("ft_p99") == 31 && p.median("ft_p99") == 27.5, "median and worst")
+    check(p.threads.first?.name == "DrawRec" || p.threads.first?.name == "main", "threads listed")
+
+    // Verdicts.
+    let gpuFull = phase(log(10, fps: 40, gpu: 97, drawRec: 30))!
+    let gpuHalf = phase(log(8, fps: 75, gpu: 60), scale: 50, measured: 6)!
+    var v = DetailedBenchmark.verdict(full: gpuFull, half: gpuHalf, cap: 120)
+    check(v.kind == .gpuBound && v.text.contains("GPU busy 97%") && v.text.contains("+"), "GPU-bound: \(v.text)")
+    let cpuFull = phase(log(10, fps: 40, gpu: 55, drawRec: 92))!
+    let cpuHalf = phase(log(8, fps: 41, gpu: 30), scale: 50, measured: 6)!
+    v = DetailedBenchmark.verdict(full: cpuFull, half: cpuHalf, cap: 120)
+    check(v.kind == .cpuBound && v.text.contains("busiest port thread DrawRec 92%") && v.text.contains("half render scale +"), "CPU-bound: \(v.text)")
+    let capFull = phase(log(10, fps: 59, gpu: 55))!
+    v = DetailedBenchmark.verdict(full: capFull, half: cpuHalf, cap: 60)
+    check(v.kind == .frameRateCap && v.text == "Frame rate cap (60 FPS held, GPU busy 55%)", "cap: \(v.text)")
+    v = DetailedBenchmark.verdict(full: capFull, half: nil, cap: 70)
+    check(v.kind != .frameRateCap, "58 FPS is not within 3% of 70")
+    let mixHalf = phase(log(8, fps: 50, gpu: 50), scale: 50, measured: 6)!
+    v = DetailedBenchmark.verdict(full: phase(log(10, fps: 39, gpu: 80))!, half: mixHalf, cap: 120)
+    check(v.kind == .mixed, "mixed (+25%): \(v.text)")
+    v = DetailedBenchmark.verdict(full: phase(log(10, fps: 40, gpu: 95))!, half: nil, cap: 0)
+    check(v.kind == .gpuBound, "GPU busy alone decides without a second run")
+    v = DetailedBenchmark.verdict(full: phase(log(10, fps: 40, gpu: nil))!, half: nil, cap: 0)
+    check(v.kind == .notEnoughData, "nothing to decide on")
+
+    // Old game build: Frame stats only.
+    let old = (0..<10).map { _ in "Frame stats: 45.0 FPS, worst frame 30.0 ms (x)" }.joined(separator: "\n")
+    let oldPhase = phase(old)!
+    check(!oldPhase.hasPerf && oldPhase.fps == 45 && oldPhase.median("ft_max") == 30, "frame stats fallback")
+    v = DetailedBenchmark.verdict(full: oldPhase, half: nil, cap: 60)
+    check(v.kind == .needsNewerBuild && v.text.contains("newer game build"), "old build: \(v.text)")
+
+    // Memory and thermal lines.
+    check(DetailedBenchmark.memoryLine(phases: [gpuFull], memoryGB: 16) == "Memory: 7.8 of 16 GB, pressure normal, no swap",
+          "memory line: \(DetailedBenchmark.memoryLine(phases: [gpuFull], memoryGB: 16) ?? "nil")")
+    check(DetailedBenchmark.thermalLine(phases: [gpuFull]) == "Thermal: nominal -> fair", "thermal line")
+    check(DetailedBenchmark.memoryLine(phases: [oldPhase], memoryGB: 16) == nil, "no memory line without data")
+    check(DetailedBenchmark.halfScale(of: .full) == 50 && DetailedBenchmark.halfScale(of: .p67) == 33
+          && DetailedBenchmark.halfScale(of: .p50) == 25, "half scale")
+
+    // Report: keys of both phases, nothing that identifies the owner.
+    let system = SystemInfo(appVersion: "0.1.20", model: "Mac15,8", chip: "Apple M3 Max", memoryGB: 64, macOS: "Version 26.6 (Build 25G62)")
+    let machine = DetailedBenchmark.Machine(system: system, display: "3456x2234 at 120 Hz",
+                                            power: PowerState(mode: .automatic, onAC: true), lowPowerMode: false)
+    let report = DetailedBenchmark.Report(full: gpuFull, half: gpuHalf, cap: 120, machine: machine,
+                                          settings: ["full screen", "render scale 100%"], date: Date(timeIntervalSince1970: 0))
+    let json = report.json
+    let parsed = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any]
+    let phases = parsed?["phases"] as? [String: Any]
+    check(((phases?["yourSettings"] as? [String: Any])?["windows"] as? [Any])?.count == 8, "json: phase 1 windows")
+    check(((phases?["halfRenderScale"] as? [String: Any])?["windows"] as? [Any])?.count == 6, "json: phase 2 windows")
+    check((parsed?["mac"] as? [String: Any])?["chip"] as? String == "Apple M3 Max", "json: chip")
+    let user = NSUserName(), home = NSHomeDirectory(), host = ProcessInfo.processInfo.hostName
+    for (what, out) in [("json", json), ("text", report.text), ("issue", report.issueURL?.absoluteString ?? "")] {
+        check(!out.contains(home), "\(what) has no home path")
+        check(user.count < 3 || !out.contains(user), "\(what) has no user name")
+        check(host.count < 3 || !out.contains(host), "\(what) has no host name")
+        check(!out.localizedCaseInsensitiveContains("serial") && !out.contains("/Users/"), "\(what) has no serial or path")
+    }
+    check(report.text.contains("Verdict: GPU-bound") && report.text.contains("Memory: ") && report.text.contains("Thermal: "), "text summary")
+    check(report.issueURL?.absoluteString.hasPrefix("https://github.com/satperm/iss_mac_port/issues/new") == true, "issue link")
+}
+
 if failures == 0 {
     print("PASS: launcher model tests")
 } else {
