@@ -42,6 +42,9 @@ struct LauncherView: View {
                 Button("Benchmark") { model.runBenchmark() }
                     .disabled(!model.canBenchmark)
                     .help("90 s at the truck crash (fire, smoke, sparks), standing still, with these settings; your saves are not touched. Results also go to Logs/Benchmarks.")
+                Button("Detailed benchmark") { model.runDetailedBenchmark() }
+                    .disabled(!model.canBenchmark)
+                    .help("The benchmark scene twice (about 3 minutes): with these settings, then at half the render scale. Tells whether the graphics chip, the processor or the frame rate cap limits your Mac. Your saved settings are not changed.")
                 Spacer()
                 if let message = model.exitMessage {
                     Text(message).foregroundStyle(.red).lineLimit(2)
@@ -58,8 +61,10 @@ struct LauncherView: View {
                         .controlSize(.small)
                 }
                 if model.running {
-                    Text(model.benchmarking ? "Benchmark running (90 s), don't touch the controls…"
-                         : model.stopping ? "Stopping…" : "Game running").foregroundStyle(.secondary)
+                    Text(model.detailedPhase.map { "Detailed benchmark, run \($0) of 2, don't touch the controls…" }
+                         ?? (model.benchmarking ? "Benchmark running (90 s), don't touch the controls…"
+                             : model.stopping ? "Stopping…" : "Game running"))
+                        .foregroundStyle(.secondary)
                     if model.preparingShaders && !model.stopping {
                         Text("First start: preparing shaders from your game files, once. The game window opens in about a minute, then compiles for up to a few minutes.")
                             .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)

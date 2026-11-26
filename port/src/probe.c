@@ -1047,6 +1047,13 @@ static void install_iss_native_resolution(const char *app0,Segment *segments,uin
         char *end=NULL;const long percent=strtol(scale,&end,10);
         if(end && !*end && percent>=25 && percent<100){config.output=1;config.percent=(int)percent;}
     }
+    /* TLG_BENCH_HALF_SCALE=1 (the launcher's Detailed benchmark, second run): half the render size,
+     * whatever the ini asks for (native output too), so full against half tells GPU- from CPU-bound. */
+    const char *half=getenv("TLG_BENCH_HALF_SCALE");
+    if(half && half[0]=='1'){
+        if(config.output)config.percent=config.percent/2<25 ? 25 : config.percent/2;
+        else {config.output=1;config.percent=50;}
+    }
     if(!config.output)return;
     IssNativePlan plan;
     if(!iss_native_plan(config,&plan)){

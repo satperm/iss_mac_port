@@ -100,7 +100,14 @@ final class LauncherModel: ObservableObject {
     /// The game from the benchmark save, in a user folder of its own (the player's saves are not
     /// touched; the shader cache is shared), without input, stopped after Benchmark.duration.
     func runBenchmark() {
-        guard canBenchmark, let save = Benchmark.save(port: layout.port) else { return }
+        guard canBenchmark, prepareBenchmarkSave() else { return }
+        benchmarking = true
+        startBenchmarkRun(extra: [:], duration: Benchmark.duration)
+    }
+
+    /// The benchmark save copied into the benchmark's own user folder; false (with a message) on failure.
+    private func prepareBenchmarkSave() -> Bool {
+        guard let save = Benchmark.save(port: layout.port) else { return false }
         let fm = FileManager.default
         let user = layout.data.appendingPathComponent("benchmark-user")
         let savedata = user.appendingPathComponent("savedata")
@@ -118,17 +125,102 @@ final class LauncherModel: ObservableObject {
             }
         } catch {
             benchmarkReport = "The benchmark could not prepare its save: \(error.localizedDescription)"
-            return
+            return false
         }
-        benchmarking = true
-        play(extra: ["TLG_USER_DIR": user.path, "TLG_HOST_INPUT": "0", "TLG_FRAME_STATS": "1"])
-        guard running else { benchmarking = false; return }
+        return true
+    }
+
+    /// One benchmark game start (extra: environment on top of the settings), stopped after `duration`.
+    /// Returns false when the game did not start.
+    @discardableResult
+    private func startBenchmarkRun(extra: [String: String], duration: TimeInterval) -> Bool {
+        let user = layout.data.appendingPathComponent("benchmark-user")
+        var environment = ["TLG_USER_DIR": user.path, "TLG_HOST_INPUT": "0", "TLG_FRAME_STATS": "1"]
+        for (k, v) in extra { environment[k] = v }
+        play(extra: environment)
+        guard running else { benchmarking = false; detailedPhase = nil; return false }
         let timer = DispatchWorkItem { [weak self] in self?.stop() }
         benchmarkTimer = timer
-        DispatchQueue.main.asyncAfter(deadline: .now() + Benchmark.duration, execute: timer)
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: timer)
+        return true
+    }
+
+    // MARK: Detailed benchmark (Model/DetailedBenchmark.swift)
+
+    /// 1: your settings, 2: half render scale; nil when no detailed run is in progress.
+    @Published private(set) var detailedPhase: Int?
+    private var detailedFull: DetailedBenchmark.Phase?
+    private var detailedScale = 100
+    private var detailedCap = 0
+
+    /// 90 s at the player's settings, then 80 s of the same scene at half the render scale; the saved
+    /// settings are not changed (the scale goes to the second game start as an environment variable).
+    func runDetailedBenchmark() {
+        guard canBenchmark, prepareBenchmarkSave() else { return }
+        detailedFull = nil
+        detailedScale = Int(settings.renderScale.rawValue) ?? 100
+        detailedCap = Int(settings.fpsCap.rawValue) ?? min(120, NSScreen.main?.maximumFramesPerSecond ?? 60)
+        detailedPhase = 1
+        benchmarking = true
+        startBenchmarkRun(extra: [:], duration: DetailedBenchmark.phase1Duration)
+    }
+
+    private func finishDetailedPhase() {
+        benchmarkTimer?.cancel()
+        benchmarkTimer = nil
+        let text = sessionLog.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
+        if detailedPhase == 1 {
+            guard let full = DetailedBenchmark.phase(log: text, measured: DetailedBenchmark.phase1Measured,
+                                                     renderScale: detailedScale, duration: DetailedBenchmark.phase1Duration) else {
+                detailedPhase = nil
+                benchmarking = false
+                benchmarkReport = "The detailed benchmark did not reach the scene (too few statistics in the log). Run it again: the first run may still be compiling shaders."
+                return
+            }
+            detailedFull = full
+            detailedPhase = 2
+            // Let the first game's processes exit before the second start.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+                guard let self, self.detailedPhase == 2 else { return }
+                let half = DetailedBenchmark.halfScale(of: self.settings.renderScale)
+                _ = half
+                if !self.startBenchmarkRun(extra: ["TLG_BENCH_HALF_SCALE": "1"],
+                                           duration: DetailedBenchmark.phase2Duration) {
+                    self.finishDetailedReport(half: nil)
+                }
+            }
+            return
+        }
+        let half = DetailedBenchmark.phase(
+            log: text, measured: DetailedBenchmark.phase2Measured,
+            renderScale: DetailedBenchmark.halfScale(of: settings.renderScale), duration: DetailedBenchmark.phase2Duration)
+        finishDetailedReport(half: half)
+    }
+
+    private func finishDetailedReport(half: DetailedBenchmark.Phase?) {
+        defer { detailedPhase = nil; benchmarking = false }
+        guard let full = detailedFull else { return }
+        let screen = NSScreen.main
+        let display = screen.map { s -> String in
+            let k = s.backingScaleFactor
+            return String(format: "%.0fx%.0f at %d Hz", s.frame.width * k, s.frame.height * k, s.maximumFramesPerSecond)
+        }
+        let machine = DetailedBenchmark.Machine(system: SystemInfo.current(appVersion: appVersion), display: display,
+                                                power: PowerState.current(),
+                                                lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled)
+        let report = DetailedBenchmark.Report(full: full, half: half, cap: detailedCap, machine: machine,
+                                              settings: ["ISS for Mac \(appVersion)"] + settings.summary, date: Date())
+        benchmarkIssue = report.issueURL
+        let stamp = ISO8601DateFormatter().string(from: report.date).replacingOccurrences(of: ":", with: "-")
+        let folder = logsFolder.appendingPathComponent("Benchmarks/detailed-\(stamp)")
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try? report.json.write(to: folder.appendingPathComponent("report.json"), atomically: true, encoding: .utf8)
+        try? report.text.write(to: folder.appendingPathComponent("summary.txt"), atomically: true, encoding: .utf8)
+        benchmarkReport = report.text
     }
 
     private func finishBenchmark() {
+        if detailedPhase != nil { finishDetailedPhase(); return }
         benchmarkTimer?.cancel()
         benchmarkTimer = nil
         benchmarking = false
@@ -218,7 +310,7 @@ final class LauncherModel: ObservableObject {
             preparingShaders = false
             stopping = false
             finishBenchmark()
-            onExit?(status)
+            if detailedPhase == nil { onExit?(status) }
             return
         }
         let wasStopped = stopping
