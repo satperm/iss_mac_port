@@ -71,20 +71,10 @@ struct PageManager::Impl {
     static constexpr size_t NUM_ADDRESS_LOCKS = NUM_ADDRESS_PAGES / PAGES_PER_LOCK;
     inline static Vulkan::Rasterizer* rasterizer;
 
-    Impl() {
-#if defined(__linux__) && defined(MADV_FREE)
-        // tlg: cached_pages is one zero counter pair per 4 KiB of the 40-bit address space (512
-        // MiB) and is value-initialized, which commits all of it. Hand the untouched part back to
-        // the kernel: MADV_FREE only drops the pages under memory pressure, and a page dropped
-        // that way faults back in zeroed, which is exactly what the counters hold (they are all
-        // zero and any page written afterwards is never dropped). The locks cannot be freed this
-        // way (their mutexes are initialized to non-zero bytes).
-        const VAddr base = reinterpret_cast<VAddr>(cached_pages.data());
-        const VAddr first = Common::AlignUp(base, PM_PAGE_SIZE);
-        ::madvise(reinterpret_cast<void*>(first), sizeof(cached_pages) - (first - base), MADV_FREE);
-#endif
+    Impl() = default;
+    virtual ~Impl() {
+        ::munmap(cached_pages, NUM_ADDRESS_PAGES * sizeof(PageState));
     }
-    virtual ~Impl() = default;
 
     virtual void OnMap(VAddr address, size_t size) {
         // No-op
@@ -375,7 +365,17 @@ struct PageManager::Impl {
         release_pending();
     }
 
-    std::array<PageState, NUM_ADDRESS_PAGES> cached_pages{};
+    // tlg: one counter pair per 4 KiB of the 40-bit address space (512 MiB). As a value-initialized
+    // array member it committed all of it (macOS: +512 MB footprint in the GPU process; Linux used
+    // MADV_FREE to hand it back). Anonymous memory reads as zero, which is what the counters start
+    // at, and only the pages the guest's addresses touch get committed.
+    static PageState* MapPageStates() {
+        void* const p = ::mmap(nullptr, NUM_ADDRESS_PAGES * sizeof(PageState), PROT_READ | PROT_WRITE,
+                               MAP_PRIVATE | MAP_ANON, -1, 0);
+        ASSERT_MSG(p != MAP_FAILED, "page state table: mmap failed");
+        return static_cast<PageState*>(p);
+    }
+    PageState* const cached_pages = MapPageStates();
 #ifdef PTHREAD_ADAPTIVE_MUTEX_INITIALIZER_NP
     using LockType = Common::AdaptiveMutex;
 #else
