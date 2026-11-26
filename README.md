@@ -149,6 +149,7 @@ In the launcher:
 | Native GPU process | On by default: runs the renderer as a native Apple Silicon process. Turn it off to run everything under Rosetta |
 | FPS counter | Off, Game (the port's counter), Metal HUD (Apple's Metal Performance HUD); one at a time |
 | Benchmark (button) | 90 s at the truck crash, standing still, with the settings above; shows the result, saves it in `~/Library/Logs/ISS/Benchmarks` and can open a filled-in GitHub issue to compare Macs |
+| Detailed benchmark (button) | The same scene twice (about 3 minutes): with the settings above, then at half the render size. Says whether the graphics chip, the processor or the frame rate cap limits your Mac (with memory and heat) and saves `report.json` and `summary.txt` in `~/Library/Logs/ISS/Benchmarks`. Also `open /Applications/ISS.app --args --detailed-benchmark` |
 
 Hold ⌥ (Option) while opening the app to show the launcher window when it is set to start the game
 directly.
@@ -225,8 +226,8 @@ What changes it:
 - **Detail: Lower / Lowest**: lighter particles, textures and crowds.
 - Memory in game: about 6-8 GB.
 
-Other Macs have not been measured yet. Run the launcher's **Benchmark** and press "Share on GitHub"
-to add yours.
+Other Macs have not been measured yet. Run the launcher's **Detailed benchmark** (or **Benchmark**) and
+press "Share on GitHub" to add yours.
 
 ## Status
 
