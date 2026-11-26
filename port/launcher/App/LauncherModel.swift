@@ -183,7 +183,8 @@ final class LauncherModel: ObservableObject {
             DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
                 guard let self, self.detailedPhase == 2 else { return }
                 let half = DetailedBenchmark.halfScale(of: self.settings.renderScale)
-                if !self.startBenchmarkRun(extra: ["TLG_RENDER_SCALE": String(half)],
+                _ = half
+                if !self.startBenchmarkRun(extra: ["TLG_BENCH_HALF_SCALE": "1"],
                                            duration: DetailedBenchmark.phase2Duration) {
                     self.finishDetailedReport(half: nil)
                 }

@@ -47,13 +47,34 @@ enum DetailedBenchmark {
             all = Benchmark.windows(log: log).map { PerfWindow(values: ["fps": $0.fps, "ft_max": $0.worstFrameMs]) }
         }
         guard all.count >= measured + 2 else { return nil }
-        return Phase(renderScale: renderScale, duration: duration, hasPerf: hasPerf,
-                     windows: Array(all.suffix(measured)), warmup: Array(all.dropLast(measured)))
+        var phase = Phase(renderScale: renderScale, duration: duration, hasPerf: hasPerf,
+                          windows: Array(all.suffix(measured)), warmup: Array(all.dropLast(measured)))
+        phase.surface = renderSurface(log: log)
+        return phase
+    }
+
+    /// The size the game renders at: the "Native rendering: ... scene/output surface WxH" line, or the
+    /// original 1920x1080 when the native patch is off.
+    static func renderSurface(log: String) -> (width: Int, height: Int) {
+        for line in log.split(separator: "\n") where line.contains("Native rendering: output selection") {
+            if let r = line.range(of: #"surface (\d+)x(\d+)"#, options: .regularExpression) {
+                let dims = line[r].dropFirst("surface ".count).split(separator: "x").compactMap { Int($0) }
+                if dims.count == 2 { return (dims[0], dims[1]) }
+            }
+        }
+        return (1920, 1080)
     }
 
     // MARK: Aggregation
 
     struct Phase: Equatable {
+        static func == (a: Phase, b: Phase) -> Bool {
+            a.renderScale == b.renderScale && a.duration == b.duration && a.hasPerf == b.hasPerf
+                && a.windows == b.windows && a.warmup == b.warmup && a.surface.width == b.surface.width
+                && a.surface.height == b.surface.height
+        }
+        var surface: (width: Int, height: Int) = (1920, 1080) // what the game rendered at (from the log)
+        var pixels: Int { surface.width * surface.height }
         var renderScale: Int // percent of 1080p
         var duration: TimeInterval
         var hasPerf: Bool
@@ -101,7 +122,10 @@ enum DetailedBenchmark {
         guard let fps = full.fps, fps > 0 else {
             return Verdict(kind: .notEnoughData, text: "Not enough data", advice: "")
         }
-        let gain = half?.fps.map { $0 / fps - 1 }
+        // The half-scale run counts only when it really rendered fewer pixels (an older game build
+        // ignored the render scale with a native output resolution set).
+        let halfApplied = half.map { $0.pixels * 4 <= full.pixels * 3 } ?? false
+        let gain = halfApplied ? half?.fps.map { $0 / fps - 1 } : nil
         let gainText = gain.map { String(format: "half render scale %+.0f%% FPS", $0 * 100) }
         guard full.hasPerf else {
             var t = "Verdict needs a newer game build (no Perf lines in the log): \(f1(fps)) FPS"
@@ -209,7 +233,7 @@ enum DetailedBenchmark {
         }
 
         func phaseLine(_ label: String, _ p: Phase) -> String {
-            var s = "\(label) (render scale \(p.renderScale)%): \(p.fps.map(f1) ?? "?") FPS median"
+            var s = "\(label) (\(p.surface.width)x\(p.surface.height)): \(p.fps.map(f1) ?? "?") FPS median"
             if let lo = p.windows.compactMap({ $0["fps"] }).min(), let hi = p.windows.compactMap({ $0["fps"] }).max() {
                 s += " (\(f1(lo))-\(f1(hi)))"
             }
@@ -250,7 +274,7 @@ enum DetailedBenchmark {
                     if let v = p.median(k) { median[k] = v }
                     if let v = p.worst(k) { worst[k] = v }
                 }
-                return ["renderScalePercent": p.renderScale, "durationSeconds": p.duration, "perfLines": p.hasPerf,
+                return ["renderScalePercent": p.renderScale, "renderWidth": p.surface.width, "renderHeight": p.surface.height, "durationSeconds": p.duration, "perfLines": p.hasPerf,
                         "windows": p.windows.map(\.values), "median": median, "worst": worst]
             }
             var phases: [String: Any] = ["yourSettings": phaseObject(full)]

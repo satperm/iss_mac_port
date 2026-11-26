@@ -185,8 +185,14 @@ do {
         }.joined(separator: "\n")
     }
     func phase(_ text: String, scale: Int = 100, measured: Int = 8) -> DetailedBenchmark.Phase? {
-        DetailedBenchmark.phase(log: text, measured: measured, renderScale: scale, duration: 90)
+        // A run below 100% logs the native patch's surface, as the game does.
+        let native = scale < 100
+            ? "Native rendering: output selection 1920x1080, scale \(scale)%, scene/output surface \(1920 * scale / 100)x\(1080 * scale / 100), logical HUD 1920x1080\n"
+            : ""
+        return DetailedBenchmark.phase(log: native + text, measured: measured, renderScale: scale, duration: 90)
     }
+    check(DetailedBenchmark.renderSurface(log: "x\nNative rendering: output selection 3840x2160, scale 50%, scene/output surface 1920x1080, logical HUD 3840x2160\n") == (1920, 1080)
+          && DetailedBenchmark.renderSurface(log: "") == (1920, 1080), "render surface from the log")
     check(phase(log(9, fps: 50, gpu: 50)) == nil, "too few windows")
     let p = phase(log(12, fps: 50, gpu: 50))!
     check(p.windows.count == 8 && p.warmup.count == 4 && p.hasPerf, "last 8 windows measured")
@@ -197,6 +203,9 @@ do {
     let gpuFull = phase(log(10, fps: 40, gpu: 97, drawRec: 30))!
     let gpuHalf = phase(log(8, fps: 75, gpu: 60), scale: 50, measured: 6)!
     var v = DetailedBenchmark.verdict(full: gpuFull, half: gpuHalf, cap: 120)
+    let notHalved = phase(log(8, fps: 41, gpu: 97), scale: 100, measured: 6)!
+    check(!DetailedBenchmark.verdict(full: gpuFull, half: notHalved, cap: 120).text.contains("half render scale"),
+          "a half run that rendered the same size gives no gain")
     check(v.kind == .gpuBound && v.text.contains("GPU busy 97%") && v.text.contains("+"), "GPU-bound: \(v.text)")
     let cpuFull = phase(log(10, fps: 40, gpu: 55, drawRec: 92))!
     let cpuHalf = phase(log(8, fps: 41, gpu: 30), scale: 50, measured: 6)!
