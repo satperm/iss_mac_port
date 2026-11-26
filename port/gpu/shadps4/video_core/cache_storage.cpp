@@ -11,6 +11,7 @@
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 
+#include <cstdio>
 #include <atomic>
 #include <chrono>
 #include <thread>
@@ -87,6 +88,38 @@ void PruneOtherRevisions(const std::filesystem::path& cache_path) {
     const std::string serial{Common::ElfInfo::Instance().GameSerial()};
     const auto name = cache_path.filename().string();
     std::error_code ec;
+    // tlg: the pipelines learned while playing (vk_precompile.h LearnedFile) are guest register
+    // states, valid for any recompiler revision: a new revision's folder starts with the newest
+    // other folder's file, so the first start after an update compiles them too. Without it every
+    // update began with an empty file (owner, 0.1.20: 1,313 pipelines and 124 held frames in the
+    // first minute that the previous version had already learned).
+    constexpr const char* learned_name = "learned-jobs.bin";
+    if (!std::filesystem::exists(cache_path / learned_name, ec)) {
+        std::filesystem::path newest;
+        std::filesystem::file_time_type newest_time{};
+        for (const auto& entry : std::filesystem::directory_iterator(cache_path.parent_path(), ec)) {
+            const auto other = entry.path().filename().string();
+            if (!entry.is_directory(ec) || other == name ||
+                !(other == serial || other.rfind(serial + "-", 0) == 0)) {
+                continue;
+            }
+            const auto file = entry.path() / learned_name;
+            if (std::filesystem::exists(file, ec)) {
+                const auto t = std::filesystem::last_write_time(file, ec);
+                if (!ec && (newest.empty() || t > newest_time)) {
+                    newest = file;
+                    newest_time = t;
+                }
+            }
+        }
+        if (!newest.empty()) {
+            std::filesystem::create_directories(cache_path, ec);
+            std::filesystem::copy_file(newest, cache_path / learned_name, ec);
+            std::printf("Shader cache: kept the pipelines learned while playing from %s (%s)\n",
+                        newest.parent_path().filename().string().c_str(),
+                        ec ? ec.message().c_str() : "copied");
+        }
+    }
     for (const auto& entry : std::filesystem::directory_iterator(cache_path.parent_path(), ec)) {
         const auto other = entry.path().filename().string();
         // The precise and the fast-math cache of this revision both stay (a setting, not a revision).
