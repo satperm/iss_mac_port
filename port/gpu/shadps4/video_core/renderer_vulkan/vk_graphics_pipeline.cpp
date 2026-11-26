@@ -121,11 +121,14 @@ void NameGraphicsPipeline(vk::Device device, vk::Pipeline pipeline, bool square,
 } // namespace
 
 bool GraphicsDeferredBindEnabled(const Instance& instance, const Scheduler& scheduler) {
-    // tlg: off by default, until it is measured (the driver's cache probe alone must find the
-    // pipeline for this to pay off). The once-per-process message is the toggle's startup line.
+    // tlg: on by default since 2026-11-26 (TLG_GFX_DEFERRED_BIND=0 off): with the precompiled
+    // cache only the shader stages load at start, so every pipeline met in a session is built
+    // when first drawn (~1 ms from the driver's cache). Skipped, such draws held ~137 frames in a
+    // 170 s Seattle run; waited for at the bind, 1, with steady-scene FPS unchanged
+    // (docs/REPORT_2026-11-26.md). The once-per-process message is the toggle's startup line.
     static const bool requested = [] {
         const char* v = std::getenv("TLG_GFX_DEFERRED_BIND");
-        if (v && *v == '1') {
+        if (!(v && *v == '0')) {
             std::printf("GPU: a pipeline the driver's cache misses builds on a compiler thread "
                         "(TLG_GFX_DEFERRED_BIND); the draw waits for it at the bind\n");
             return true;
