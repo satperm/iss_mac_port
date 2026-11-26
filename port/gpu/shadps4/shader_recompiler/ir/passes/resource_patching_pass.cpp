@@ -463,6 +463,21 @@ static void RemoveAppendBufferLaneOffset(IR::Inst& vx) {
     // v_sub_i32       idx, vcc, vK, vZ
 
     IR::U1 exec{vx.Arg(1)};
+    // tlg: some of the game's shaders add 0 to the ds_append/ds_consume result before the lane offset
+    // (2 records in the precompiled cache). x + 0 is x: fold those adds so the patterns below see the
+    // real users.
+    for (bool folded = true; folded;) {
+        folded = false;
+        const auto pre_uses = vx.Uses();
+        for (const auto& [u, op] : pre_uses) {
+            if (u->GetOpcode() == IR::Opcode::IAdd32 && u->Arg(1 - op).IsImmediate() &&
+                u->Arg(1 - op).U32() == 0u) {
+                u->ReplaceUsesWithAndRemove(IR::Value{&vx});
+                folded = true;
+                break;
+            }
+        }
+    }
     const auto uses = vx.Uses();
     for (auto use : uses) {
         const auto& [user, operand] = use;
