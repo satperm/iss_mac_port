@@ -1394,6 +1394,7 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
                     instance, scheduler, desc_heap, profile, s.graphics_key,
                     *worker_pipeline_caches[AsyncCompiler::WorkerIndex()],
                     s.infos, s.runtime_infos, s.fetch_shader, s.modules, build->data, false);
+                TlgStats::pipelines_built.fetch_add(1, std::memory_order_relaxed); // Perf line
                 // tlg: which background compile a stutter belongs to (TLG_GPU_LOG=info/debug).
                 LOG_INFO(Render_Vulkan, "tlg: compiled graphics pipeline {:#x} ({}) in {:.1f} ms",
                          std::hash<GraphicsPipelineKey>{}(s.graphics_key), DescribeStages(s.infos),
