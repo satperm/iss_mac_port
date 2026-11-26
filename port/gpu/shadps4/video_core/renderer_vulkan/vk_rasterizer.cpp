@@ -4696,6 +4696,11 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
                     LOG_ERROR(Render, "Clamped size from {} to {} for stage {:#x}",
                               vsharp.GetSize(), size, stage.pgm_hash);
                 }
+                if (!desc.is_written && vsharp.num_records == 0xFFFFFFFFu) {
+                    // tlg: Perf line, shadPS4 #5770 (read-only V# without a size, clamped to the mapping).
+                    TlgStats::unbounded_binds.fetch_add(1, std::memory_order_relaxed);
+                    TlgStats::unbounded_bind_mb.fetch_add(size >> 20, std::memory_order_relaxed);
+                }
                 if (!desc.is_written && size >= HugeBindSize) {
                     NoteHugeBind(vsharp.base_address, size);
                 }

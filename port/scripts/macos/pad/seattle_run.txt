@@ -1,0 +1,33 @@
+# Seattle traversal (held frames / new places): from 40 s, run forward (left stick up) for 120 s,
+# turning the camera right and left in turns so the route covers new streets. Ends with a release.
+40 ly=0 rx=200
+42 ly=0
+48 ly=0 rx=60
+50 ly=0
+56 ly=0 rx=200
+58 ly=0
+64 ly=0 rx=60
+66 ly=0
+72 ly=0 rx=200
+74 ly=0
+80 ly=0 rx=60
+82 ly=0
+88 ly=0 rx=200
+90 ly=0
+96 ly=0 rx=60
+98 ly=0
+104 ly=0 rx=200
+106 ly=0
+112 ly=0 rx=60
+114 ly=0
+120 ly=0 rx=200
+122 ly=0
+128 ly=0 rx=60
+130 ly=0
+136 ly=0 rx=200
+138 ly=0
+144 ly=0 rx=60
+146 ly=0
+152 ly=0 rx=200
+154 ly=0
+160

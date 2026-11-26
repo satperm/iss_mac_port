@@ -1,0 +1,41 @@
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm b/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm
+@@ -24,6 +24,28 @@
+ #include "MVKFoundation.h"
+ #include "MVKOSExtensions.h"
+ #include "MVKGPUCapture.h"
++#include <atomic>
++#include <mutex>
++
++// TLG (MVK_TLG_GPU_BUSY): GPU busy time for the port's Perf line, the union of every command buffer's
++// GPUStartTime..GPUEndTime on all queues. Out-of-order completions that end before the last counted
++// end add nothing (their time is mostly covered); a gap-free approximation, read with mvkTlgGpuBusyNs().
++static std::mutex g_tlgGpuBusyLock;
++static double g_tlgGpuBusyEnd = 0;
++static std::atomic<uint64_t> g_tlgGpuBusyNs{0};
++static void mvkTlgAddGpuInterval(id<MTLCommandBuffer> mtlCB) {
++	double start = mtlCB.GPUStartTime, end = mtlCB.GPUEndTime;
++	if (start <= 0 || end <= start) { return; }
++	std::lock_guard<std::mutex> lock(g_tlgGpuBusyLock);
++	if (start < g_tlgGpuBusyEnd) { start = g_tlgGpuBusyEnd; }
++	if (end > start) {
++		g_tlgGpuBusyNs.fetch_add(uint64_t((end - start) * 1e9), std::memory_order_relaxed);
++		g_tlgGpuBusyEnd = end;
++	}
++}
++extern "C" __attribute__((visibility("default"))) uint64_t mvkTlgGpuBusyNs(void) {
++	return g_tlgGpuBusyNs.load(std::memory_order_relaxed);
++}
+ 
+ using namespace std;
+ 
+@@ -178,7 +200,7 @@
+ 	addPerformanceInterval(getPerformanceStats().queue.retrieveMTLCommandBuffer, startTime);
+ 	NSString* mtlCmdBuffLabel = getMTLCommandBufferLabel(cmdUse);
+ 	setMetalObjectLabel(mtlCmdBuff, mtlCmdBuffLabel);
+-	[mtlCmdBuff addCompletedHandler: ^(id<MTLCommandBuffer> mtlCB) { handleMTLCommandBufferError(mtlCB); }];
++	[mtlCmdBuff addCompletedHandler: ^(id<MTLCommandBuffer> mtlCB) { handleMTLCommandBufferError(mtlCB); mvkTlgAddGpuInterval(mtlCB); }];
+ 
+ 	if ( !mtlCmdBuff ) { reportError(VK_ERROR_OUT_OF_POOL_MEMORY, "%s could not be acquired.", mtlCmdBuffLabel.UTF8String); }
+ 	return mtlCmdBuff;
