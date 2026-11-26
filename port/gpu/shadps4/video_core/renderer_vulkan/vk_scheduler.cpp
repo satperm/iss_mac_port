@@ -222,6 +222,7 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
         return;
     }
     EndRendering();
+    TlgStats::render_passes.fetch_add(1, std::memory_order_relaxed);
     static const bool restart_stats = [] {
         const char* env = std::getenv("TLG_PASS_STATS");
         return env && *env == '1';

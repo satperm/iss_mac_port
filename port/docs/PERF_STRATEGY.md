@@ -103,11 +103,14 @@ CPU-bound one without a round of questions. The new report gives each tester's M
 **Game side: one `Perf:` line per 5 s window** in the normal log (always on, cheap: counters already exist or
 are atomic adds), for example:
 
+```text
+Perf: fps=91.5 ft_p50=10.7 ft_p99=13.2 ft_p999=13.5 ft_max=13.5 held=0 skip_shader=0 skip_pipe=0 gpu_busy=74
+  cpu_game=202 cpu_gpu=383 cpu.game_unnamed=86 cpu.VkRecorder=64 cpu.DrawRec=64 cpu.GpuCommandProcessor=53 ...
+  draws=4781 passes=168 dispatches=763 new_pipes=0 faults=0 protects=741 copy_mb=6.4
+  fp_probe_mb=1519 fp_host_mb=4075 swap_mb=888 pressure=0 therm=0
 ```
-Perf: fps 59.8 ft p50 16.6 p99 21.0 p999 34.2 max 41.0 held 2 | cpu main 48% drawscan 31% drawrec 62% vkrec 55% \
-  compile 3% | gpu busy 71% ahead 1.4 | draws 9.8k passes 162 dispatch 1.1k pipes+ 0 | faults 1.2k/s copy 38 MB/s \
-  | mem probe 2.9 GB host 4.6 GB pressure 0 swap 0 | therm 0
-```
+
+(one line in the log; key=value tokens, any key may be missing; keys listed in `gpu/shim/tlg_perf_line.cpp`)
 
 - Frame times from the flip timestamps (already in Frame stats), as percentiles.
 - Per-thread CPU % from `thread_info(THREAD_BASIC_INFO)` deltas for the named port threads (both processes).

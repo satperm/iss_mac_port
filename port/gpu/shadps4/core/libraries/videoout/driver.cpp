@@ -19,6 +19,7 @@
 #include "common/backports.h"
 #include "common/assert.h"
 #include "tlg_toggles.h"
+#include "tlg_perf_line.h"
 #include "tlg_freeze.h"
 #include "tlg_settings.h"
 #include "tlg_graphics.h"
@@ -437,6 +438,7 @@ void VideoOutDriver::Flip(const Request& req) {
     if (hold) {
         ++held_in_row;
         ++skipped_per_held[bucket(skipped_frame)];
+        TlgStats::held_frames.fetch_add(1, std::memory_order_relaxed);
         if ((++held_total & 63) == 1) {
             std::printf("Async hold: %llu frames with skipped draws kept off the screen so far, %llu shown;"
                         " runs 1/2-3/4-7/8-15/16+: %llu %llu %llu %llu %llu;"
@@ -480,6 +482,7 @@ void VideoOutDriver::Flip(const Request& req) {
         last_trace = now;
         TlgPerf::FramePresented(++trace_frame, interval);
     }
+    TlgPerfLine::OnFlip();
     if (frame_stats) {
         using Clock = std::chrono::steady_clock;
         static Clock::time_point window_start = Clock::now(), last = window_start;

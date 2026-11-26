@@ -789,6 +789,7 @@ struct CompileTimer {
                                    std::chrono::steady_clock::now() - start)
                                    .count());
         ++g_tlg_compiles;
+        TlgStats::pipelines_built.fetch_add(1, std::memory_order_relaxed);
     }
 };
 } // namespace
@@ -1321,6 +1322,7 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
         if (sel.compilation_pending) {
             ++g_tlg_pending_draws;
             g_tlg_skipped_draws_total.fetch_add(1, std::memory_order_relaxed);
+            TlgStats::skipped_shader.fetch_add(1, std::memory_order_relaxed);
             if (bp07 && !sel.sync_compile) {
                 Bp07Tally(false); // a draw classified skippable
             }
@@ -1424,6 +1426,7 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
         }
         ++g_tlg_pending_draws;
             g_tlg_skipped_draws_total.fetch_add(1, std::memory_order_relaxed);
+        TlgStats::skipped_pipeline.fetch_add(1, std::memory_order_relaxed);
         if (bp07) {
             Bp07Tally(false);
         }

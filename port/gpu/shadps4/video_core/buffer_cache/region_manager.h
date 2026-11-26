@@ -276,6 +276,7 @@ private:
                 continue; // not protected: no fault
             }
             TlgStats::tracker_faults.fetch_add(1, std::memory_order_relaxed);
+            TlgStats::perf_faults.fetch_add(1, std::memory_order_relaxed);
             if (!hot_enabled) {
                 continue;
             }

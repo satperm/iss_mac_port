@@ -165,4 +165,9 @@ inline std::atomic<std::uint64_t> protect_calls{0}, protect_pages{0}, protect_re
 /// TLG_LAZY_TEXTURE_USAGE: texture usage upgrades (Runtime::UpgradeUsage) and the bytes of the
 /// textures they copied, printed with the frame stats.
 inline std::atomic<std::uint64_t> texture_upgrades{0}, texture_upgrade_bytes{0};
+/// tlg: cumulative counters for the Perf line (tlg_perf_line.cpp), never reset by other reports.
+inline std::atomic<std::uint64_t> held_frames{0}, pipelines_built{0}, render_passes{0}, perf_faults{0};
+inline std::atomic<std::uint64_t> unbounded_binds{0}, unbounded_bind_mb{0};
+/// tlg: draws skipped while a shader stage (module) or the pipeline itself was still compiling.
+inline std::atomic<std::uint64_t> skipped_shader{0}, skipped_pipeline{0};
 } // namespace TlgStats
