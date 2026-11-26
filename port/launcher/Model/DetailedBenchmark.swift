@@ -138,7 +138,9 @@ enum DetailedBenchmark {
             return Verdict(kind: .frameRateCap, text: "Frame rate cap (\(cap) FPS held" + (gpuText.map { ", \($0)" } ?? "") + ")",
                            advice: "Your Mac had room to spare: you can raise detail or the frame rate cap.")
         }
-        let thread = full.threads.first.map { String(format: "busiest port thread %@ %.0f%%", $0.name, $0.percent) }
+        // The port's own named threads (DrawRec, VkRecorder...); unnamed ones are mostly the game's.
+        let thread = full.threads.first(where: { !$0.name.hasSuffix("unnamed") })
+            .map { String(format: "busiest port thread %@ %.0f%%", $0.name, $0.percent) }
         func parts(_ items: String?...) -> String { items.compactMap { $0 }.joined(separator: ", ") }
         if (gain ?? 0) >= gpuGain || (gpu ?? 0) >= gpuBusyBound {
             return Verdict(kind: .gpuBound, text: "GPU-bound (" + parts(gpuText, gainText) + ")",

@@ -178,6 +178,13 @@ do {
     check(DetailedBenchmark.parse(line: "Perf: ")?.values == nil, "empty perf line")
     check(DetailedBenchmark.parse(line: "Perf: fps=30")?["gpu_busy"] == nil, "missing keys stay missing")
 
+    check(DetailedBenchmark.verdict(
+            full: DetailedBenchmark.phase(log: (0..<10).map { _ in "Perf: fps=90 gpu_busy=70 cpu.game_unnamed=87 cpu.DrawRec=64" }.joined(separator: "\n"),
+                                          measured: 8, renderScale: 100, duration: 90)!,
+            half: DetailedBenchmark.phase(log: "Native rendering: output selection 1920x1080, scale 50%, scene/output surface 960x540, logical HUD 1920x1080\n"
+                                              + (0..<8).map { _ in "Perf: fps=95 gpu_busy=60" }.joined(separator: "\n"),
+                                          measured: 6, renderScale: 50, duration: 80),
+            cap: 120).text.contains("busiest port thread DrawRec"), "busiest port thread skips the game's unnamed threads")
     func log(_ n: Int, fps: Double, gpu: Double?, drawRec: Double = 40, extra: String = "") -> String {
         (0..<n).map { i in
             "Perf: fps=\(fps + Double(i % 2)) ft_p99=\(20 + i) " + (gpu.map { "gpu_busy=\($0) " } ?? "")
