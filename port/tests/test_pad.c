@@ -88,16 +88,31 @@ int main(void) {
     assert(data.buttons==0 && touch_at(&data,480)); /* released: the finger lingers */
     WAIT_FOR(data.buttons==0 && data.touch_count==0);
 
-    /* A tap shorter than the lead still clicks, for CLICK_HOLD_US. */
-    inject(path,"touchpad_right");
-    data=read_pad();
-    assert(!(data.buttons & BTN_TOUCHPAD) && touch_at(&data,1440));
-    inject(path,"");
-    data=read_pad();
-    assert(!(data.buttons & BTN_TOUCHPAD) && touch_at(&data,1440));
-    WAIT_FOR((data.buttons & BTN_TOUCHPAD) && touch_at(&data,1440));
-    WAIT_FOR(!(data.buttons & BTN_TOUCHPAD) && touch_at(&data,1440));
-    WAIT_FOR(data.buttons==0 && data.touch_count==0);
+    /* A tap shorter than the lead still clicks, for CLICK_HOLD_US. The tap is the time between
+     * the two reads (the pad's own timestamps). The inject() sleep sits inside it, so on a loaded
+     * machine a tap can outlast the lead: the click then starts and ends between two reads, and
+     * no poll can see it. Such a tap is not the case under test: it is retried, and the short
+     * one must come within a few tries. */
+    int short_tap=0;
+    for (int attempt=0; attempt<50 && !short_tap; ++attempt) {
+        inject(path,"touchpad_right");
+        PadData pressed=read_pad();
+        assert(!(pressed.buttons & BTN_TOUCHPAD) && touch_at(&pressed,1440));
+        inject(path,"");
+        data=read_pad();
+        if (data.timestamp-pressed.timestamp>=CLICK_LEAD_US) {
+            WAIT_FOR(data.buttons==0 && data.touch_count==0); /* a long tap: wait, then retry */
+            continue;
+        }
+        /* Released before the lead: the click is due at pressed+CLICK_LEAD_US, after this read,
+         * so both states are exact (not timing-dependent). */
+        assert(!(data.buttons & BTN_TOUCHPAD) && touch_at(&data,1440));
+        WAIT_FOR((data.buttons & BTN_TOUCHPAD) && touch_at(&data,1440));
+        WAIT_FOR(!(data.buttons & BTN_TOUCHPAD) && touch_at(&data,1440));
+        WAIT_FOR(data.buttons==0 && data.touch_count==0);
+        short_tap=1;
+    }
+    assert(short_tap);
 
     /* L1 + the right click is a left click (photo mode on a pad without a touchpad). The side
      * is chosen when the click starts and kept until it ends. */
