@@ -709,16 +709,26 @@ void GraphicsPipeline::CreatePipeline(const std::shared_ptr<PipelineCreateInfoBl
     // for the pipeline alone, so the caller learns it would have to be compiled here.
     // CreateCachedGraphicsPipeline is not used for these: the pipeline-binary capture it adds is
     // incompatible with the probe's flag (and with a build on another thread).
-    auto created =
-        CreateGraphicsPipelineNow(device, cache, info,
-                                  vk::PipelineCreateFlagBits::eFailOnPipelineCompileRequired,
-                                  debug_str);
-    if (created.result != vk::Result::ePipelineCompileRequired) {
-        ASSERT_MSG(created.result == vk::Result::eSuccess,
-                   "Failed to create graphics pipeline: {}", vk::to_string(created.result));
-        out = std::move(created.value);
-        NameGraphicsPipeline(device, *out, square, debug_str);
-        return;
+    // tlg: with the deferred bind on (the driver's cache is warm), a pipeline the driver has cached
+    // is built on the compiler threads too, not probed here: a level's first frame met ~590 of them
+    // and built them one after another on the GPU thread (~0.86 ms each, a 320 ms frame); in
+    // parallel that frame took 235 ms. TLG_GFX_DEFER_ALL=0 probes here first, as before.
+    static const bool defer_all = [] {
+        const char* v = std::getenv("TLG_GFX_DEFER_ALL");
+        return !(v && *v == '0');
+    }();
+    if (!defer_all) {
+        auto created =
+            CreateGraphicsPipelineNow(device, cache, info,
+                                      vk::PipelineCreateFlagBits::eFailOnPipelineCompileRequired,
+                                      debug_str);
+        if (created.result != vk::Result::ePipelineCompileRequired) {
+            ASSERT_MSG(created.result == vk::Result::eSuccess,
+                       "Failed to create graphics pipeline: {}", vk::to_string(created.result));
+            out = std::move(created.value);
+            NameGraphicsPipeline(device, *out, square, debug_str);
+            return;
+        }
     }
     // tlg: built on a compiler thread, in that thread's cache (the driver blob the saver writes
     // keeps it). The recording thread waits for it at the bind, never the GPU thread, so a burst
@@ -758,7 +768,7 @@ void GraphicsPipeline::CreatePipeline(const std::shared_ptr<PipelineCreateInfoBl
     }
     // The compiler queue is full: built here, as before.
     Pipeline::deferred_binds.fetch_sub(1, std::memory_order_relaxed);
-    created = CreateGraphicsPipelineNow(device, cache, info, {}, debug_str);
+    auto created = CreateGraphicsPipelineNow(device, cache, info, {}, debug_str);
     ASSERT_MSG(created.result == vk::Result::eSuccess, "Failed to create graphics pipeline: {}",
                vk::to_string(created.result));
     out = std::move(created.value);
