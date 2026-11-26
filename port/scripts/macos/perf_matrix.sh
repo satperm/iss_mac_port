@@ -10,7 +10,7 @@
 # Defaults: 3 runs x 60 s, all four scenes in that order, the bundle or library in place (agent_run.sh
 # uses ISS.app when it is there).
 #   truck, seattle   1080p (render_resolution=native)
-#   fire, bridge     4K (render_resolution=4K)
+#   fire, bridge     4K (iss_native_output=4: the native startup patch at 3840x2160)
 #   fire = the burning village (owner's save copy), bridge = the bridge; both are user dirs with a
 #   savedata/ inside, kept out of git. Folders relative to port/: seattle = out/play-seattle,
 #   fire = out/owner-copy-20261114, bridge = out/bridge-fresh. Override with ISS_SCENE_SEATTLE,
@@ -124,11 +124,15 @@ for s in "${scenes[@]}"; do
     case $dir in /*) ;; *) dir=$root/$dir ;; esac
     [[ -d $dir/savedata ]] || { echo "No $dir/savedata for $s (set ISS_SCENE_$(echo "$s" | tr a-z A-Z))." >&2; exit 2; }
 done
-# The render resolution of each class, as the game's own settings file (TLG_CONFIG): the owner's
-# upscaler=off and live_resolution=0 are kept, render_resolution is the only difference.
+# The render resolution of each class, as the game's own settings file (TLG_CONFIG), the way the
+# day reports measured it: 1080p = the original size, 4K = the native startup patch at 3840x2160
+# (iss_native_output=4, 100%), upscaler off, no live resolution changes.
+mkdir -p out/perf
 for res in 1080p 4K; do
-    case $res in 1080p) rr=native ;; 4K) rr=4K ;; esac
-    printf 'render_resolution=%s\nlive_resolution=0\nupscaler=off\n' "$rr" > "out/perf/settings-$res.ini"
+    {
+        printf 'upscaler=off\nrender_resolution=native\nlive_resolution=0\n'
+        [[ $res == 4K ]] && printf 'iss_native_output=4\niss_native_percent=100\niss_native_hud_edges=1\n'
+    } > "out/perf/settings-$res.ini"
 done
 
 variant=${lib:-built}
