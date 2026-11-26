@@ -47,7 +47,17 @@ open -n "${env_args[@]}" "$app"
 for _ in $(seq 1 120); do pgrep -x tlg-probe >/dev/null && break; /bin/sleep 1; done
 [[ -x $pstate ]] && { "$pstate" $((secs + 20)) > "$plog" 2>&1 & disown; }
 end=$(( $(date +%s) + secs + 240 ))
-while pgrep -x tlg-probe >/dev/null && (( $(date +%s) < end )); do /bin/sleep 2; done
+# The game is over when the launcher logs it, or when gameplay was reached and tlg-probe is gone:
+# tlg-probe also runs for a moment (CPU check) before a cold cache's shader listing, so its absence
+# alone made this script quit the launcher there, which ended the game with status 15 (2026-11-26).
+while (( $(date +%s) < end )); do
+    cur=$(ls -t "$logs"/game-*.log 2>/dev/null | head -1)
+    if [[ -n $cur && $cur != "$before" ]]; then
+        grep -aq 'launcher: the game stopped' "$cur" && break
+        grep -aq 'Frame stats' "$cur" && ! pgrep -x tlg-probe >/dev/null && break
+    fi
+    /bin/sleep 2
+done
 pgrep -x tlg-probe >/dev/null && echo "WARNING: the game is still running after the run"
 /bin/sleep 3
 osascript -e 'tell application id "io.github.satperm.iss-mac-port" to quit' >/dev/null 2>&1 || true
