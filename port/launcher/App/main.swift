@@ -33,6 +33,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         model.onExit = { [weak self] status in self?.gameEnded(status) }
         model.load()
+        // `open ISS.app --args --detailed-benchmark`: the window, then the Detailed benchmark at once
+        // (testers and scripted runs; the result shows in the window as after the button).
+        if CommandLine.arguments.contains("--detailed-benchmark") {
+            showWindow()
+            model.runDetailedBenchmark()
+            return
+        }
         // ⌥ (Option) at open shows the window even when it is turned off.
         if !NSEvent.modifierFlags.contains(.option) && model.canSkipWindow {
             direct = true
