@@ -4,6 +4,7 @@
 #include "tlg_orbs.h"
 #include "tlg_graphics.h"
 #include "tlg_view.h"
+#include "tlg_quality.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -192,7 +193,7 @@ void Set(Values& v, const std::string& key, const std::string& value) {
     } else if (key == "quality_target_fps") {
         v.quality_target_fps = i <= 0 ? 0 : std::clamp(i, 20, 240);
     } else if (key == "quality_floor") {
-        v.quality_floor = std::clamp(i, 0, 14);
+        v.quality_floor = std::clamp(i, 0, TlgQuality::MaxLevel);
     } else if (key == "draw_budget") {
         v.draw_budget = std::clamp(i, 10, 100);
     } else if (key == "dyn_cull") {
