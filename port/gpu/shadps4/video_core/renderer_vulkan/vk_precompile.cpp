@@ -537,6 +537,12 @@ void PipelineCache::ReleasePrecompiledModules() {
                 released);
 }
 
+/// tlg: the driver's cache is known warm this session: the startup probe found it within 4x of
+/// the baseline, or a full compilation just ran. Pipelines met in game then wait at the bind
+/// (vk_graphics_pipeline.cpp, deferred bind); otherwise their draws are skipped as before, since a
+/// cold driver turns each such wait into a full compile (frames of 2-5 s measured 2026-11-26).
+std::atomic<bool> g_tlg_driver_cache_warm{false};
+
 bool PipelineCache::ColdDriverCache(const std::filesystem::path& jobs, double baseline_ms) {
     // tlg: the driver's own cache (Metal's shader cache under MoltenVK) can be lost while this
     // cache still has every pipeline: an OS update, or Metal evicting entries. The game then
@@ -551,6 +557,7 @@ bool PipelineCache::ColdDriverCache(const std::filesystem::path& jobs, double ba
     // Cold measured 37x the baseline on an M3 Max (125 ms against 3.4 ms): 8x leaves room for a
     // busy Mac at start without compiling everything again for nothing.
     const bool cold = per > 8.0 * baseline_ms;
+    g_tlg_driver_cache_warm.store(per <= 4.0 * baseline_ms, std::memory_order_relaxed);
     std::printf("Precompile: probe %.2f ms per pipeline, %.2f ms after the last full compilation: "
                 "the driver's cache is %s\n",
                 per, baseline_ms, cold ? "cold, compiling again" : "warm");
@@ -903,6 +910,7 @@ Precompile::Result PipelineCache::Precompile(
     if (progress) {
         progress(u32(records.size()), u32(records.size()));
     }
+    g_tlg_driver_cache_warm.store(true, std::memory_order_relaxed); // just compiled
     std::printf("Precompile: %u records in %.1f s: %u graphics and %u compute pipelines built, "
                 "%u already there, %u failed\n",
                 result.records,
