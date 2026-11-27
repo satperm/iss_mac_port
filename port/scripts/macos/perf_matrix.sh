@@ -5,11 +5,14 @@
 # port/out/perf/history.jsonl (PERF_HISTORY=<file> overrides it).
 #
 #   TLG_GAME_DIR=/path/to/game bash port/scripts/macos/perf_matrix.sh [-n runs] [-s seconds] [-l label]
-#       [--lib NAME | --app] [--dry-run] [truck|seattle|fire|bridge ...]
+#       [--lib NAME | --app] [--dry-run] [truck|seattle|spin|fire|bridge ...]
 #
 # Defaults: 3 runs x 60 s, all four scenes in that order, the bundle or library in place (agent_run.sh
 # uses ISS.app when it is there).
 #   truck, seattle   1080p (render_resolution=native)
+#   spin             1080p, the Seattle save with the camera turning at a constant speed (pad/camera_spin.txt):
+#                    the moving load (the owner's choice over a scripted run, which ran into walls). Not with --app;
+#                    use -s 75 or more (the turning starts at 30 s, the median is of the last 40 s).
 #   fire, bridge     4K (iss_native_output=4: the native startup patch at 3840x2160)
 #   fire = the burning village (owner's save copy), bridge = the bridge; both are user dirs with a
 #   savedata/ inside, kept out of git. Folders relative to port/: seattle = out/play-seattle,
@@ -85,13 +88,14 @@ while (( $# )); do
         --lib) lib=${2:-}; shift 2 ;;
         --app) app=1; shift ;;
         --dry-run) dry=1; shift ;;
-        truck|seattle|fire|bridge) scenes+=("$1"); shift ;;
+        truck|seattle|spin|fire|bridge) scenes+=("$1"); shift ;;
         -h|--help) usage ;;
         *) echo "Unknown argument: $1" >&2; usage ;;
     esac
 done
 [[ $runs =~ ^[1-9][0-9]*$ && $secs =~ ^[1-9][0-9]*$ ]] || { echo "-n and -s take positive integers." >&2; exit 2; }
 (( app )) && [[ -n $lib ]] && { echo "Use either --lib or --app." >&2; exit 2; }
+(( app )) && [[ " ${scenes[*]} " == *" spin "* ]] && { echo "spin needs a scripted pad: not with --app." >&2; exit 2; }
 (( ${#scenes[@]} )) || scenes=(truck seattle fire bridge)
 [[ -n $label ]] || { echo "-l needs a label." >&2; exit 2; }
 if [[ -n $lib && ! -f $root/out/ab/$lib.dylib ]]; then
@@ -106,12 +110,12 @@ cd -- "$root"
 scene_dir() {
     case $1 in
         truck) echo truck ;;
-        seattle) echo "${ISS_SCENE_SEATTLE:-out/play-seattle}" ;;
+        seattle|spin) echo "${ISS_SCENE_SEATTLE:-out/play-seattle}" ;;
         fire) echo "${ISS_SCENE_FIRE:-out/owner-copy-20261114}" ;;
         bridge) echo "${ISS_SCENE_BRIDGE:-out/bridge-fresh}" ;;
     esac
 }
-resolution() { case $1 in truck|seattle) echo 1080p ;; fire|bridge) echo 4K ;; esac; }
+resolution() { case $1 in truck|seattle|spin) echo 1080p ;; fire|bridge) echo 4K ;; esac; }
 
 # Check every scene's save before the first run: a missing save must not cost a run.
 mkdir -p out/perf
@@ -122,7 +126,7 @@ for s in "${scenes[@]}"; do
         continue
     fi
     case $dir in /*) ;; *) dir=$root/$dir ;; esac
-    [[ -d $dir/savedata ]] || { echo "No $dir/savedata for $s (set ISS_SCENE_$(echo "$s" | tr a-z A-Z))." >&2; exit 2; }
+    [[ -d $dir/savedata ]] || { echo "No $dir/savedata for $s (set ISS_SCENE_$(echo "${s/spin/seattle}" | tr a-z A-Z))." >&2; exit 2; }
 done
 # The render resolution of each class, as the game's own settings file (TLG_CONFIG), the way the
 # day reports measured it: 1080p = the original size, 4K = the native startup patch at 3840x2160
@@ -141,6 +145,8 @@ for s in "${scenes[@]}"; do
     res=$(resolution "$s")
     cfg=$root/out/perf/settings-$res.ini
     arg=$s
+    # spin: the camera turns from second 30 (agent_run.sh reads PAD_SCRIPT; lib_ab.sh passes it on).
+    if [[ $s == spin ]]; then export PAD_SCRIPT=$root/scripts/macos/pad/camera_spin.txt; else unset PAD_SCRIPT; fi
     if [[ $s != truck ]]; then
         arg=$(scene_dir "$s")
         case $arg in /*) ;; *) arg=$root/$arg ;; esac
