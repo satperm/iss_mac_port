@@ -733,10 +733,12 @@ On by default:
 - Port defaults match the launcher's: upscaler off, object motion off (direct runs paid ~10%).
 
 Opt-in (A/B, then candidates for the default):
-- `TLG_GFX_DEFERRED_BIND=1`: a graphics pipeline the driver's cache misses is built on a
-  compiler thread and the draw recording thread waits for it at bind, like compute pipelines,
-  instead of the GPU command thread compiling it inline. No draw is skipped. The shader stutter
-  candidate with the largest expected effect.
+- `TLG_GFX_DEFERRED_BIND`: a new graphics pipeline is built on a compiler thread and the draw
+  recording thread waits for it at bind, like compute pipelines, instead of the draw being skipped.
+  **On by default since 2026-11-26 (#115) when the startup probe finds the driver's cache warm**
+  (#120; with a cold cache each wait would be a full compile); `=1` forces it, `=0` turns it off.
+  Since 2026-11-27 (#143) pipelines the driver has cached go to the compiler threads too instead of
+  being created on the GPU thread (`TLG_GFX_DEFER_ALL=0` restores that probe).
 - `TLG_READBACK_LOCAL_JOIN=1` (with the deferred readbacks): a faulting guest thread whose
   window is covered by a pending readback finishes it itself instead of a round trip through
   the GPU command thread (counted as `local_joined` in the readback stats).
