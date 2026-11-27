@@ -189,20 +189,22 @@ The launcher saves the choice as `TLG_KEY_MAP` in `launch.conf` (only the button
 
 ## Expected performance
 
-Measured on a **MacBook Pro with M3 Max**, macOS 27, 1080p rendering, default settings, release
-0.1.11 (2026-11-14). Each value is the median of 40 s after loading.
+Measured on a **MacBook Pro with M3 Max**, macOS 27, default settings, release 0.1.20 (2026-11-26/27).
+Each value is the median of a 60-90 s run after loading (uncapped).
 
 | Scene | FPS |
 |---|---|
-| Truck crash in the forest (fire, smoke, sparks; the launcher's **Benchmark**), standing | 76 (0.1.10: 70, 0.1.3: 36) |
-| Bridge after the car crash (rain, smoke), standing | 99 (0.1.10: 87, 0.1.5: 60) |
-| First Seattle street after the bridge, standing | 72, steady (0.1.10: 63, then ~33 after 40 s) |
-| Bridge, camera turning at a constant speed | 63 (0.1.8: 53, 0.1.5: 49) |
-| Bridge with render scale 50% | about 72 |
+| Truck crash in the forest (fire, smoke, sparks; the launcher's **Benchmark**), standing, 1080p | 88 (0.1.11: 76, 0.1.3: 36) |
+| First Seattle street after the bridge, standing, 1080p | 86 (0.1.11: 72) |
+| Seattle, camera turning at a constant speed, 1080p | 89-91 |
+| Bridge after the car crash (rain, smoke), standing, 1080p | 112 (0.1.11: 99) |
+| Bridge, 4K native | 50 |
+| Burning village, 4K native | 31 |
 | Frame rate cap 30 | exactly 30 |
 
-Older scripted runs while moving (0.1.2, 2026-11-02): bridge with rain and the camera turning 50-55
-(dips to about 40), open city view from the bridge 41-46, burning building 29-49.
+At 1080p an M3 Max is limited by the processor (the thread that records the draws), at 4K by the graphics
+chip. Players' benchmarks so far: M1 Max 64 GB (0.1.17, quality Lowest, render scale 50% with MetalFX, cap 30):
+30 FPS; M5 24 GB (0.1.19, render scale 100% with MetalFX, display cap): 59 FPS at a 60 Hz cap.
 
 **Long sessions on a MacBook Pro: set Energy Mode to High Power.** In the default Automatic mode
 macOS lowers the CPU clocks after about 3-4 minutes of play, and the frame rate settles 15-20%
