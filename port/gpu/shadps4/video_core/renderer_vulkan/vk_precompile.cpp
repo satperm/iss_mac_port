@@ -36,6 +36,7 @@
 #include "common/path_util.h"
 #include "video_core/cache_storage.h"
 #include "tlg_threads.h"
+#include <unistd.h>
 
 namespace Vulkan::Precompile {
 
@@ -687,7 +688,14 @@ unsigned BuildThreads() {
             return u32(std::strtoul(value, nullptr, 10));
         }
     }
-    return std::max(1u, TlgThreads::Available() - 1);
+    // tlg: twice the hardware threads with 16 GB or more: the build threads mostly wait for
+    // Apple's shader compiler service, and a cold Metal cache (every update) compiled 25,175
+    // records in 124 s on 13 threads, 115 s on 20 and 108 s on 28 (M3 Max), for +220 MB at the
+    // peak (5.55 -> 5.77 GB). Below 16 GB that peak matters more: one thread per hardware thread.
+    const unsigned base = std::max(1u, TlgThreads::Available() - 1);
+    const long pages = ::sysconf(_SC_PHYS_PAGES), page_size = ::sysconf(_SC_PAGE_SIZE);
+    const unsigned long long ram = pages > 0 && page_size > 0 ? u64(pages) * u64(page_size) : 0;
+    return ram >= (16ull << 30) - (512ull << 20) ? std::min(2 * base + 2, 32u) : base;
 }
 } // namespace
 
