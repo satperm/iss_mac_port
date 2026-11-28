@@ -92,6 +92,11 @@ static inline unsigned iss_karma_bridge_ex(unsigned char *p, uintptr_t helper,
         /* UI observer: RSI widget, RDI matrix destination, original return PC. */
         const unsigned char args[]={0x48,0x89,0xf1,0x48,0x89,0xfa,0x4c,0x8b,0x83,0x80,0,0,0};
         memcpy(p+n,args,sizeof(args));n+=sizeof(args);
+    }else if(shard_args==5){
+        /* Saved-register block in RCX (r15 at +0, r12 at +0x18, rcx at +0x68, rax at +0x70): the
+         * helper may change the values the bridge restores. */
+        const unsigned char args[]={0x48,0x89,0xd9};
+        memcpy(p+n,args,sizeof(args));n+=sizeof(args);
     }else if(shard_args){const unsigned char args[]={0x49,0x89,0xd0,0x89,0xf2,0x48,0x89,0xf9};memcpy(p+n,args,sizeof(args));n+=sizeof(args);}
     const unsigned char fxsave[]={0x48,0x0f,0xae,0x84,0x24,0x20,0x02,0,0,0x48,0xb8};
     memcpy(p+n,fxsave,sizeof(fxsave));n+=sizeof(fxsave);memcpy(p+n,&helper,8);n+=8;

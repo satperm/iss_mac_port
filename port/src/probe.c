@@ -985,6 +985,142 @@ int iss_temporal_get_frame(uint32_t seq, IssTemporalFrame *out) { return iss_tem
 #include "iss_native_resolution.h"
 #include "iss_hud_trace.h"
 #include "iss_hud_corners.h"
+
+/* Two frames in flight (TLG_FRAMES_AHEAD=1, experimental: no GPU particles yet). The game submits frame N only after the GPU
+ * finished N-1, because its five per-frame ring allocators (graphics context at 0xF1BCD0, allocators at
+ * +0x28 +0x58 +0x88 +0xb8 +0xe8: base[2], cur, end, size, idx) have two slots. Here they get a third
+ * slot (guest direct memory, GPU-visible), rotate over three, and the wait at 0x1f26e7 targets N-2. */
+static uint64_t frames_third[5];
+static int frames_ready = -1;
+static void ISS_MS_ABI frames_rotate(uint64_t *regs) {
+    static const unsigned offs[5] = {0x28, 0x58, 0x88, 0xb8, 0xe8};
+    unsigned char *ctx = (unsigned char *)(uintptr_t)regs[3]; /* r12 */
+    if (frames_ready < 0) {
+        /* The game takes all free direct memory at start; the third slots come from its own pools
+         * (the allocator gfx_context_init uses: FUN_00059d50(pool, size, 0x400, 0x2e)). */
+        typedef uint64_t (*pool_alloc_fn)(void *, uint64_t, uint64_t, uint64_t) __attribute__((sysv_abi));
+        static const uint32_t pools[5] = {0xE0CA70, 0xE0CB30, 0xE0CA70, 0xE0CA70, 0xE0CB30};
+        pool_alloc_fn pool_alloc = (pool_alloc_fn)(uintptr_t)(image + 0x59d50);
+        frames_ready = 1;
+        uint64_t sum = 0;
+        for (unsigned i = 0; i < 5; ++i) {
+            const uint64_t size = *(uint32_t *)(ctx + offs[i] + 0x20);
+            const uint64_t addr = pool_alloc(image + pools[i], size, 0x400, 0x2e);
+            if (!addr) {
+                printf("Frames ahead: slot %u (%llu bytes) not allocated\n", i, (unsigned long long)size);
+                frames_ready = 0;
+                break;
+            }
+            frames_third[i] = addr;
+            sum += size;
+        }
+        /* The game's own command-buffer copy mode ([0xF1BCC0]): every command buffer of the frame is
+         * copied into allocator 4's ring (now three slots) before the submit, so the game can rewrite its
+         * command buffers (and what they chain to) while the previous frame is still being parsed.
+         * TLG_FRAMES_COPY=0: leave the game's setting. */
+        const char *copy = getenv("TLG_FRAMES_COPY");
+        const unsigned before = image[0xF1BCC0];
+        if (frames_ready && !(copy && *copy == '0')) image[0xF1BCC0] = 1;
+        printf("Frames ahead: third slots %s (%.1f MB), DCB copy mode %u -> %u\n", frames_ready ? "ready" : "FAILED",
+               sum / 1048576.0, before, (unsigned)image[0xF1BCC0]);
+    }
+    /* The game's slot index stays 0/1 (its code may index two-element arrays with it); the physical
+     * buffer under the slot it switches to cycles over three, so the slot it leaves still holds the
+     * previous frame and the one it enters is the buffer of three frames ago. */
+    static uint64_t phys[5][3];
+    static int32_t active[5] = {-1, -1, -1, -1, -1};
+    for (unsigned i = 0; i < 5; ++i) {
+        unsigned char *a = ctx + offs[i];
+        uint32_t *idx = (uint32_t *)(a + 0x28);
+        uint64_t *base = (uint64_t *)a;
+        const uint32_t next_idx = *idx ^ 1;
+        if (frames_ready > 0 && active[i] < 0) {
+            phys[i][0] = base[0];
+            phys[i][1] = base[1];
+            phys[i][2] = frames_third[i];
+            active[i] = (int32_t)(*idx & 1);
+        }
+        if (frames_ready > 0) {
+            active[i] = (active[i] + 1) % 3;
+            base[next_idx] = phys[i][active[i]];
+        }
+        *idx = next_idx;
+        *(uint64_t *)(a + 0x10) = base[next_idx];
+        *(uint64_t *)(a + 0x18) = base[next_idx] + *(uint32_t *)(a + 0x20);
+    }
+    regs[0x68 / 8] = *(uint64_t *)(ctx + 0xe8 + 0x18);          /* rcx: allocator 5's end */
+    regs[0x70 / 8] = *(uint64_t *)(image + 0xD9E058);           /* rax: as the original block left it */
+}
+/* The deferred-free list (0xE86EC8, r13 in 0x196c30): two 24-byte slot records at +0x10 and +0x28; after each
+ * frame submit the game toggles [r13+8] and frees the new slot's items (released two frames ago). With two
+ * frames in flight that is one frame too early: the record about to be freed is swapped with one held back
+ * from the previous frame, so the game frees what was released three frames ago. */
+static unsigned char frames_held[24];
+static void frames_free_held(void) {
+    /* As the game's own loop (0x196ce0): entries of 16 bytes {pool index, pointer}, each freed with
+     * FUN_0005A5E0(0xE0CA70 + index * 0xC0, pointer), then the array with FUN_005B92C0. */
+    typedef void (*free_item_fn)(void *, uint64_t) __attribute__((sysv_abi));
+    typedef void (*free_array_fn)(void *) __attribute__((sysv_abi));
+    unsigned char *array = *(unsigned char **)frames_held;
+    const int32_t count = *(int32_t *)(frames_held + 8);
+    for (int32_t i = 0; i < count; ++i) {
+        const int64_t index = *(int32_t *)(array + i * 16);
+        ((free_item_fn)(uintptr_t)(image + 0x5a5e0))(image + 0xE0CA70 + index * 0xC0, *(uint64_t *)(array + i * 16 + 8));
+    }
+    if (array) ((free_array_fn)(uintptr_t)(image + 0x5b92c0))(array);
+    memset(frames_held, 0, sizeof(frames_held));
+}
+static void ISS_MS_ABI frames_defer_free(uint64_t *regs) {
+    if (frames_ready <= 0) return;
+    unsigned char *list = (unsigned char *)(uintptr_t)regs[2]; /* r13 */
+    /* A world unload (0x5054b0 -> 0x196d90) runs this frame end with [list+4] = 0x10 after the GPU went idle:
+     * free what is held now, before the level's pools change, and let the game free its slot as before. */
+    if (*(uint32_t *)(list + 4) == 0x10) {
+        frames_free_held();
+        return;
+    }
+    const int32_t slot = *(int32_t *)(list + 8);
+    unsigned char *record = list + 0x10 + (size_t)(1 - slot) * 24;
+    unsigned char tmp[24];
+    memcpy(tmp, record, 24);
+    memcpy(record, frames_held, 24);
+    memcpy(frames_held, tmp, 24);
+}
+static void install_frames_ahead(Segment *segments, uint64_t count, uint64_t size) {
+    /* Opt-in (TLG_FRAMES_AHEAD=1): +8-10% FPS, but the GPU particles (fire, smoke) disappear: the particle
+     * system reads the previous frame's GPU results, which are not done yet with two frames in flight. */
+    const char *env = getenv("TLG_FRAMES_AHEAD");
+    if (!env || *env != '1') return;
+    static const unsigned char wait_orig[10] = {0x49,0x8b,0x9c,0x24,0x30,0x01,0x00,0x00,0xeb,0x19};
+    static const unsigned char rot_orig[16] = {0x49,0x8b,0x44,0x24,0x38,0x49,0x8b,0x44,0x24,0x68,0x41,0x8b,0x44,0x24,0x50,0x89};
+    if (0x1f2949 > size || !mapped(segments, count, 0x1f26e7, 0x1f2949 - 0x1f26e7) ||
+        memcmp(image + 0x1f26e7, wait_orig, sizeof(wait_orig)) || memcmp(image + 0x1f2808, rot_orig, sizeof(rot_orig))) {
+        printf("Frames ahead: code check failed, not installed\n");
+        return;
+    }
+    unsigned char *stub = allocate(page_size);
+    unsigned n = 0;
+    memcpy(stub, wait_orig, 8); n = 8;
+    const unsigned char dec[] = {0x48,0xff,0xcb}; memcpy(stub + n, dec, 3); n += 3;
+    iss_karma_jump(stub + n, (uintptr_t)(image + 0x1f270a)); n += 14;
+    unsigned char *bridge = stub + 256;
+    iss_karma_bridge_ex(bridge, (uintptr_t)frames_rotate, NULL, (uintptr_t)(image + 0x1f2941), 0, 5);
+    protect(stub, page_size, 5);
+    if (!install_jump(0x1f26e7, sizeof(wait_orig), stub)) { printf("Frames ahead: stub out of range\n"); return; }
+    iss_karma_jump(image + 0x1f2808, (uintptr_t)bridge);
+    static const unsigned char free_orig[14] = {0x49,0x63,0x4d,0x08,0xb8,0x01,0x00,0x00,0x00,0xbb,0x08,0x00,0x00,0x00};
+    if (!memcmp(image + 0x196cb1, free_orig, sizeof(free_orig))) {
+        unsigned char *free_bridge = stub + 2048;
+        protect(stub, page_size, 3);
+        iss_karma_bridge_ex(free_bridge, (uintptr_t)frames_defer_free, free_orig, (uintptr_t)(image + 0x196cbf), 14, 5);
+        protect(stub, page_size, 5);
+        iss_karma_jump(image + 0x196cb1, (uintptr_t)free_bridge);
+        printf("Frames ahead: deferred frees one frame later\n");
+    } else {
+        printf("Frames ahead: deferred-free code check failed\n");
+    }
+    printf("Frames ahead: two frames in flight (third allocator slots, wait for N-2)\n");
+}
 static void install_iss_hud_corners(const char *app0,Segment *segments,uint64_t count,uint64_t size){
     const char *enable=getenv("ISS_EXPERIMENTAL_HUD_CORNERS");
     if(!enable || strcmp(enable,"1"))return;
@@ -1871,6 +2007,7 @@ int main(int argc, char **argv) {
     }
     if (gpu_enabled) install_iss_native_resolution(app0, segments, ns, size);
     if (gpu_enabled) install_iss_hud_corners(app0, segments, ns, size);
+    install_frames_ahead(segments, ns, size);
     if (gpu_enabled) install_iss_hud_trace(app0, segments, ns, size);
     if (gpu_enabled) install_iss_camera_speed(app0, segments, ns, size);
     if (gpu_enabled) install_iss_pitch_safeguard(app0, segments, ns, size);
