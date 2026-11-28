@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <chrono>
 #include "gnm_error.h"
 #include "gnmdriver.h"
 
@@ -111,8 +112,28 @@ static void WaitGpuIdle() {
         return; // did not block: no clock read on the common path
     }
     TlgStats::submit_idle_blocks.fetch_add(1, std::memory_order_relaxed);
-    TlgStats::WaitTimer timer{TlgStats::submit_idle_wait_ns};
-    cv_lock.wait(lock, [] { return submission_lock == 0; });
+    {
+        TlgStats::WaitTimer timer{TlgStats::submit_idle_wait_ns};
+        cv_lock.wait(lock, [] { return submission_lock == 0; });
+    }
+    // tlg: in the split the GPU host prints the frame stats, but the guest waits here, in the
+    // game process: TLG_GUEST_IDLE_STATS=1 prints its share every 5 s (diagnostic).
+    static const bool print = [] {
+        const char* env = std::getenv("TLG_GUEST_IDLE_STATS");
+        return env && *env == '1';
+    }();
+    if (print) {
+        static auto last = std::chrono::steady_clock::now();
+        const auto now = std::chrono::steady_clock::now();
+        const double window = std::chrono::duration<double>(now - last).count();
+        if (window >= 5.0) {
+            last = now;
+            std::printf("Guest submit-done waits (%.0f s): blocked %.1f%%, %llu blocks of %llu calls\n",
+                        window, TlgStats::submit_idle_wait_ns.exchange(0) / (window * 1e7),
+                        (unsigned long long)TlgStats::submit_idle_blocks.exchange(0),
+                        (unsigned long long)TlgStats::submit_idle_calls.exchange(0));
+        }
+    }
 }
 
 // tlg (from bloodborne_mac_port): command buffer copies for the GPU host (host/tlggpu_shared.h

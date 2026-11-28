@@ -5,7 +5,7 @@
 # port/out/perf/history.jsonl (PERF_HISTORY=<file> overrides it).
 #
 #   TLG_GAME_DIR=/path/to/game bash port/scripts/macos/perf_matrix.sh [-n runs] [-s seconds] [-l label]
-#       [--lib NAME | --app] [--dry-run] [truck|seattle|spin|fire|bridge ...]
+#       [--lib NAME | --app] [-r 1080p|1440p|4K] [--dry-run] [truck|seattle|spin|fire|bridge ...]
 #
 # Defaults: 3 runs x 60 s, all four scenes in that order, the bundle or library in place (agent_run.sh
 # uses ISS.app when it is there).
@@ -20,6 +20,7 @@
 #   ISS_SCENE_FIRE, ISS_SCENE_BRIDGE (absolute paths are fine). truck = benchmark/savedata (the runners' own).
 # --lib NAME: a library saved with `lib_ab.sh save NAME`, run through `lib_ab.sh run` (one variant).
 # --app: start through ISS.app the way players do (app_run.sh) instead of agent_run.sh.
+# -r RES: run every scene at RES instead of its class (1440p = the native startup patch at 2560x1440, 100%).
 # --dry-run: print the runs and their commands; start nothing.
 # Each run's fps_median is the runners' own FPS median (the last 8 "Frame stats" lines = 40 s). perf holds the
 # median of every key of the last 8 "Perf: key=value ..." lines of the run (absent when a run has none).
@@ -77,7 +78,7 @@ PY
 
 if [[ ${1:-} == --record ]]; then shift; record "$@"; exit; fi
 
-runs=3 secs=60 label=matrix lib= app=0 dry=0
+runs=3 secs=60 label=matrix lib= app=0 dry=0 force_res=
 scenes=()
 usage() { sed -n 3,27p "$0"; exit 2; }
 while (( $# )); do
@@ -88,6 +89,8 @@ while (( $# )); do
         --lib) lib=${2:-}; shift 2 ;;
         --app) app=1; shift ;;
         --dry-run) dry=1; shift ;;
+        -r) force_res=${2:-}; shift 2
+            [[ $force_res =~ ^(1080p|1440p|4K)$ ]] || { echo "-r takes 1080p, 1440p or 4K" >&2; exit 2; } ;;
         truck|seattle|spin|fire|bridge) scenes+=("$1"); shift ;;
         -h|--help) usage ;;
         *) echo "Unknown argument: $1" >&2; usage ;;
@@ -115,7 +118,7 @@ scene_dir() {
         bridge) echo "${ISS_SCENE_BRIDGE:-out/bridge-fresh}" ;;
     esac
 }
-resolution() { case $1 in truck|seattle|spin) echo 1080p ;; fire|bridge) echo 4K ;; esac; }
+resolution() { [[ -n $force_res ]] && { echo "$force_res"; return; }; case $1 in truck|seattle|spin) echo 1080p ;; fire|bridge) echo 4K ;; esac; }
 
 # Check every scene's save before the first run: a missing save must not cost a run.
 mkdir -p out/perf
@@ -132,10 +135,11 @@ done
 # day reports measured it: 1080p = the original size, 4K = the native startup patch at 3840x2160
 # (iss_native_output=4, 100%), upscaler off, no live resolution changes.
 mkdir -p out/perf
-for res in 1080p 4K; do
+for res in 1080p 1440p 4K; do
     {
         printf 'upscaler=off\nrender_resolution=native\nlive_resolution=0\n'
         [[ $res == 4K ]] && printf 'iss_native_output=4\niss_native_percent=100\niss_native_hud_edges=1\n'
+        [[ $res == 1440p ]] && printf 'iss_native_output=2\niss_native_percent=100\niss_native_hud_edges=1\n'
     } > "out/perf/settings-$res.ini"
 done
 
