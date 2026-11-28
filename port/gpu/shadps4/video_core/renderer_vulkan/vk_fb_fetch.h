@@ -21,16 +21,24 @@ namespace Vulkan::FbFetch {
 inline bool Enabled() {
 #ifdef __APPLE__
     static const bool on = [] {
+        // tlg: also with a render scale below 100% (launcher or native), 2026-11-28: the decals read
+        // the target they draw into, so their load is the own pixel whatever the scene size; the
+        // older rule (off with any scale: the game scales FragCoord) cost 10-14%. Screenshots at
+        // 4K 67% and 1080p 67%, on vs off: within the run-to-run noise (static areas too).
+        // TLG_MAC_FB_FETCH=0: off; =1: only without a render scale below 100% (the 0.1.22 rule).
         const char* env = std::getenv("TLG_MAC_FB_FETCH");
-        const char* scale = std::getenv("TLG_RENDER_SCALE");
-        const char* half = std::getenv("TLG_BENCH_HALF_SCALE");
-        // The launcher's render scale (TLG_RENDER_SCALE), the Detailed benchmark's half pass and a native
-        // render scale below 100% move the loads off the own pixel (the game scales FragCoord by its
-        // 1920 / render width; 1 at 100%). A native output (1440p, 4K) at 100% keeps them there:
-        // Seattle 1440p, 174 pass restarts a frame on the decals' own targets without it.
-        const auto& s = TlgSettings::Get();
-        const bool native_scaled = s.iss_native_output.load() != 0 && s.iss_native_percent.load() != 100;
-        return !(env && *env == '0') && !(scale && *scale) && !(half && *half == '1') && !native_scaled;
+        if (env && *env == '0') {
+            return false;
+        }
+        if (env && *env == '1') {
+            const char* scale = std::getenv("TLG_RENDER_SCALE");
+            const char* half = std::getenv("TLG_BENCH_HALF_SCALE");
+            const auto& s = TlgSettings::Get();
+            const bool native_scaled =
+                s.iss_native_output.load() != 0 && s.iss_native_percent.load() != 100;
+            return !(scale && *scale) && !(half && *half == '1') && !native_scaled;
+        }
+        return true;
     }();
     return on;
 #else
