@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstring>
@@ -11,6 +12,7 @@
 #include <functional>
 #include <memory>
 #include <span>
+#include <string>
 #include <source_location>
 #include <utility>
 #include <vector>
@@ -843,6 +845,23 @@ public:
         }
     }
 
+    /// tlg: like Record(), for a closure with a side effect besides recording into its command
+    /// buffer (guest-visible signals, counters read by other threads). With TLG_RECORDERS > 1
+    /// it runs only after every earlier command buffer was submitted (see
+    /// docs/DESIGN_TWO_RECORDERS.md); with one recorder it is Record().
+    template <typename Func>
+    void RecordOrdered(Func&& func) {
+        if (num_recorders == 1) {
+            Record(std::forward<Func>(func));
+            return;
+        }
+        Record([this, func = std::forward<Func>(func),
+                segment = producer_segment](vk::CommandBuffer cmdbuf) mutable {
+            WaitSegmentsSubmitted(segment);
+            func(cmdbuf);
+        });
+    }
+
     /// tlg: true when commands passed to Record() normally go to the Vulkan recording thread
     /// (it may still record some directly, after a CommandBuffer() call).
     [[nodiscard]] bool RecordsOnThread() const noexcept {
@@ -912,6 +931,17 @@ public:
     /// work anyway, so small copies cost no wakeup); WaitHostCopies() covers it.
     template <typename Func>
     void RecordHostCopy(Func&& copy) {
+        if (num_recorders > 1) {
+            // Several recorders finish copies out of order: host_copies_done counts them. The
+            // submission of a command buffer needs no wait for them: it waits for the earlier
+            // submissions, which ran after their copies, and its own copies precede it.
+            ++host_copies_issued;
+            Record([copy = std::forward<Func>(copy), this](vk::CommandBuffer) {
+                copy();
+                host_copies_done.fetch_add(1, std::memory_order_release);
+            });
+            return;
+        }
         Record([copy = std::forward<Func>(copy), this,
                 seq = ++host_copies_issued](vk::CommandBuffer) {
             copy();
@@ -978,6 +1008,9 @@ public:
 
     /// CommandBuffer() calls that waited for a recording thread (TLG_FRAME_STATS).
     static inline std::atomic<u64> direct_recordings{0};
+
+    /// tlg: TLG_RECORDERS > 1: per-recorder busy and order-wait times since the last call.
+    std::string MultiRecorderStats();
 
     /// Returns the current command buffer tick.
     [[nodiscard]] u64 CurrentTick() const noexcept {
@@ -1050,6 +1083,32 @@ private:
 
     void RecorderThread(std::stop_token stoken);
 
+    // tlg: TLG_RECORDERS=N (2..4): command buffers (segments) alternate between N recording
+    // threads; submissions and RecordOrdered() closures keep stream order.
+    struct Recorder {
+        std::unique_ptr<CommandPool> pool; ///< null for recorder 0: command_pool
+        vk::CommandBuffer cmdbuf{};        ///< the segment being recorded, null between
+        std::deque<std::unique_ptr<RecordChunk>> queue; ///< guarded by recorder_mutex
+        bool busy = false;                 ///< guarded by recorder_mutex
+        bool sleeping = false;             ///< guarded by recorder_mutex
+        bool forget_pushes = false; ///< guarded by recorder_mutex: another thread recorded
+        std::atomic<size_t> queued{0};
+        std::condition_variable_any cv;
+        std::atomic<u64> busy_ns{0};       ///< executing chunks (TLG_FRAME_STATS)
+        std::atomic<u64> order_wait_ns{0}; ///< waiting for earlier segments' submissions
+        std::jthread thread;
+    };
+    void MultiRecorderThread(std::stop_token stoken, u32 index);
+    /// Starts a command buffer for `rec` when it has none (on the thread that owns it now).
+    void EnsureRecorderCmdbuf(Recorder& rec);
+    /// Waits until every segment before `segment` is submitted.
+    void WaitSegmentsSubmitted(u64 segment);
+    /// The producer moves on to the next segment after recording a submission.
+    void AdvanceSegment();
+    [[nodiscard]] bool AllRecordersIdle() const;
+    void SubmitMultiRecorder(SubmitInfo& info, bool async, std::unique_lock<std::mutex>& lk,
+                             bool split);
+
     void SubmitExecution(SubmitInfo& info);
 
     void PriorityPendingOpsThread(std::stop_token stoken);
@@ -1119,6 +1178,11 @@ private:
     // tlg: whether recorder_thread runs, read on every Record(). std::jthread::joinable()
     // compares thread ids, which on Windows (libc++ over winpthreads) costs two system calls.
     bool recording_threaded{false};
+    u32 num_recorders{1}; ///< tlg: TLG_RECORDERS (main draw scheduler only)
+    std::array<std::unique_ptr<Recorder>, 4> recorders{};
+    u64 producer_segment{0}; ///< the segment Record() adds to (owner thread)
+    u32 segment_recorder{0}; ///< the recorder of producer_segment (owner thread)
+    std::atomic<u64> submitted_segment{0}; ///< segments [0, value) are submitted
     std::jthread recorder_thread;
     tracy::VkCtxScope* profiler_scope{};
 };

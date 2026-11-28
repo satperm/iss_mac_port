@@ -59,6 +59,7 @@ extern std::atomic<u64> g_tlg_present_lock_wait_ns;
 extern std::atomic<int> g_tlg_recorder_cpu_clock;
 extern std::atomic<u32> g_tlg_recorder_cpu_tid;
 extern std::atomic<u64> g_tlg_recorder_spin_ns;
+std::string RecorderStatsSuffix();
 } // namespace Vulkan
 
 namespace Libraries::VideoOut {
@@ -754,12 +755,13 @@ void VideoOutDriver::Flip(const Request& req) {
             std::printf("Frame waits: GPU frames %.1f ms, free frame %.1f ms, present lock "
                         "%.1f ms, flip queue %.2f ms over %llu flips; %.1f submissions/frame; "
                         "helper CPU: draw recording %.1f ms, Vulkan recorder %.1f ms (spin "
-                        "%.1f ms)\n",
+                        "%.1f ms)%s\n",
                         frames_ahead_ms, free_frame_ms, present_lock_ms, flip_queue_ms,
                         static_cast<unsigned long long>(flip_samples), subs_per_frame,
                         drawrec_cpu > last_drawrec_cpu ? (drawrec_cpu - last_drawrec_cpu) / 1e6 : 0.0,
                         vkrec_cpu > last_vkrec_cpu ? (vkrec_cpu - last_vkrec_cpu) / 1e6 : 0.0,
-                        Vulkan::g_tlg_recorder_spin_ns.exchange(0) / 1e6);
+                        Vulkan::g_tlg_recorder_spin_ns.exchange(0) / 1e6,
+                        Vulkan::RecorderStatsSuffix().c_str());
             last_drawrec_cpu = drawrec_cpu;
             last_vkrec_cpu = vkrec_cpu;
             intervals.clear();

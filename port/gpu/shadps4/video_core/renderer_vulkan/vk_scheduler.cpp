@@ -21,6 +21,10 @@
 
 #include "tlg_copy.h"
 #include "video_core/renderer_vulkan/vk_gpu_profiler.h"
+#include "video_core/renderer_vulkan/vk_frame_capture.h"
+#include "video_core/renderer_vulkan/vk_frame_record.h"
+#include "video_core/renderer_vulkan/vk_pipeline_common.h"
+#include <string>
 #include "tlg_toggles.h"
 #include "video_core/renderer_vulkan/vk_wait_diagnostics.h"
 #include "common/assert.h"
@@ -56,20 +60,58 @@ Scheduler::Scheduler(const Instance& instance, bool threaded_recording)
       command_pool{instance, &work_semaphore, instance.GetGraphicsQueueFamilyIndex()} {
     // tlg: TLG_VK_RECORD_THREAD=0 records on the calling thread.
     const char* env = std::getenv("TLG_VK_RECORD_THREAD");
+    // tlg: TLG_RECORDERS=N (2..4, default 1): N recording threads take turns per command buffer
+    // (docs/DESIGN_TWO_RECORDERS.md). Not with the Tracy GPU profiler (one context scope).
+    const u32 wanted_recorders = [] {
+        const char* value = std::getenv("TLG_RECORDERS");
+        const int n = value ? std::atoi(value) : 1;
+        return static_cast<u32>(std::clamp(n, 1, 4));
+    }();
+    const bool multi = threaded_recording && !(env && env[0] == '0') && wanted_recorders > 1 &&
+                       !TRACY_GPU_ENABLED;
     if (threaded_recording && !(env && env[0] == '0')) {
         record_chunk = AcquireChunk();
-        recorder_thread = std::jthread(std::bind_front(&Scheduler::RecorderThread, this));
+        if (!multi) {
+            recorder_thread = std::jthread(std::bind_front(&Scheduler::RecorderThread, this));
+        }
         recording_threaded = true;
     }
 #if TRACY_GPU_ENABLED
     profiler_scope = reinterpret_cast<tracy::VkCtxScope*>(std::malloc(sizeof(tracy::VkCtxScope)));
 #endif
     AllocateWorkerCommandBuffers();
+    if (multi) {
+        num_recorders = wanted_recorders;
+        for (u32 i = 0; i < num_recorders; ++i) {
+            recorders[i] = std::make_unique<Recorder>();
+            if (i != 0) {
+                recorders[i]->pool = std::make_unique<CommandPool>(
+                    instance, &work_semaphore, instance.GetGraphicsQueueFamilyIndex());
+            }
+        }
+        recorders[0]->cmdbuf = current_cmdbuf; // segment 0, begun above
+        for (u32 i = 0; i < num_recorders; ++i) {
+            recorders[i]->thread =
+                std::jthread(std::bind_front(&Scheduler::MultiRecorderThread, this), i);
+        }
+        std::printf("GPU: %u Vulkan recorders (TLG_RECORDERS)\n", num_recorders);
+    }
     priority_pending_ops_thread =
         std::jthread(std::bind_front(&Scheduler::PriorityPendingOpsThread, this));
 }
 
 Scheduler::~Scheduler() {
+    if (num_recorders > 1) {
+        SyncRecording();
+        for (u32 i = 0; i < num_recorders; ++i) {
+            recorders[i]->thread.request_stop();
+            {
+                std::scoped_lock lk{recorder_mutex};
+            }
+            recorders[i]->cv.notify_all();
+            recorders[i]->thread.join();
+        }
+    }
     if (recorder_thread.joinable()) {
         SyncRecording();
         recorder_thread.request_stop();
@@ -473,7 +515,8 @@ void Scheduler::SignalAfterHostCopies(std::function<void()> signal) {
     }
     TlgCopy::FlushBatch();
     deferred_signals_issued.fetch_add(1, std::memory_order_relaxed);
-    Record([signal = std::move(signal), done = deferred_signals_done](vk::CommandBuffer) mutable {
+    // Ordered: guest fence labels are written in stream order (the guest frees memory on them).
+    RecordOrdered([signal = std::move(signal), done = deferred_signals_done](vk::CommandBuffer) mutable {
         TlgCopy::AfterCopies([signal = std::move(signal), done = std::move(done)] {
             signal();
             done->fetch_add(1, std::memory_order_release);
@@ -531,6 +574,29 @@ void Scheduler::KickRecording(bool force) {
     if (full_chunks.empty() && record_chunk->Empty()) {
         return;
     }
+    if (num_recorders > 1) {
+        Recorder& rec = *recorders[segment_recorder];
+        bool wake_rec;
+        {
+            std::scoped_lock lk{recorder_mutex};
+            for (auto& chunk : full_chunks) {
+                rec.queue.push_back(std::move(chunk));
+            }
+            if (!record_chunk->Empty()) {
+                rec.queue.push_back(std::move(record_chunk));
+            }
+            wake_rec = rec.sleeping;
+            rec.queued.store(rec.queue.size(), std::memory_order_release);
+        }
+        full_chunks.clear();
+        if (wake_rec) {
+            rec.cv.notify_one();
+        }
+        if (!record_chunk) {
+            record_chunk = AcquireChunk();
+        }
+        return;
+    }
     bool wake;
     {
         std::scoped_lock lk{recorder_mutex};
@@ -566,7 +632,16 @@ void Scheduler::SyncRecording() {
         return env && *env == '1';
     }();
     const u64 start = sync_stats ? clock_gettime_nsec_np(CLOCK_UPTIME_RAW) : 0;
-    {
+    if (num_recorders > 1) {
+        std::unique_lock lk{recorder_mutex};
+        recorder_idle_cv.wait(lk, [this] { return AllRecordersIdle(); });
+        // Every queued segment ran, its submission included: the producer's segment is the
+        // only open one. Direct recording goes into its command buffer.
+        Recorder& rec = *recorders[segment_recorder];
+        EnsureRecorderCmdbuf(rec);
+        rec.forget_pushes = true;
+        current_cmdbuf = rec.cmdbuf;
+    } else {
         std::unique_lock lk{recorder_mutex};
         recorder_idle_cv.wait(lk, [this] { return recorder_queue.empty() && !recorder_busy; });
     }
@@ -685,6 +760,232 @@ void Scheduler::RecorderThread(std::stop_token stoken) {
             }
         }
     }
+}
+
+namespace {
+/// tlg: TLG_RECORDERS: the recorder the current thread is (stats), null elsewhere.
+thread_local std::atomic<u64>* tls_order_wait_ns = nullptr;
+std::atomic<Scheduler*> g_multi_scheduler{nullptr};
+
+u64 NowNs() {
+    return clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+}
+} // namespace
+
+bool Scheduler::AllRecordersIdle() const {
+    for (u32 i = 0; i < num_recorders; ++i) {
+        if (!recorders[i]->queue.empty() || recorders[i]->busy) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void Scheduler::EnsureRecorderCmdbuf(Recorder& rec) {
+    if (rec.cmdbuf) {
+        return;
+    }
+    CommandPool& pool = rec.pool ? *rec.pool : command_pool;
+    rec.cmdbuf = pool.Commit();
+    Check(rec.cmdbuf.begin(vk::CommandBufferBeginInfo{
+        .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit}));
+}
+
+void Scheduler::WaitSegmentsSubmitted(u64 segment) {
+    if (submitted_segment.load(std::memory_order_acquire) >= segment) {
+        return;
+    }
+    const u64 start = NowNs();
+    // The earlier segment usually ends within microseconds: spin, then sleep on the counter.
+    for (u32 spins = 0; spins < 4096; ++spins) {
+        if (submitted_segment.load(std::memory_order_acquire) >= segment) {
+            break;
+        }
+        Common::CpuRelax();
+    }
+    for (u64 seen = submitted_segment.load(std::memory_order_acquire); seen < segment;
+         seen = submitted_segment.load(std::memory_order_acquire)) {
+        submitted_segment.wait(seen, std::memory_order_acquire);
+    }
+    if (tls_order_wait_ns) {
+        tls_order_wait_ns->fetch_add(NowNs() - start, std::memory_order_relaxed);
+    }
+}
+
+void Scheduler::AdvanceSegment() {
+    ++producer_segment;
+    // Frame recording/capture and the GPU profiler look at one command stream in order: keep
+    // every segment on recorder 0 while they run (the ordering rules hold for any assignment).
+    const bool single = FrameRecord::Active() || FrameCapture::Active() || GpuProfiler::Get();
+    segment_recorder = single ? 0 : (segment_recorder + 1) % num_recorders;
+}
+
+void Scheduler::SubmitMultiRecorder(SubmitInfo& info, bool async,
+                                    std::unique_lock<std::mutex>& lk, bool split) {
+    const u64 segment = producer_segment;
+    const auto submit = [this](vk::CommandBuffer cmdbuf, const SubmitInfo& copy) {
+        static constexpr std::array<vk::PipelineStageFlags, 4> masks = {
+            vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eColorAttachmentOutput,
+            vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eAllCommands,
+        };
+        const vk::TimelineSemaphoreSubmitInfo timeline_si = {
+            .waitSemaphoreValueCount = copy.num_wait_semas,
+            .pWaitSemaphoreValues = copy.wait_ticks.data(),
+            .signalSemaphoreValueCount = copy.num_signal_semas,
+            .pSignalSemaphoreValues = copy.signal_ticks.data(),
+        };
+        const vk::SubmitInfo submit_info = {
+            .pNext = &timeline_si,
+            .waitSemaphoreCount = copy.num_wait_semas,
+            .pWaitSemaphores = copy.wait_semas.data(),
+            .pWaitDstStageMask = masks.data(),
+            .commandBufferCount = 1U,
+            .pCommandBuffers = &cmdbuf,
+            .signalSemaphoreCount = copy.num_signal_semas,
+            .pSignalSemaphores = copy.signal_semas.data(),
+        };
+        const auto result = [&] {
+            const auto queue_lock = LockQueueInSubmit();
+            return submit_queue.submit(submit_info, copy.fence);
+        }();
+        ASSERT_MSG(result != vk::Result::eErrorDeviceLost, "Device lost during submit");
+    };
+    ImGui::Core::TextureManager::Submit();
+    if (async) {
+        TlgCopy::FlushBatch();
+        Recorder* const rec = recorders[segment_recorder].get();
+        Record([this, submit, copy = info, segment, rec](vk::CommandBuffer cmdbuf) mutable {
+            // In order: the earlier command buffers are submitted (and so their host copies
+            // are done); this one's copies ran before this closure on this thread.
+            WaitSegmentsSubmitted(segment);
+            TlgCopy::WaitAsync();
+            Check(cmdbuf.end());
+            submit(cmdbuf, copy);
+            rec->cmdbuf = vk::CommandBuffer{};
+            submitted_segment.store(segment + 1, std::memory_order_release);
+            submitted_segment.notify_all();
+        });
+        KickRecording(true); // the submission is the last command of its chunk and segment
+        AdvanceSegment();
+        dynamic_state.Invalidate();
+        if (split) {
+            lk.unlock();
+        }
+        PopPendingOperations();
+        return;
+    }
+    SyncRecording(); // all earlier segments submitted; current_cmdbuf = this segment's
+    WaitHostCopies();
+    Recorder& rec = *recorders[segment_recorder];
+    Check(rec.cmdbuf.end());
+    submit(rec.cmdbuf, info);
+    rec.cmdbuf = vk::CommandBuffer{};
+    submitted_segment.store(segment + 1, std::memory_order_release);
+    submitted_segment.notify_all();
+    AdvanceSegment();
+    {
+        // The recorders are idle (nothing was kicked since the sync): the producer may start
+        // the next segment's command buffer for direct recording.
+        std::scoped_lock rlk{recorder_mutex};
+        Recorder& next = *recorders[segment_recorder];
+        EnsureRecorderCmdbuf(next);
+        next.forget_pushes = true;
+        current_cmdbuf = next.cmdbuf;
+    }
+    work_semaphore.Refresh();
+    dynamic_state.Invalidate();
+    if (split) {
+        lk.unlock();
+    }
+    PopPendingOperations();
+}
+
+void Scheduler::MultiRecorderThread(std::stop_token stoken, u32 index) {
+    Common::SetCurrentThreadName(index == 0 ? "tlg:VkRecorder" : "tlg:VkRecorder2");
+    Recorder& rec = *recorders[index];
+    tls_order_wait_ns = &rec.order_wait_ns;
+    if (index == 0) {
+        g_multi_scheduler.store(this, std::memory_order_release);
+    }
+    static const auto spin_time = std::chrono::microseconds([] {
+        if (const char* env = std::getenv("TLG_RECORDER_SPIN_US")) {
+            return std::max(0, std::atoi(env));
+        }
+        return TlgThreads::SizingCount() >= 12 ? 200 : 20;
+    }());
+    while (true) {
+        const auto spin_start = std::chrono::steady_clock::now();
+        const auto spin_until = spin_start + spin_time;
+        for (u32 spins = 1; rec.queued.load(std::memory_order_acquire) == 0; ++spins) {
+            Common::CpuRelax();
+            if (!(spins & 255) &&
+                (stoken.stop_requested() || std::chrono::steady_clock::now() >= spin_until)) {
+                g_tlg_recorder_spin_ns.fetch_add(
+                    static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                         std::chrono::steady_clock::now() - spin_start)
+                                         .count()),
+                    std::memory_order_relaxed);
+                break;
+            }
+        }
+        std::unique_ptr<RecordChunk> chunk;
+        bool forget;
+        {
+            std::unique_lock lk{recorder_mutex};
+            rec.sleeping = true;
+            rec.cv.wait(lk, stoken, [&rec] { return !rec.queue.empty(); });
+            rec.sleeping = false;
+            if (rec.queue.empty()) {
+                return; // stop requested
+            }
+            chunk = std::move(rec.queue.front());
+            rec.queue.pop_front();
+            rec.queued.store(rec.queue.size(), std::memory_order_release);
+            rec.busy = true;
+            forget = rec.forget_pushes || !rec.cmdbuf;
+            rec.forget_pushes = false;
+        }
+        // Busy: the producer touches rec.cmdbuf only while every recorder is idle.
+        EnsureRecorderCmdbuf(rec);
+        if (forget) {
+            // A new (possibly reused) command buffer, or one the producer recorded into: the
+            // push descriptor cache of this thread does not describe it.
+            ForgetPushedDescriptors();
+        }
+        const u64 start = NowNs();
+        chunk->Execute(rec.cmdbuf);
+        rec.busy_ns.fetch_add(NowNs() - start, std::memory_order_relaxed);
+        {
+            std::scoped_lock lk{recorder_mutex};
+            free_chunks.push_back(std::move(chunk));
+            rec.busy = false;
+            if (rec.queue.empty()) {
+                recorder_idle_cv.notify_all();
+            }
+        }
+    }
+}
+
+/// tlg: TLG_FRAME_STATS: "; recorders N busy a/b ms, order wait c/d ms" since the last call
+/// (empty with one recorder).
+std::string RecorderStatsSuffix() {
+    Scheduler* const scheduler = g_multi_scheduler.load(std::memory_order_acquire);
+    return scheduler ? scheduler->MultiRecorderStats() : std::string{};
+}
+
+std::string Scheduler::MultiRecorderStats() {
+    std::string busy, wait;
+    char buf[32];
+    for (u32 i = 0; i < num_recorders; ++i) {
+        std::snprintf(buf, sizeof(buf), "%s%.1f", i ? "/" : "",
+                      recorders[i]->busy_ns.exchange(0, std::memory_order_relaxed) / 1e6);
+        busy += buf;
+        std::snprintf(buf, sizeof(buf), "%s%.1f", i ? "/" : "",
+                      recorders[i]->order_wait_ns.exchange(0, std::memory_order_relaxed) / 1e6);
+        wait += buf;
+    }
+    std::snprintf(buf, sizeof(buf), "; %u recorders busy ", num_recorders);
+    return buf + busy + " ms, order wait " + wait + " ms";
 }
 
 void Scheduler::Flush(SubmitInfo& info) {
@@ -856,6 +1157,11 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
         const char* env = std::getenv("TLG_ASYNC_SUBMIT");
         return !(env && *env == '0');
     }();
+    if (num_recorders > 1) {
+        info.AddSignal(work_semaphore.Handle(), signal_value);
+        SubmitMultiRecorder(info, async_submit && IsRecordingDeferred(), lk, split);
+        return;
+    }
     if (async_submit && IsRecordingDeferred() && !own_queue) {
         info.AddSignal(work_semaphore.Handle(), signal_value);
         ImGui::Core::TextureManager::Submit();
