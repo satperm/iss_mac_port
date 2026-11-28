@@ -283,7 +283,8 @@ struct LaunchSettings: Equatable {
         set("TLG_FPS_LIMIT", fpsCap == .display ? nil : fpsCap.rawValue)
         set("TLG_RENDER_SCALE", renderScale == .full ? nil : renderScale.rawValue)
         set("TLG_NATIVE_OUTPUT", outputResolution == .original ? nil : outputResolution.rawValue)
-        set("TLG_HIGH_DPI", retina ? "1" : nil)
+        // 1440p and 4K need the display's full pixels, or the extra detail never reaches the screen.
+        set("TLG_HIGH_DPI", retina || outputResolution != .original ? "1" : nil)
         set("TLG_ISS_UPSCALER", upscaler == .off ? nil : upscaler.rawValue)
         set("TLG_FAST_SHADER_MATH", fastShaderMath ? "1" : "0")
         set("TLG_ISS_TEMPORAL", upscaler == .off ? nil : "1")
@@ -313,7 +314,7 @@ struct LaunchSettings: Equatable {
     /// For the session log and crash reports.
     var summary: [String] {
         var items = [fullscreen ? "full screen" : "windowed", stretch ? "stretched" : "16:9", "pacing \(pacing.label)",
-         "quality \(quality.label)", "FPS cap \(fpsCap.label)", "output \(outputResolution.label)\(retina ? " Retina" : "")", "render scale \(renderScale.label)", "upscaler \(upscaler.label)", fastShaderMath ? "fast shader math" : "precise shader math", "hold frame rate \(holdFrameRate.label)", "shadow detail \(shadowDetail.label)",
+         "quality \(quality.label)", "FPS cap \(fpsCap.label)", "output \(outputResolution.label)\(retina || outputResolution != .original ? " Retina" : "")", "render scale \(renderScale.label)", "upscaler \(upscaler.label)", fastShaderMath ? "fast shader math" : "precise shader math", "hold frame rate \(holdFrameRate.label)", "shadow detail \(shadowDetail.label)",
          "particles \(particles.label)", gpuProcess ? "GPU process" : "single process"]
         if !keys.isDefault { items.append("custom keys") }
         return items
