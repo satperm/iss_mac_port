@@ -77,3 +77,7 @@ was busy before. The recorder never had a backlog: the -26% of the causal test i
 on the way from the draw-preparation stage to the GPU (the game keeps one frame in flight), not throughput.
 Parallel buffers do not shorten one buffer's encoding, so they cannot help. What could: less work per command in
 MoltenVK/AGX, or fewer commands. Branch kept for reference.
+
+Re-measured on a quiet machine (owner's apps and System Settings closed), 3 x 70 s alternated: truck 87.6 [87.6
+87.6 88.5] vs 87.8 [87.3 88.6 87.8]; Seattle 87.4 [87.7 87.4 87.3] vs 88.4 [87.2 88.4 90.1]. Within the noise, far
+from the 5% bar; recorders busy 1.3-1.5 s per 5 s each, order waits 30-50 ms. Conclusion unchanged.
