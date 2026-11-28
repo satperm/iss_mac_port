@@ -986,7 +986,7 @@ int iss_temporal_get_frame(uint32_t seq, IssTemporalFrame *out) { return iss_tem
 #include "iss_hud_trace.h"
 #include "iss_hud_corners.h"
 
-/* Two frames in flight (TLG_FRAMES_AHEAD=0: off). The game submits frame N only after the GPU
+/* Two frames in flight (TLG_FRAMES_AHEAD=1, experimental: no GPU particles yet). The game submits frame N only after the GPU
  * finished N-1, because its five per-frame ring allocators (graphics context at 0xF1BCD0, allocators at
  * +0x28 +0x58 +0x88 +0xb8 +0xe8: base[2], cur, end, size, idx) have two slots. Here they get a third
  * slot (guest direct memory, GPU-visible), rotate over three, and the wait at 0x1f26e7 targets N-2. */
@@ -1024,14 +1024,29 @@ static void ISS_MS_ABI frames_rotate(uint64_t *regs) {
         printf("Frames ahead: third slots %s (%.1f MB), DCB copy mode %u -> %u\n", frames_ready ? "ready" : "FAILED",
                sum / 1048576.0, before, (unsigned)image[0xF1BCC0]);
     }
+    /* The game's slot index stays 0/1 (its code may index two-element arrays with it); the physical
+     * buffer under the slot it switches to cycles over three, so the slot it leaves still holds the
+     * previous frame and the one it enters is the buffer of three frames ago. */
+    static uint64_t phys[5][3];
+    static int32_t active[5] = {-1, -1, -1, -1, -1};
     for (unsigned i = 0; i < 5; ++i) {
         unsigned char *a = ctx + offs[i];
         uint32_t *idx = (uint32_t *)(a + 0x28);
-        const uint32_t next = frames_ready > 0 ? (*idx + 1) % 3 : (*idx ^ 1);
-        const uint64_t base = next < 2 ? *(uint64_t *)(a + next * 8) : frames_third[i];
-        *idx = next;
-        *(uint64_t *)(a + 0x10) = base;
-        *(uint64_t *)(a + 0x18) = base + *(uint32_t *)(a + 0x20);
+        uint64_t *base = (uint64_t *)a;
+        const uint32_t next_idx = *idx ^ 1;
+        if (frames_ready > 0 && active[i] < 0) {
+            phys[i][0] = base[0];
+            phys[i][1] = base[1];
+            phys[i][2] = frames_third[i];
+            active[i] = (int32_t)(*idx & 1);
+        }
+        if (frames_ready > 0) {
+            active[i] = (active[i] + 1) % 3;
+            base[next_idx] = phys[i][active[i]];
+        }
+        *idx = next_idx;
+        *(uint64_t *)(a + 0x10) = base[next_idx];
+        *(uint64_t *)(a + 0x18) = base[next_idx] + *(uint32_t *)(a + 0x20);
     }
     regs[0x68 / 8] = *(uint64_t *)(ctx + 0xe8 + 0x18);          /* rcx: allocator 5's end */
     regs[0x70 / 8] = *(uint64_t *)(image + 0xD9E058);           /* rax: as the original block left it */
@@ -1072,9 +1087,10 @@ static void ISS_MS_ABI frames_defer_free(uint64_t *regs) {
     memcpy(frames_held, tmp, 24);
 }
 static void install_frames_ahead(Segment *segments, uint64_t count, uint64_t size) {
-    /* On by default (0.2.0); TLG_FRAMES_AHEAD=0: one frame in flight, as the game does. */
+    /* Opt-in (TLG_FRAMES_AHEAD=1): +8-10% FPS, but the GPU particles (fire, smoke) disappear: the particle
+     * system reads the previous frame's GPU results, which are not done yet with two frames in flight. */
     const char *env = getenv("TLG_FRAMES_AHEAD");
-    if (env && *env == '0') return;
+    if (!env || *env != '1') return;
     static const unsigned char wait_orig[10] = {0x49,0x8b,0x9c,0x24,0x30,0x01,0x00,0x00,0xeb,0x19};
     static const unsigned char rot_orig[16] = {0x49,0x8b,0x44,0x24,0x38,0x49,0x8b,0x44,0x24,0x68,0x41,0x8b,0x44,0x24,0x50,0x89};
     if (0x1f2949 > size || !mapped(segments, count, 0x1f26e7, 0x1f2949 - 0x1f26e7) ||
