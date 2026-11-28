@@ -379,7 +379,7 @@ void runtime_freeze_report(FILE *out, const char *head) {
 #ifdef __APPLE__
 static void sleep_ms(unsigned ms);
 #define PROFILE_KEYS 4096
-typedef struct { char thread[32]; char where[120]; uint32_t count; } ProfileKey;
+typedef struct { char thread[32]; char where[400]; uint32_t count; } ProfileKey;
 static ProfileKey *profile_keys;
 static uint32_t profile_samples;
 static void profile_count(const char *thread, const char *where) {
@@ -420,7 +420,10 @@ static void profile_report(void) {
             shown = 0;
             if (total * 20 < profile_samples) { /* idle-ish threads (under 5% of samples) skipped */ }
         }
-        if (shown < 6 && k->count * 50 >= profile_samples) {
+        /* TLG_THREAD_PROFILE_TOP=<n>: up to n lines a thread (above 0.5% when n > 6) instead of 6 above 2%. */
+        static int show_max = -1;
+        if (show_max < 0) { const char *e = getenv("TLG_THREAD_PROFILE_TOP"); show_max = e && *e ? atoi(e) : 6; }
+        if (shown < (uint32_t)show_max && k->count * (show_max > 6 ? 200 : 50) >= profile_samples) {
             printf("  %-24s %5.1f%% %s\n", k->thread, 100.0 * k->count / profile_samples, k->where);
             ++shown;
         }
@@ -581,7 +584,7 @@ static void *profiler(void *argument) {
             const RuntimeThreadInfo *info = NULL;
             for (size_t r = 0; r < records && !info; ++r)
                 if (infos[r].os_tid == c->tid && !infos[r].finished) info = &infos[r];
-            char thread[32], where[120];
+            char thread[32], where[400];
             snprintf(thread, sizeof(thread), "%s", info && info->name[0] ? info->name : c->name[0] ? c->name : "?");
             const RuntimeWait *w = info ? &info->wait : NULL;
             const unsigned depth = w ? (w->depth < RUNTIME_WAIT_LEVELS ? w->depth : RUNTIME_WAIT_LEVELS) : 0;
@@ -590,6 +593,12 @@ static void *profiler(void *argument) {
             } else {
                 uintptr_t pc = c->rip;
                 char at[100], via[100] = "";
+                /* TLG_THREAD_PROFILE_GROUP=<bits> (e.g. 12): guest addresses rounded down to 2^bits bytes,
+                 * so a hot routine's samples add up instead of spreading over its instructions. */
+                static int group = -1;
+                if (group < 0) { const char *e = getenv("TLG_THREAD_PROFILE_GROUP"); group = e && *e ? atoi(e) : 0; }
+                if (group > 0 && image_base && pc - image_base < image_bytes)
+                    pc = image_base + (((pc - image_base) >> group) << group);
                 describe_address(at, sizeof(at), pc);
                 if (!(image_base && pc - image_base < image_bytes)) {
                     for (unsigned f = 0; f < c->frames; ++f) {
@@ -599,7 +608,16 @@ static void *profiler(void *argument) {
                         }
                     }
                 }
-                snprintf(where, sizeof(where), "%s%s%s", at, via[0] ? " < " : "", via);
+                /* TLG_THREAD_PROFILE_HOST=1 (diagnostic): also the two host frames above the leaf. */
+                static int host_frames = -1;
+                if (host_frames < 0) { const char *e = getenv("TLG_THREAD_PROFILE_HOST"); host_frames = e && *e == '1'; }
+                char h1[100] = "", h2[100] = "";
+                if (host_frames && !(image_base && c->rip - image_base < image_bytes)) {
+                    if (c->frames > 0) describe_address(h1, sizeof(h1), c->chain[0]);
+                    if (c->frames > 1) describe_address(h2, sizeof(h2), c->chain[1]);
+                }
+                snprintf(where, sizeof(where), "%s%s%s%s%s%s%s", at, h1[0] ? " < " : "", h1, h2[0] ? " < " : "", h2,
+                         via[0] ? " < " : "", via);
             }
             profile_count(thread, where);
         }
