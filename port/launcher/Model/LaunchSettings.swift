@@ -190,6 +190,9 @@ struct LaunchSettings: Equatable {
     var fpsCap = FrameRateCap.display
     var renderScale = RenderScale.full
     var outputResolution = OutputResolution.original
+    /// TLG_HIGH_DPI: a drawable in the display's pixels (Retina) instead of points: sharper with
+    /// Resolution 1440p/4K, a few % slower.
+    var retina = false
     var upscaler = Upscaler.off
     /// TLG_FAST_SHADER_MATH: shaders without Metal's precise float forms (more FPS where the GPU is the limit).
     var fastShaderMath = true
@@ -252,6 +255,7 @@ struct LaunchSettings: Equatable {
         fpsCap = value("TLG_FPS_LIMIT").flatMap(FrameRateCap.init(rawValue:)) ?? .display
         renderScale = value("TLG_RENDER_SCALE").flatMap(RenderScale.init(rawValue:)) ?? .full
         outputResolution = value("TLG_NATIVE_OUTPUT").flatMap(OutputResolution.init(rawValue:)) ?? .original
+        retina = flag("TLG_HIGH_DPI", false)
         upscaler = value("TLG_ISS_UPSCALER").flatMap(Upscaler.init(rawValue:)) ?? .off
         fastShaderMath = flag("TLG_FAST_SHADER_MATH", true)
         holdFrameRate = value("TLG_QUALITY_TARGET_FPS").flatMap(HoldFrameRate.init(rawValue:)) ?? .off
@@ -279,6 +283,7 @@ struct LaunchSettings: Equatable {
         set("TLG_FPS_LIMIT", fpsCap == .display ? nil : fpsCap.rawValue)
         set("TLG_RENDER_SCALE", renderScale == .full ? nil : renderScale.rawValue)
         set("TLG_NATIVE_OUTPUT", outputResolution == .original ? nil : outputResolution.rawValue)
+        set("TLG_HIGH_DPI", retina ? "1" : nil)
         set("TLG_ISS_UPSCALER", upscaler == .off ? nil : upscaler.rawValue)
         set("TLG_FAST_SHADER_MATH", fastShaderMath ? "1" : "0")
         set("TLG_ISS_TEMPORAL", upscaler == .off ? nil : "1")
@@ -308,7 +313,7 @@ struct LaunchSettings: Equatable {
     /// For the session log and crash reports.
     var summary: [String] {
         var items = [fullscreen ? "full screen" : "windowed", stretch ? "stretched" : "16:9", "pacing \(pacing.label)",
-         "quality \(quality.label)", "FPS cap \(fpsCap.label)", "output \(outputResolution.label)", "render scale \(renderScale.label)", "upscaler \(upscaler.label)", fastShaderMath ? "fast shader math" : "precise shader math", "hold frame rate \(holdFrameRate.label)", "shadow detail \(shadowDetail.label)",
+         "quality \(quality.label)", "FPS cap \(fpsCap.label)", "output \(outputResolution.label)\(retina ? " Retina" : "")", "render scale \(renderScale.label)", "upscaler \(upscaler.label)", fastShaderMath ? "fast shader math" : "precise shader math", "hold frame rate \(holdFrameRate.label)", "shadow detail \(shadowDetail.label)",
          "particles \(particles.label)", gpuProcess ? "GPU process" : "single process"]
         if !keys.isDefault { items.append("custom keys") }
         return items

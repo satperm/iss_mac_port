@@ -152,8 +152,24 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, height_);
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_RESIZABLE_BOOLEAN, true);
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_VULKAN_BOOLEAN, true);
+    // tlg (macOS): TLG_HIGH_DPI=1: a drawable in the display's pixels (Retina) instead of points.
+    // In points a 3456x2234 display gets a 1728x1117 drawable: the game's frame (1440p, 4K) was
+    // shrunk to it and macOS then doubled it again, so a native 1440p/4K output gained little.
+    {
+        const char* env = std::getenv("TLG_HIGH_DPI");
+        if (env && *env == '1') {
+            SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_HIGH_PIXEL_DENSITY_BOOLEAN, true);
+        }
+    }
     base_title = title;
     window = SDL_CreateWindowWithProperties(props);
+    if (window) {
+        int pw = 0, ph = 0, ww = 0, wh = 0;
+        SDL_GetWindowSizeInPixels(window, &pw, &ph);
+        SDL_GetWindowSize(window, &ww, &wh);
+        std::printf("Window: %dx%d points, drawable %dx%d pixels (TLG_HIGH_DPI %s)\n", ww, wh, pw, ph,
+                    std::getenv("TLG_HIGH_DPI") && *std::getenv("TLG_HIGH_DPI") == '1' ? "on" : "off");
+    }
     SDL_DestroyProperties(props);
     ASSERT_MSG(window, "Failed to create window: {}", SDL_GetError());
     // tlg: TLG_RAISE_WINDOW=1 (unattended test runs with nobody at the Mac): bring the window to the
