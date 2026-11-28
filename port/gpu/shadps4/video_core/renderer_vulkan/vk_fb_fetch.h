@@ -23,9 +23,14 @@ inline bool Enabled() {
     static const bool on = [] {
         const char* env = std::getenv("TLG_MAC_FB_FETCH");
         const char* scale = std::getenv("TLG_RENDER_SCALE");
-        // The launcher's render scale (TLG_RENDER_SCALE) and tlg.ini's iss_native_output (any preset or
-        // percentage: the game then scales FragCoord) both move the loads off the own pixel.
-        return !(env && *env == '0') && !(scale && *scale) && TlgSettings::Get().iss_native_output.load() == 0;
+        const char* half = std::getenv("TLG_BENCH_HALF_SCALE");
+        // The launcher's render scale (TLG_RENDER_SCALE), the Detailed benchmark's half pass and a native
+        // render scale below 100% move the loads off the own pixel (the game scales FragCoord by its
+        // 1920 / render width; 1 at 100%). A native output (1440p, 4K) at 100% keeps them there:
+        // Seattle 1440p, 174 pass restarts a frame on the decals' own targets without it.
+        const auto& s = TlgSettings::Get();
+        const bool native_scaled = s.iss_native_output.load() != 0 && s.iss_native_percent.load() != 100;
+        return !(env && *env == '0') && !(scale && *scale) && !(half && *half == '1') && !native_scaled;
     }();
     return on;
 #else
