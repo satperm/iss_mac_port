@@ -203,8 +203,11 @@ struct LauncherView: View {
                     .pickerStyle(.segmented)
                     Text("The game drawn natively at 1440p or 4K instead of 1080p: sharper, and the GPU does more (M3 Max: 1440p about 69 FPS in the city, 4K about 43). Render scale then draws a part of it.")
                         .font(.caption).foregroundStyle(.secondary)
-                    Toggle("Retina", isOn: $model.settings.retina)
-                    Text("Shows the picture in the display's full pixels instead of half of them: needed to see the extra detail of 1440p and 4K on a Retina screen. A few % slower (M3 Max, 1440p: 69 -> 67 FPS).")
+                    Toggle("Retina", isOn: Binding(
+                        get: { model.settings.retina || model.settings.outputResolution != .original },
+                        set: { model.settings.retina = $0 }))
+                        .disabled(model.settings.outputResolution != .original)
+                    Text("Shows the picture in the display's full pixels instead of half of them. Always on with 1440p and 4K (else their extra detail never reaches a Retina screen); at 1080p optional, a few % slower.")
                         .font(.caption).foregroundStyle(.secondary)
                     Picker("Render scale", selection: $model.settings.renderScale) {
                         ForEach(RenderScale.allCases) { Text($0.label).tag($0) }
