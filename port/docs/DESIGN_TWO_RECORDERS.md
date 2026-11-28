@@ -64,3 +64,16 @@ Tracy GPU profiling, `TLG_FRAME_RECORD`/capture paths: may force one recorder (f
 Out-of-order label writes (guest heap corruption after minutes: the reason for the audit and the soaks); MoltenVK
 or AGX serialising concurrent encoding internally (then no gain: measure early with a minimal version); more
 command pools and Metal command buffers in flight (`MVK_CONFIG_MAX_ACTIVE_METAL_COMMAND_BUFFERS_PER_QUEUE=512`).
+
+## Result (2026-11-28): no gain, not merged
+
+Implemented on branch `two-recorders` (1bbc672): `TLG_RECORDERS=N` (1..4), segments round robin, in-order
+submission, `RecordOrdered` for side effects (`SignalAfterHostCopies`; host-copy counting reworked), descriptor
+push cache cleared per buffer, fallbacks for frame record/capture/profiler. No crashes in the smoke runs.
+
+Truck 1080p, 2 x 70 s alternated: 1 recorder 89.2 / 89.2, 2 recorders 88.3 / 88.1 (-1.2%; us/draw 1.22 -> 1.27).
+Each recorder was busy ~1.35 s per 5 s (~27%), waiting for order only ~30 ms: together the same ~55% one recorder
+was busy before. The recorder never had a backlog: the -26% of the causal test is the *latency* each command adds
+on the way from the draw-preparation stage to the GPU (the game keeps one frame in flight), not throughput.
+Parallel buffers do not shorten one buffer's encoding, so they cannot help. What could: less work per command in
+MoltenVK/AGX, or fewer commands. Branch kept for reference.
