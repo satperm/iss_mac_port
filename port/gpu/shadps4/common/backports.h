@@ -35,6 +35,7 @@ enum class Id : unsigned {
     VertexIndexBarriers,  // BP10 shadPS4 #5262
     FirstInstanceDouble,  // BP11 shadPS4 #5348
     ShadPS4Pr5264,        // BP12 shadPS4 #5264
+    ScalarOutOfScope,     // BP13 shadPS4 #5708
     Count,
 };
 
@@ -60,6 +61,7 @@ inline constexpr std::array<Entry, static_cast<std::size_t>(Id::Count)> kEntries
     {"BP10", "TLG_BP10", true, false, "barriers for vertex/index/indirect buffers", "shadPS4 #5262"},
     {"BP11", "TLG_BP11", true, true, "firstInstance counted once in indirect draws", "shadPS4 #5348"},
     {"BP12", "TLG_BP12", false, true, "EarlyFragmentTests when DEPTH_BEFORE_SHADER is set", "shadPS4 7d28d279 #5264"},
+    {"BP13", "TLG_BP13", true, true, "scalar ALU between vector instructions runs outside the EXEC scope", "shadPS4 #5708"},
 }};
 
 namespace Detail {
