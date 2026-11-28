@@ -31,6 +31,20 @@ enum RenderScale: String, CaseIterable, Identifiable {
     var label: String { self == .full ? "100%" : "\(rawValue)%" }
 }
 
+/// The game's output resolution (TLG_NATIVE_OUTPUT, the eboot's native resolution patch): the
+/// original 1080p frame, or the game drawn natively at 1440p or 4K. Wins over tlg.ini's iss_native_output.
+enum OutputResolution: String, CaseIterable, Identifiable {
+    case original = "", p1440 = "2", p4K = "4"
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .original: "1080p"
+        case .p1440: "1440p"
+        case .p4K: "4K"
+        }
+    }
+}
+
 /// Temporal upscaler (TLG_ISS_UPSCALER, with the game-side jitter hooks TLG_ISS_TEMPORAL): replaces the
 /// game's anti-aliasing; below 100% render scale it upscales to 1080p with the HUD drawn at full size.
 enum Upscaler: String, CaseIterable, Identifiable {
@@ -175,6 +189,7 @@ struct LaunchSettings: Equatable {
     var quality = QualityPreset.original
     var fpsCap = FrameRateCap.display
     var renderScale = RenderScale.full
+    var outputResolution = OutputResolution.original
     var upscaler = Upscaler.off
     /// TLG_FAST_SHADER_MATH: shaders without Metal's precise float forms (more FPS where the GPU is the limit).
     var fastShaderMath = true
@@ -236,6 +251,7 @@ struct LaunchSettings: Equatable {
         quality = value("TLG_PERF_MODE").flatMap(QualityPreset.init(rawValue:)) ?? .original
         fpsCap = value("TLG_FPS_LIMIT").flatMap(FrameRateCap.init(rawValue:)) ?? .display
         renderScale = value("TLG_RENDER_SCALE").flatMap(RenderScale.init(rawValue:)) ?? .full
+        outputResolution = value("TLG_NATIVE_OUTPUT").flatMap(OutputResolution.init(rawValue:)) ?? .original
         upscaler = value("TLG_ISS_UPSCALER").flatMap(Upscaler.init(rawValue:)) ?? .off
         fastShaderMath = flag("TLG_FAST_SHADER_MATH", true)
         holdFrameRate = value("TLG_QUALITY_TARGET_FPS").flatMap(HoldFrameRate.init(rawValue:)) ?? .off
@@ -262,6 +278,7 @@ struct LaunchSettings: Equatable {
         set("TLG_PERF_MODE", quality == .original ? nil : quality.rawValue)
         set("TLG_FPS_LIMIT", fpsCap == .display ? nil : fpsCap.rawValue)
         set("TLG_RENDER_SCALE", renderScale == .full ? nil : renderScale.rawValue)
+        set("TLG_NATIVE_OUTPUT", outputResolution == .original ? nil : outputResolution.rawValue)
         set("TLG_ISS_UPSCALER", upscaler == .off ? nil : upscaler.rawValue)
         set("TLG_FAST_SHADER_MATH", fastShaderMath ? "1" : "0")
         set("TLG_ISS_TEMPORAL", upscaler == .off ? nil : "1")
@@ -291,7 +308,7 @@ struct LaunchSettings: Equatable {
     /// For the session log and crash reports.
     var summary: [String] {
         var items = [fullscreen ? "full screen" : "windowed", stretch ? "stretched" : "16:9", "pacing \(pacing.label)",
-         "quality \(quality.label)", "FPS cap \(fpsCap.label)", "render scale \(renderScale.label)", "upscaler \(upscaler.label)", fastShaderMath ? "fast shader math" : "precise shader math", "hold frame rate \(holdFrameRate.label)", "shadow detail \(shadowDetail.label)",
+         "quality \(quality.label)", "FPS cap \(fpsCap.label)", "output \(outputResolution.label)", "render scale \(renderScale.label)", "upscaler \(upscaler.label)", fastShaderMath ? "fast shader math" : "precise shader math", "hold frame rate \(holdFrameRate.label)", "shadow detail \(shadowDetail.label)",
          "particles \(particles.label)", gpuProcess ? "GPU process" : "single process"]
         if !keys.isDefault { items.append("custom keys") }
         return items

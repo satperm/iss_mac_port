@@ -1040,6 +1040,13 @@ static void install_iss_native_resolution(const char *app0,Segment *segments,uin
     FILE *f=fopen(config_path && *config_path ? config_path : "tlg.ini","r");
     IssNativeConfig config;int valid=iss_native_config(f,&config);if(f)fclose(f);
     if(!valid){runtime_native_publish(-1,"Invalid native setting; no native patch applied",NULL);return;}
+    /* TLG_NATIVE_OUTPUT=<1..5> (the launcher's "Resolution": 2 = 1440p, 4 = 4K): the native output
+     * preset, over the ini's iss_native_output (not written back to it). */
+    const char *native_output=getenv("TLG_NATIVE_OUTPUT");
+    if(native_output && *native_output){
+        char *end=NULL;const long preset=strtol(native_output,&end,10);
+        if(end && !*end && preset>=1 && preset<ISS_NATIVE_PRESETS)config.output=(int)preset;
+    }
     /* TLG_RENDER_SCALE=<25..99> (the launcher's "Render scale"): the game renders its 1080p frame at
      * that percentage when the ini asks for no native output (weaker Macs: fewer pixels to shade). */
     const char *scale=getenv("TLG_RENDER_SCALE");
