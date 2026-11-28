@@ -140,7 +140,7 @@ In the launcher:
 | Fire and smoke at half resolution | Off (default). On: fire and smoke drawn with a quarter of the pixels, 10-13% more FPS in fire scenes above 1080p (on in the Slower Mac and Slowest presets); slightly softer flames |
 | Detail | Original (as on the PS4), Lower, Lowest (the game's own lower settings: particles, high-resolution textures, pedestrians; for slower Macs) |
 | Frame rate cap | Display (the display's refresh rate, at most 120; default), 60, 30 (steadier on slower Macs) |
-| Render scale | 100% (default) down to 50%: the game draws a smaller picture and scales it up; more FPS where the GPU is the limit, softer image. With an output resolution chosen in the game menu (1440p, 4K) it scales that, unless the menu's own "Native render scale" is set |
+| Render scale | 100% (default) down to 50%: the game draws a smaller picture and scales it up; more FPS where the GPU is the limit, softer image. With a native output resolution set in tlg.ini (`iss_native_output`: 2 = 1440p, 4 = 4K) it scales that, unless `iss_native_percent` is below 100 |
 | Fast shader math | On (default) or off: lets Metal use its faster float arithmetic in the game's shaders; up to 9% more FPS in heavy scenes. Shaders compile again on the first start after a change |
 | Upscaler | Off (default), FSR 3 or MetalFX: temporal upscaling in place of the game's anti-aliasing; with a render scale below 100% it rebuilds a sharp 1080p picture with the HUD at full size |
 | Hold frame rate | Off (default), 30, 45 or 60: when the game runs slower than this, it draws less far and with fewer objects (the game's own dynamic quality levels) until the rate is back, and restores the detail when there is room |
